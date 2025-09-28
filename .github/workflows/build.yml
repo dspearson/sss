@@ -17,36 +17,28 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          # Linux x86_64 (musl for static linking)
+          # Linux x86_64 (musl for static linking) - TESTING ONLY
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             name: linux-x86_64
 
-          # Linux ARM64 (musl for static linking)
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            name: linux-aarch64
-
-          # Linux ARMv7 (musl for static linking)
-          - target: armv7-unknown-linux-musleabihf
-            os: ubuntu-latest
-            name: linux-armv7
-
-          # macOS x86_64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            name: macos-x86_64
-
-          # macOS ARM64 (Apple Silicon)
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            name: macos-aarch64
-
-          # Windows x86_64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            name: windows-x86_64
-            ext: .exe
+          # All other targets disabled for testing
+          # - target: aarch64-unknown-linux-musl
+          #   os: ubuntu-latest
+          #   name: linux-aarch64
+          # - target: armv7-unknown-linux-musleabihf
+          #   os: ubuntu-latest
+          #   name: linux-armv7
+          # - target: x86_64-apple-darwin
+          #   os: macos-latest
+          #   name: macos-x86_64
+          # - target: aarch64-apple-darwin
+          #   os: macos-latest
+          #   name: macos-aarch64
+          # - target: x86_64-pc-windows-msvc
+          #   os: windows-latest
+          #   name: windows-x86_64
+          #   ext: .exe
 
     runs-on: ${{ matrix.os }}
 
@@ -94,7 +86,7 @@ jobs:
     - name: Set environment variables for cross-compilation (Unix)
       if: matrix.os != 'windows-latest'
       run: |
-        echo "SODIUM_STATIC=1" >> $GITHUB_ENV
+        echo "SODIUM_SHARED=0" >> $GITHUB_ENV
         if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
           echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "TARGET_CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
@@ -106,12 +98,12 @@ jobs:
     - name: Set environment variables for cross-compilation (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        echo "SODIUM_STATIC=1" >> $env:GITHUB_ENV
+        echo "SODIUM_SHARED=0" >> $env:GITHUB_ENV
 
     - name: Build binary
       uses: houseabsolute/actions-rust-cross@v1
       env:
-        SODIUM_STATIC: "1"
+        SODIUM_SHARED: "0"
         SODIUM_USE_PKG_CONFIG: "0"
         RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
       with:

@@ -24,8 +24,21 @@ jobs:
       with:
         components: rustfmt, clippy
 
+    - name: Install system dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libdbus-1-dev
+
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install pkg-config
+
     - name: Cache dependencies
       uses: Swatinem/rust-cache@v2
+      env:
+        SODIUM_STATIC: "1"
 
     - name: Check formatting
       run: cargo fmt --all -- --check
@@ -34,9 +47,13 @@ jobs:
       run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Run tests
+      env:
+        SODIUM_STATIC: "1"
       run: cargo test --all-features
 
     - name: Run tests (release mode)
+      env:
+        SODIUM_STATIC: "1"
       run: cargo test --all-features --release
 
   # Test keyring functionality on different platforms
@@ -64,6 +81,8 @@ jobs:
         sudo apt-get install -y libdbus-1-dev pkg-config
 
     - name: Test keyring functionality
+      env:
+        SODIUM_STATIC: "1"
       run: cargo test keyring --all-features
 
   # Security audit
@@ -108,6 +127,8 @@ jobs:
       run: cargo install cargo-llvm-cov
 
     - name: Generate coverage report
+      env:
+        SODIUM_STATIC: "1"
       run: |
         cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
@@ -119,6 +140,8 @@ jobs:
         verbose: true
 
     - name: Generate HTML coverage report
+      env:
+        SODIUM_STATIC: "1"
       run: |
         cargo llvm-cov --all-features --workspace --html
 
@@ -130,5 +153,7 @@ jobs:
         retention-days: 30
 
     - name: Coverage summary
+      env:
+        SODIUM_STATIC: "1"
       run: |
         cargo llvm-cov --all-features --workspace --summary-only

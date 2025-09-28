@@ -89,7 +89,7 @@ impl ProjectConfig {
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
-            sealed_key: sealed_key,
+            sealed_key,
             added: default_created(),
         };
 
@@ -149,7 +149,7 @@ impl ProjectConfig {
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
-            sealed_key: sealed_key,
+            sealed_key,
             added: default_created(),
         };
 

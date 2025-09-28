@@ -62,8 +62,14 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libsodium-dev pkg-config musl-tools
-        # For static linking with musl
+        sudo apt-get install -y pkg-config musl-tools
+        # Install cross-compilation tools for ARM targets
+        if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+        elif [[ "${{ matrix.target }}" == "armv7-unknown-linux-musleabihf" ]]; then
+          sudo apt-get install -y gcc-arm-linux-gnueabihf
+        fi
+        # For musl targets
         if [[ "${{ matrix.target }}" == *"musl"* ]]; then
           sudo apt-get install -y musl-dev
         fi
@@ -71,7 +77,7 @@ jobs:
     - name: Install system dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
-        brew install libsodium pkg-config
+        brew install pkg-config
 
     - name: Install system dependencies (Windows)
       if: matrix.os == 'windows-latest'
@@ -84,13 +90,28 @@ jobs:
       with:
         key: ${{ matrix.target }}
 
+    - name: Set environment variables for cross-compilation (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        echo "SODIUM_STATIC=1" >> $GITHUB_ENV
+        if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
+          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "TARGET_CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        elif [[ "${{ matrix.target }}" == "armv7-unknown-linux-musleabihf" ]]; then
+          echo "CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+          echo "TARGET_CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
+        fi
+
+    - name: Set environment variables for cross-compilation (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        echo "SODIUM_STATIC=1" >> $env:GITHUB_ENV
+
     - name: Build release binary
       uses: houseabsolute/actions-rust-cross@v1
       env:
-        # Force static linking for libsodium-sys
-        SODIUM_LIB_DIR: ""
         SODIUM_STATIC: "1"
-        # For musl targets, ensure static linking
+        SODIUM_USE_PKG_CONFIG: "0"
         RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
       with:
         command: build

@@ -82,7 +82,10 @@ impl ConfigManager {
         let config_path = config_path.as_ref();
 
         if !config_path.exists() {
-            return Err(anyhow!("Project configuration not found: {}", config_path.display()));
+            return Err(anyhow!(
+                "Project configuration not found: {}",
+                config_path.display()
+            ));
         }
 
         self.project_config = Some(ProjectConfig::load_from_file(config_path)?);
@@ -117,7 +120,9 @@ impl ConfigManager {
             return Ok(username);
         }
 
-        Err(anyhow!("No username found. Specify with --user or set SSS_USER environment variable"))
+        Err(anyhow!(
+            "No username found. Specify with --user or set SSS_USER environment variable"
+        ))
     }
 
     /// Get the effective editor (with precedence)
@@ -139,7 +144,9 @@ impl ConfigManager {
 
     /// Get keystore auto-lock timeout
     pub fn get_auto_lock_timeout(&self) -> u32 {
-        self.user_settings.keystore.auto_lock_minutes
+        self.user_settings
+            .keystore
+            .auto_lock_minutes
             .unwrap_or(self.system_settings.default_keystore_timeout)
     }
 
@@ -167,7 +174,9 @@ impl ConfigManager {
 
     /// Get project users
     pub fn get_project_users(&self) -> Result<Vec<String>> {
-        let config = self.project_config.as_ref()
+        let config = self
+            .project_config
+            .as_ref()
             .ok_or_else(|| anyhow!("No project configuration loaded"))?;
 
         Ok(config.list_users())
@@ -175,7 +184,9 @@ impl ConfigManager {
 
     /// Check if user exists in project
     pub fn user_exists(&self, username: &str) -> Result<bool> {
-        let config = self.project_config.as_ref()
+        let config = self
+            .project_config
+            .as_ref()
             .ok_or_else(|| anyhow!("No project configuration loaded"))?;
 
         Ok(config.users.contains_key(username))
@@ -273,7 +284,7 @@ impl SystemSettings {
             config_dir,
             default_editor,
             max_file_size: 100 * 1024 * 1024, // 100MB
-            default_keystore_timeout: 30, // 30 minutes
+            default_keystore_timeout: 30,     // 30 minutes
         })
     }
 }
@@ -324,7 +335,10 @@ mod tests {
 
         // Load settings
         let loaded_settings = UserSettings::load(config_dir).unwrap();
-        assert_eq!(loaded_settings.default_username, Some("testuser".to_string()));
+        assert_eq!(
+            loaded_settings.default_username,
+            Some("testuser".to_string())
+        );
         assert_eq!(loaded_settings.editor, Some("vim".to_string()));
     }
 }

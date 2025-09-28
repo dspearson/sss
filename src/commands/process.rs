@@ -17,7 +17,6 @@ use crate::{
     Processor,
 };
 
-
 /// Create alias manager instance based on global confdir parameter
 fn create_alias_manager(matches: &ArgMatches) -> Result<AliasManager> {
     if let Some(confdir) = matches.get_one::<String>("confdir") {
@@ -28,10 +27,7 @@ fn create_alias_manager(matches: &ArgMatches) -> Result<AliasManager> {
 }
 
 /// Resolve username through alias system with optional custom config dir
-fn resolve_username_with_config(
-    username_or_alias: &str,
-    matches: &ArgMatches,
-) -> Result<String> {
+fn resolve_username_with_config(username_or_alias: &str, matches: &ArgMatches) -> Result<String> {
     let alias_manager = create_alias_manager(matches)?;
     alias_manager.resolve(username_or_alias)
 }
@@ -49,7 +45,6 @@ fn get_default_username() -> Result<String> {
     }
 }
 
-
 /// Create a backup of the file before editing
 fn create_backup(file_path: &Path) -> Result<PathBuf> {
     let mut backup_path = file_path.to_path_buf();
@@ -66,7 +61,6 @@ fn create_backup(file_path: &Path) -> Result<PathBuf> {
 
     Ok(backup_path)
 }
-
 
 /// Launch editor for file editing
 fn launch_editor(file_path: &Path) -> Result<()> {
@@ -107,7 +101,8 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         let render = matches.get_flag("render");
         let edit = matches.get_flag("edit");
 
-        let (_config, repository_key) = load_project_config_with_repository_key(".sss.toml", &username)?;
+        let (_config, repository_key) =
+            load_project_config_with_repository_key(".sss.toml", &username)?;
 
         if render {
             // Create processor

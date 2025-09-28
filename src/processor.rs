@@ -9,15 +9,11 @@ use crate::constants::{MAX_FILE_SIZE, MAX_MARKER_CONTENT_SIZE};
 use crate::crypto::{decrypt_from_base64, encrypt_to_base64, RepositoryKey};
 
 // Pre-compiled regex patterns for better performance
-static PLAINTEXT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:⊕|o\+)\{([^}]*)\}")
-        .expect("Failed to compile plaintext regex")
-});
+static PLAINTEXT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:⊕|o\+)\{([^}]*)\}").expect("Failed to compile plaintext regex"));
 
-static CIPHERTEXT_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"⊠\{([^⊕⊠]*)\}")
-        .expect("Failed to compile ciphertext regex")
-});
+static CIPHERTEXT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"⊠\{([^⊕⊠]*)\}").expect("Failed to compile ciphertext regex"));
 
 // Buffer pool for reducing allocations
 thread_local! {
@@ -94,7 +90,8 @@ impl Processor {
             .map_err(|e| anyhow!("Failed to open file {}: {}", path.as_ref().display(), e))?;
         let mut reader = BufReader::new(file);
         let mut content = String::with_capacity(metadata.len() as usize);
-        reader.read_to_string(&mut content)
+        reader
+            .read_to_string(&mut content)
             .map_err(|e| anyhow!("Failed to read file {}: {}", path.as_ref().display(), e))?;
 
         self.process_content(&content)
@@ -124,55 +121,52 @@ impl Processor {
     }
 
     pub fn encrypt_content(&self, content: &str) -> Result<String> {
-        let result = PLAINTEXT_REGEX
-            .replace_all(content, |caps: &regex::Captures| {
-                let plaintext = &caps[1];
+        let result = PLAINTEXT_REGEX.replace_all(content, |caps: &regex::Captures| {
+            let plaintext = &caps[1];
 
-                if !self.check_marker_size(plaintext, "Plaintext") {
-                    return caps[0].to_string();
-                }
+            if !self.check_marker_size(plaintext, "Plaintext") {
+                return caps[0].to_string();
+            }
 
-                match encrypt_to_base64(plaintext, &self.repository_key) {
-                    Ok(encrypted) => format!("⊠{{{}}}", encrypted),
-                    Err(e) => self.handle_encrypt_error(&e, &caps[0]),
-                }
-            });
+            match encrypt_to_base64(plaintext, &self.repository_key) {
+                Ok(encrypted) => format!("⊠{{{}}}", encrypted),
+                Err(e) => self.handle_encrypt_error(&e, &caps[0]),
+            }
+        });
 
         Ok(result.to_string())
     }
 
     pub fn decrypt_content(&self, content: &str) -> Result<String> {
-        let result = CIPHERTEXT_REGEX
-            .replace_all(content, |caps: &regex::Captures| {
-                let encrypted = &caps[1];
+        let result = CIPHERTEXT_REGEX.replace_all(content, |caps: &regex::Captures| {
+            let encrypted = &caps[1];
 
-                if !self.check_marker_size(encrypted, "Ciphertext") {
-                    return caps[0].to_string();
-                }
+            if !self.check_marker_size(encrypted, "Ciphertext") {
+                return caps[0].to_string();
+            }
 
-                match self.decrypt_with_repository_key(encrypted) {
-                    Ok(decrypted) => format!("⊕{{{}}}", decrypted),
-                    Err(e) => self.handle_decrypt_error(&e, &caps[0], ""),
-                }
-            });
+            match self.decrypt_with_repository_key(encrypted) {
+                Ok(decrypted) => format!("⊕{{{}}}", decrypted),
+                Err(e) => self.handle_decrypt_error(&e, &caps[0], ""),
+            }
+        });
 
         Ok(result.to_string())
     }
 
     pub fn prepare_for_editing(&self, content: &str) -> Result<String> {
-        let result = CIPHERTEXT_REGEX
-            .replace_all(content, |caps: &regex::Captures| {
-                let encrypted = &caps[1];
+        let result = CIPHERTEXT_REGEX.replace_all(content, |caps: &regex::Captures| {
+            let encrypted = &caps[1];
 
-                if !self.check_marker_size(encrypted, "Ciphertext") {
-                    return caps[0].to_string();
-                }
+            if !self.check_marker_size(encrypted, "Ciphertext") {
+                return caps[0].to_string();
+            }
 
-                match self.decrypt_with_repository_key(encrypted) {
-                    Ok(decrypted) => format!("⊕{{{}}}", decrypted),
-                    Err(e) => self.handle_decrypt_error(&e, &caps[0], "for editing"),
-                }
-            });
+            match self.decrypt_with_repository_key(encrypted) {
+                Ok(decrypted) => format!("⊕{{{}}}", decrypted),
+                Err(e) => self.handle_decrypt_error(&e, &caps[0], "for editing"),
+            }
+        });
 
         Ok(result.to_string())
     }
@@ -183,31 +177,29 @@ impl Processor {
 
     pub fn decrypt_to_raw(&self, content: &str) -> Result<String> {
         // First pass: decrypt ciphertext markers to raw content
-        let result = CIPHERTEXT_REGEX
-            .replace_all(content, |caps: &regex::Captures| {
-                let encrypted = &caps[1];
+        let result = CIPHERTEXT_REGEX.replace_all(content, |caps: &regex::Captures| {
+            let encrypted = &caps[1];
 
-                if !self.check_marker_size(encrypted, "Ciphertext") {
-                    return caps[0].to_string();
-                }
+            if !self.check_marker_size(encrypted, "Ciphertext") {
+                return caps[0].to_string();
+            }
 
-                match self.decrypt_with_repository_key(encrypted) {
-                    Ok(decrypted) => decrypted,
-                    Err(e) => self.handle_decrypt_error(&e, &caps[0], ""),
-                }
-            });
+            match self.decrypt_with_repository_key(encrypted) {
+                Ok(decrypted) => decrypted,
+                Err(e) => self.handle_decrypt_error(&e, &caps[0], ""),
+            }
+        });
 
         // Second pass: remove plaintext markers, keeping only content
-        let result = PLAINTEXT_REGEX
-            .replace_all(&result, |caps: &regex::Captures| {
-                let plaintext = &caps[1];
+        let result = PLAINTEXT_REGEX.replace_all(&result, |caps: &regex::Captures| {
+            let plaintext = &caps[1];
 
-                if !self.check_marker_size(plaintext, "Plaintext") {
-                    return caps[0].to_string();
-                }
+            if !self.check_marker_size(plaintext, "Plaintext") {
+                return caps[0].to_string();
+            }
 
-                caps[1].to_string()
-            });
+            caps[1].to_string()
+        });
 
         Ok(result.to_string())
     }

@@ -20,7 +20,7 @@ where
 
 #[test]
 fn test_validation_module_integration() {
-    use sss::validation::{validate_username, validate_file_path, validate_base64};
+    use sss::validation::{validate_base64, validate_file_path, validate_username};
 
     // Test username validation
     assert!(validate_username("valid_user").is_ok());
@@ -49,7 +49,7 @@ fn test_validation_module_integration() {
 
 #[test]
 fn test_rate_limiter_integration() {
-    use sss::rate_limiter::{RateLimiter, get_password_rate_limiter};
+    use sss::rate_limiter::{get_password_rate_limiter, RateLimiter};
 
     // Test creating a custom rate limiter
     let limiter = RateLimiter::new(3, 5, 10);
@@ -107,18 +107,24 @@ fn test_processor_performance_optimizations() {
     assert!(encrypted.contains("⊠{"));
     assert!(!encrypted.contains("⊕{"));
 
-    let decrypted = processor.decrypt_content(&encrypted).expect("Failed to decrypt");
+    let decrypted = processor
+        .decrypt_content(&encrypted)
+        .expect("Failed to decrypt");
     assert_eq!(decrypted, input);
 
     // Test that multiple processor instances work (testing static regex patterns)
     let processor2 = Processor::new(RepositoryKey::new()).expect("Failed to create processor2");
     let input2 = "Another ⊕{test} message";
-    let encrypted2 = processor2.encrypt_content(input2).expect("Failed to encrypt");
+    let encrypted2 = processor2
+        .encrypt_content(input2)
+        .expect("Failed to encrypt");
     assert!(encrypted2.contains("⊠{"));
 
     // Test mixed content
     let mixed_input = "⊕{plain1} and o+{plain2}";
-    let mixed_encrypted = processor.encrypt_content(mixed_input).expect("Failed to encrypt mixed");
+    let mixed_encrypted = processor
+        .encrypt_content(mixed_input)
+        .expect("Failed to encrypt mixed");
     assert!(mixed_encrypted.contains("⊠{"));
     assert!(!mixed_encrypted.contains("⊕{"));
     assert!(!mixed_encrypted.contains("o+{"));
@@ -156,30 +162,38 @@ fn test_error_handling_robustness() {
 
 #[test]
 fn test_security_validation_coverage() {
-    use sss::validation::{validate_username, validate_alias_name, validate_key_id};
+    use sss::validation::{validate_alias_name, validate_key_id, validate_username};
 
     // Test comprehensive username validation
     let long_username = "x".repeat(300);
     let invalid_usernames = vec![
-        "",              // Empty
-        "user@domain",   // Invalid characters
-        ".invalid",      // Starts with dot
-        "invalid.",      // Ends with dot
-        "-invalid",      // Starts with hyphen
-        "invalid-",      // Ends with hyphen
-        "root",          // Reserved name
-        "admin",         // Reserved name
-        &long_username,  // Too long
+        "",             // Empty
+        "user@domain",  // Invalid characters
+        ".invalid",     // Starts with dot
+        "invalid.",     // Ends with dot
+        "-invalid",     // Starts with hyphen
+        "invalid-",     // Ends with hyphen
+        "root",         // Reserved name
+        "admin",        // Reserved name
+        &long_username, // Too long
     ];
 
     for username in invalid_usernames {
-        assert!(validate_username(username).is_err(), "Should reject username: {}", username);
+        assert!(
+            validate_username(username).is_err(),
+            "Should reject username: {}",
+            username
+        );
     }
 
     // Test valid usernames
     let valid_usernames = vec!["alice", "bob123", "user_name", "user-name", "user.name"];
     for username in valid_usernames {
-        assert!(validate_username(username).is_ok(), "Should accept username: {}", username);
+        assert!(
+            validate_username(username).is_ok(),
+            "Should accept username: {}",
+            username
+        );
     }
 
     // Test alias validation

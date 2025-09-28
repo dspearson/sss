@@ -3,11 +3,8 @@ use clap::ArgMatches;
 use std::path::PathBuf;
 
 use crate::{
-    config::init_project_config,
-    constants::CONFIG_FILE_NAME,
-    keystore::Keystore,
-    secure_memory::password,
-    validation::validate_username,
+    config::init_project_config, constants::CONFIG_FILE_NAME, keystore::Keystore,
+    secure_memory::password, validation::validate_username,
 };
 
 /// Create keystore instance based on global confdir parameter

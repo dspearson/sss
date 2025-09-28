@@ -25,7 +25,11 @@ fn ensure_sodium_init() {
 }
 
 /// Validate and decode base64 string with common checks
-fn validate_and_decode_base64(encoded: &str, expected_len: usize, key_type: &str) -> Result<Vec<u8>> {
+fn validate_and_decode_base64(
+    encoded: &str,
+    expected_len: usize,
+    key_type: &str,
+) -> Result<Vec<u8>> {
     use base64::prelude::*;
 
     if encoded.len() > 100 {

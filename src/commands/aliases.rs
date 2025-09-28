@@ -13,10 +13,7 @@ fn create_alias_manager(matches: &ArgMatches) -> Result<AliasManager> {
     }
 }
 
-pub fn handle_aliases(
-    main_matches: &ArgMatches,
-    matches: &ArgMatches,
-) -> Result<()> {
+pub fn handle_aliases(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     let alias_manager = create_alias_manager(main_matches)?;
 
     match matches.subcommand() {
@@ -53,7 +50,9 @@ pub fn handle_aliases(
             eprintln!("  add         Add new alias");
             eprintln!("  remove      Remove alias");
             eprintln!();
-            eprintln!("Use 'sss aliases <subcommand> --help' for more information on a subcommand.");
+            eprintln!(
+                "Use 'sss aliases <subcommand> --help' for more information on a subcommand."
+            );
             std::process::exit(1);
         }
         _ => unreachable!(),

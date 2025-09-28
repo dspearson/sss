@@ -27,8 +27,6 @@ fn ensure_binaries_built() -> Result<()> {
     Ok(())
 }
 
-
-
 #[test]
 fn test_ssse_symlink_behaviour() -> Result<()> {
     let temp_dir = tempdir()?;
@@ -36,7 +34,9 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
     let config_dir = temp_dir.path().join("config");
 
     // Initialize test project with passwordless keys using system username
-    let system_user = env::var("USER").or_else(|_| env::var("USERNAME")).unwrap_or("testuser".to_string());
+    let system_user = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or("testuser".to_string());
 
     // Generate passwordless keys first
     let output = run_sss_in_dir(
@@ -74,7 +74,7 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
     // We simulate this by using a symlink-like approach
     cmd.arg("--confdir");
     cmd.arg(&config_dir);
-    cmd.arg("--edit");  // ssse behavior
+    cmd.arg("--edit"); // ssse behavior
     cmd.arg("test.txt");
     cmd.current_dir(work_dir);
     cmd.env("SSS_TEST_MODE", "1");
@@ -86,7 +86,11 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Should not fail due to username validation issues
-        assert!(!stderr.contains("reserved"), "ssse failed due to username issue: {}", stderr);
+        assert!(
+            !stderr.contains("reserved"),
+            "ssse failed due to username issue: {}",
+            stderr
+        );
     }
 
     Ok(())

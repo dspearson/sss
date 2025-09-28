@@ -67,22 +67,16 @@ pub fn load_project_config_for_user<P: AsRef<Path>>(
     let format = detect_config_format(&config_path)?;
 
     match format {
-        ConfigFormat::Missing => {
-            Err(anyhow!(
-                "No project configuration found at {}. Run 'sss init' to create one.",
-                config_path.as_ref().display()
-            ))
-        }
-        ConfigFormat::Legacy => {
-            Err(anyhow!(
-                "Legacy configuration format detected. This format is no longer supported."
-            ))
-        }
-        ConfigFormat::Empty => {
-            Err(anyhow!(
-                "Project configuration exists but has no users. Add yourself with 'sss user add'."
-            ))
-        }
+        ConfigFormat::Missing => Err(anyhow!(
+            "No project configuration found at {}. Run 'sss init' to create one.",
+            config_path.as_ref().display()
+        )),
+        ConfigFormat::Legacy => Err(anyhow!(
+            "Legacy configuration format detected. This format is no longer supported."
+        )),
+        ConfigFormat::Empty => Err(anyhow!(
+            "Project configuration exists but has no users. Add yourself with 'sss user add'."
+        )),
         ConfigFormat::Modern => {
             let config = ProjectConfig::load_from_file(&config_path)?;
             config.validate()?;
@@ -104,8 +98,14 @@ pub fn load_project_config_for_user<P: AsRef<Path>>(
                 Ok(keypair) => keypair,
                 Err(_) => {
                     // Try with password
-                    let password = rpassword::prompt_password("Enter your passphrase (or press Enter if none): ")?;
-                    let password_opt = if password.is_empty() { None } else { Some(password.as_str()) };
+                    let password = rpassword::prompt_password(
+                        "Enter your passphrase (or press Enter if none): ",
+                    )?;
+                    let password_opt = if password.is_empty() {
+                        None
+                    } else {
+                        Some(password.as_str())
+                    };
                     keystore.get_current_keypair(password_opt)?
                 }
             };
@@ -129,22 +129,16 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
     let format = detect_config_format(&config_path)?;
 
     match format {
-        ConfigFormat::Missing => {
-            Err(anyhow!(
-                "No project configuration found at {}. Run 'sss init' to create one.",
-                config_path.as_ref().display()
-            ))
-        }
-        ConfigFormat::Legacy => {
-            Err(anyhow!(
-                "Legacy configuration format detected. This format is no longer supported."
-            ))
-        }
-        ConfigFormat::Empty => {
-            Err(anyhow!(
-                "Project configuration exists but has no users. Add yourself with 'sss user add'."
-            ))
-        }
+        ConfigFormat::Missing => Err(anyhow!(
+            "No project configuration found at {}. Run 'sss init' to create one.",
+            config_path.as_ref().display()
+        )),
+        ConfigFormat::Legacy => Err(anyhow!(
+            "Legacy configuration format detected. This format is no longer supported."
+        )),
+        ConfigFormat::Empty => Err(anyhow!(
+            "Project configuration exists but has no users. Add yourself with 'sss user add'."
+        )),
         ConfigFormat::Modern => {
             let config = ProjectConfig::load_from_file(&config_path)?;
             config.validate()?;
@@ -166,8 +160,14 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
                 Ok(keypair) => keypair,
                 Err(_) => {
                     // Try with password
-                    let password = rpassword::prompt_password("Enter your passphrase (or press Enter if none): ")?;
-                    let password_opt = if password.is_empty() { None } else { Some(password.as_str()) };
+                    let password = rpassword::prompt_password(
+                        "Enter your passphrase (or press Enter if none): ",
+                    )?;
+                    let password_opt = if password.is_empty() {
+                        None
+                    } else {
+                        Some(password.as_str())
+                    };
                     keystore.get_current_keypair(password_opt)?
                 }
             };
@@ -213,7 +213,6 @@ pub fn load_key_for_user(user: &str) -> Result<crate::crypto::Key> {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -278,5 +277,4 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
-
 }

@@ -87,7 +87,6 @@ impl From<uuid::Error> for SssError {
     }
 }
 
-
 impl From<std::str::Utf8Error> for SssError {
     fn from(err: std::str::Utf8Error) -> Self {
         SssError::Processing(format!("UTF-8 encoding error: {}", err))
@@ -185,9 +184,15 @@ mod tests {
     #[test]
     fn test_error_display() {
         let crypto_err = SssError::Crypto("encryption failed".to_string());
-        assert_eq!(crypto_err.to_string(), "Cryptographic error: encryption failed");
+        assert_eq!(
+            crypto_err.to_string(),
+            "Cryptographic error: encryption failed"
+        );
 
-        let io_err = SssError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "file not found"));
+        let io_err = SssError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found",
+        ));
         assert!(io_err.to_string().contains("I/O error"));
     }
 

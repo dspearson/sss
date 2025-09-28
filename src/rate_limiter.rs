@@ -78,11 +78,13 @@ impl RateLimiter {
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
 
-        let record = attempts.entry(identifier.to_string()).or_insert(AttemptRecord {
-            count: 0,
-            first_attempt: now,
-            locked_until: None,
-        });
+        let record = attempts
+            .entry(identifier.to_string())
+            .or_insert(AttemptRecord {
+                count: 0,
+                first_attempt: now,
+                locked_until: None,
+            });
 
         // Reset if outside window
         if now.duration_since(record.first_attempt) >= self.window_duration {

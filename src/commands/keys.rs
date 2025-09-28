@@ -3,11 +3,7 @@ use clap::ArgMatches;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use crate::{
-    crypto::KeyPair,
-    keystore::Keystore,
-    secure_memory::password,
-};
+use crate::{crypto::KeyPair, keystore::Keystore, secure_memory::password};
 
 /// Create keystore instance based on global confdir parameter
 fn create_keystore(matches: &ArgMatches) -> Result<Keystore> {
@@ -18,10 +14,7 @@ fn create_keystore(matches: &ArgMatches) -> Result<Keystore> {
     }
 }
 
-fn handle_keys_generate_command(
-    main_matches: &ArgMatches,
-    matches: &ArgMatches,
-) -> Result<()> {
+fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     let force = matches.get_flag("force");
     let no_password = matches.get_flag("no-password");
 
@@ -81,7 +74,11 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                 for (key_id, stored) in keys {
                     let is_current = current_id.as_ref() == Some(&key_id);
                     let status = if is_current { " (current)" } else { "" };
-                    let protection = if stored.is_password_protected { " [protected]" } else { "" };
+                    let protection = if stored.is_password_protected {
+                        " [protected]"
+                    } else {
+                        ""
+                    };
 
                     println!(
                         "  {}... - Created: {}{}{}",
@@ -139,7 +136,11 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                         println!("Key not found: {}", key_name);
                         println!("Available keys:");
                         for (key_id, stored) in keys {
-                            println!("  {} (created: {})", &key_id[..8], stored.created_at.format("%Y-%m-%d"));
+                            println!(
+                                "  {} (created: {})",
+                                &key_id[..8],
+                                stored.created_at.format("%Y-%m-%d")
+                            );
                         }
                     }
                 }
@@ -150,10 +151,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                         println!("Current key ID: {}", current_id);
                         match keystore.get_current_keypair(None) {
                             Ok(keypair) => {
-                                println!(
-                                    "Public key: {}",
-                                    keypair.public_key.to_base64()
-                                );
+                                println!("Public key: {}", keypair.public_key.to_base64());
                             }
                             Err(_) => {
                                 println!("(Key is password protected)");
@@ -186,10 +184,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     Ok(())
 }
 
-pub fn handle_keygen_deprecated(
-    main_matches: &ArgMatches,
-    matches: &ArgMatches,
-) -> Result<()> {
+pub fn handle_keygen_deprecated(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     eprintln!("Warning: 'sss keygen' is deprecated. Use 'sss keys generate' instead.");
     handle_keys_generate_command(main_matches, matches)
 }

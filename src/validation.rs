@@ -30,7 +30,9 @@ pub fn validate_file_path(file_path: &str) -> Result<PathBuf> {
 
     // Check for current directory reference
     if file_path == "." {
-        return Err(validation_error!("Current directory reference '.' is not allowed"));
+        return Err(validation_error!(
+            "Current directory reference '.' is not allowed"
+        ));
     }
 
     // Check for absolute paths outside current working directory
@@ -47,7 +49,9 @@ pub fn validate_file_path(file_path: &str) -> Result<PathBuf> {
 
     // Check for control characters
     if file_path.chars().any(|c| c.is_control() && c != '\t') {
-        return Err(validation_error!("Path contains invalid control characters"));
+        return Err(validation_error!(
+            "Path contains invalid control characters"
+        ));
     }
 
     // Canonicalize the path to resolve any remaining issues
@@ -82,15 +86,21 @@ pub fn validate_username(username: &str) -> Result<()> {
     }
 
     // Check for invalid characters
-    if !username.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.') {
+    if !username
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
         return Err(validation_error!(
             "Username contains invalid characters. Only alphanumeric, underscore, hyphen, and dot are allowed"
         ));
     }
 
     // Prevent leading/trailing dots or hyphens
-    if username.starts_with('.') || username.starts_with('-') ||
-       username.ends_with('.') || username.ends_with('-') {
+    if username.starts_with('.')
+        || username.starts_with('-')
+        || username.ends_with('.')
+        || username.ends_with('-')
+    {
         return Err(validation_error!(
             "Username cannot start or end with dots or hyphens"
         ));
@@ -98,8 +108,17 @@ pub fn validate_username(username: &str) -> Result<()> {
 
     // Prevent reserved names
     const RESERVED_NAMES: &[&str] = &[
-        "root", "admin", "administrator", "system", "daemon", "nobody",
-        "null", "void", "test", "guest", "anonymous"
+        "root",
+        "admin",
+        "administrator",
+        "system",
+        "daemon",
+        "nobody",
+        "null",
+        "void",
+        "test",
+        "guest",
+        "anonymous",
     ];
 
     if RESERVED_NAMES.contains(&username.to_lowercase().as_str()) {
@@ -148,14 +167,19 @@ pub fn validate_alias_name(alias: &str) -> Result<()> {
     }
 
     // Similar rules to username but more restrictive
-    if !alias.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !alias
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(validation_error!(
             "Alias name contains invalid characters. Only alphanumeric, underscore, and hyphen are allowed"
         ));
     }
 
     if alias.starts_with('-') || alias.ends_with('-') {
-        return Err(validation_error!("Alias name cannot start or end with hyphens"));
+        return Err(validation_error!(
+            "Alias name cannot start or end with hyphens"
+        ));
     }
 
     Ok(())
@@ -176,7 +200,10 @@ pub fn validate_base64(input: &str, max_length: usize) -> Result<()> {
     }
 
     // Check for valid Base64 characters
-    if !input.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=') {
+    if !input
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
         return Err(validation_error!("Invalid characters in Base64 input"));
     }
 

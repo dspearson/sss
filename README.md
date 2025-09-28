@@ -226,6 +226,61 @@ The editor:
 6. **Memory Safety**: Cryptographic material securely cleared from memory using zeroize
 7. **Custom Error Types**: Structured error handling with specific error categories
 
+## Editor Integrations
+
+### 📝 Emacs Package
+
+SSS includes a comprehensive Emacs package providing seamless integration with powerful features:
+
+#### Features
+- **🔐 Interactive Operations**: Encrypt/decrypt regions, toggle patterns at point, process entire buffers
+- **👥 Multi-User Support**: Project management, user switching, team collaboration
+- **🎨 Syntax Highlighting**: Visual distinction of `⊕{}`, `o+{}`, and `⊠{}` patterns
+- **⚡ Auto-Processing**: Automatic encrypt/decrypt on file open/save
+- **🔥 Doom Integration**: Full Evil operator support, leader keys, text objects
+- **🎯 Smart UI**: Transient menus, completion, password caching
+
+#### Quick Setup
+
+**Standard Emacs:**
+```elisp
+(add-to-list 'load-path "/path/to/sss/plugins/emacs")
+(require 'sss)
+(require 'sss-mode)
+(sss-setup-auto-mode)
+```
+
+**Doom Emacs:**
+```elisp
+;; packages.el
+(package! sss :recipe (:local-repo "/path/to/sss/plugins/emacs"))
+
+;; config.el
+(use-package! sss
+  :commands sss-mode
+  :config (require 'sss-doom))
+```
+
+#### Key Bindings
+- **Standard**: `C-c s e/d/t` (encrypt/decrypt/toggle)
+- **Doom**: `SPC e e/d/t` + Evil operators `g e/d/t`
+- **Evil Text Objects**: `i s`/`a s` (inner/outer SSS pattern)
+
+See [`plugins/emacs/README.md`](plugins/emacs/README.md) for complete documentation.
+
+### 🔧 Other Editors
+
+SSS works with any editor through the `ssse` command:
+
+```bash
+# Edit with automatic encrypt/decrypt
+ssse myfile.conf
+
+# Or set your preferred editor
+export EDITOR=vim
+ssse myfile.conf
+```
+
 ## Configuration
 
 ### Project Configuration (`.sss.toml`)

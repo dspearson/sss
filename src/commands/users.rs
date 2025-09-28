@@ -131,6 +131,19 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
                 return Err(anyhow!("User '{}' not found in project", username));
             }
         }
+        None => {
+            // No subcommand provided, show available subcommands
+            eprintln!("Error: No subcommand provided");
+            eprintln!();
+            eprintln!("Available subcommands:");
+            eprintln!("  list        List project users");
+            eprintln!("  add         Add a user to the project");
+            eprintln!("  remove      Remove a user from the project");
+            eprintln!("  info        Show information about a user");
+            eprintln!();
+            eprintln!("Use 'sss users <subcommand> --help' for more information on a subcommand.");
+            std::process::exit(1);
+        }
         _ => unreachable!(),
     }
 

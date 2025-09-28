@@ -44,6 +44,18 @@ pub fn handle_aliases(
             alias_manager.remove_alias(alias)?;
             println!("Removed alias '{}'", alias);
         }
+        None => {
+            // No subcommand provided, show available subcommands
+            eprintln!("Error: No subcommand provided");
+            eprintln!();
+            eprintln!("Available subcommands:");
+            eprintln!("  list        List user aliases");
+            eprintln!("  add         Add new alias");
+            eprintln!("  remove      Remove alias");
+            eprintln!();
+            eprintln!("Use 'sss aliases <subcommand> --help' for more information on a subcommand.");
+            std::process::exit(1);
+        }
         _ => unreachable!(),
     }
 

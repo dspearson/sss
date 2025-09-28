@@ -26,10 +26,16 @@ pub fn handle_settings(matches: &ArgMatches) -> Result<()> {
             println!("Colored output: {}", config_manager.use_colored_output());
             println!("Show progress: {}", config_manager.show_progress());
             println!("Verbosity level: {}", config_manager.verbosity_level());
-            println!("Confirm destructive: {}", config_manager.confirm_destructive());
+            println!(
+                "Confirm destructive: {}",
+                config_manager.confirm_destructive()
+            );
 
             // Show keystore settings
-            println!("Auto-lock timeout: {} minutes", config_manager.get_auto_lock_timeout());
+            println!(
+                "Auto-lock timeout: {} minutes",
+                config_manager.get_auto_lock_timeout()
+            );
 
             // Show project info if available
             if let Some(project_path) = config_manager.project_path() {
@@ -98,7 +104,10 @@ pub fn handle_settings(matches: &ArgMatches) -> Result<()> {
         Some(("location", _)) => {
             let config_manager = ConfigManager::new()?;
             if let Some(project_path) = config_manager.project_path() {
-                println!("Project config: {}", project_path.join(".sss.toml").display());
+                println!(
+                    "Project config: {}",
+                    project_path.join(".sss.toml").display()
+                );
             }
 
             // Show user config location

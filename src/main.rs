@@ -2,8 +2,9 @@ use anyhow::{anyhow, Result};
 use clap::{Arg, Command};
 use std::env;
 
-use sss::{
-    commands::{handle_aliases, handle_init, handle_keygen_deprecated, handle_keys, handle_process, handle_settings, handle_users},
+use sss::commands::{
+    handle_aliases, handle_init, handle_keygen_deprecated, handle_keys, handle_process,
+    handle_settings, handle_users,
 };
 
 fn create_cli_app() -> Command {
@@ -52,13 +53,11 @@ fn create_cli_app() -> Command {
                 .action(clap::ArgAction::SetTrue),
         )
         .subcommand(
-            Command::new("init")
-                .about("Initialize a new project")
-                .arg(
-                    Arg::new("username")
-                        .help("Username for the project")
-                        .required(false),
-                ),
+            Command::new("init").about("Initialize a new project").arg(
+                Arg::new("username")
+                    .help("Username for the project")
+                    .required(false),
+            ),
         )
         .subcommand(
             Command::new("keygen")
@@ -97,23 +96,19 @@ fn create_cli_app() -> Command {
                 )
                 .subcommand(Command::new("list").about("List your private keys"))
                 .subcommand(
-                    Command::new("pubkey")
-                        .about("Show your public key")
-                        .arg(
-                            Arg::new("fingerprint")
-                                .long("fingerprint")
-                                .help("Show key fingerprint instead of full key")
-                                .action(clap::ArgAction::SetTrue),
-                        ),
+                    Command::new("pubkey").about("Show your public key").arg(
+                        Arg::new("fingerprint")
+                            .long("fingerprint")
+                            .help("Show key fingerprint instead of full key")
+                            .action(clap::ArgAction::SetTrue),
+                    ),
                 )
                 .subcommand(
-                    Command::new("delete")
-                        .about("Delete a keypair")
-                        .arg(
-                            Arg::new("name")
-                                .help("Key name or ID to delete")
-                                .required(true),
-                        ),
+                    Command::new("delete").about("Delete a keypair").arg(
+                        Arg::new("name")
+                            .help("Key name or ID to delete")
+                            .required(true),
+                    ),
                 )
                 .subcommand(
                     Command::new("current")
@@ -132,11 +127,7 @@ fn create_cli_app() -> Command {
                 .subcommand(
                     Command::new("add")
                         .about("Add a user to the project")
-                        .arg(
-                            Arg::new("username")
-                                .help("Username to add")
-                                .required(true),
-                        )
+                        .arg(Arg::new("username").help("Username to add").required(true))
                         .arg(
                             Arg::new("public-key")
                                 .help("User's public key (base64 or file path)")
@@ -170,11 +161,7 @@ fn create_cli_app() -> Command {
                     Command::new("add")
                         .about("Add a new alias")
                         .arg(Arg::new("alias").help("Alias name").required(true))
-                        .arg(
-                            Arg::new("username")
-                                .help("Target username")
-                                .required(true),
-                        ),
+                        .arg(Arg::new("username").help("Target username").required(true)),
                 )
                 .subcommand(
                     Command::new("remove")
@@ -223,7 +210,6 @@ fn create_cli_app() -> Command {
         )
 }
 
-
 fn main() -> Result<()> {
     // Special case: if called as "ssse", handle editor mode
     let args: Vec<String> = env::args().collect();
@@ -239,12 +225,8 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|_| "user".to_string());
 
             // Create a minimal ArgMatches for editor mode
-            let dummy_matches = create_cli_app().get_matches_from(vec![
-                "sss",
-                "--user", &username,
-                "--edit",
-                file_path
-            ]);
+            let dummy_matches = create_cli_app()
+                .get_matches_from(vec!["sss", "--user", &username, "--edit", file_path]);
             return handle_process(&dummy_matches);
         }
     }

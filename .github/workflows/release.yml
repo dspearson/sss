@@ -93,7 +93,6 @@ jobs:
     - name: Set environment variables for cross-compilation (Unix)
       if: matrix.os != 'windows-latest'
       run: |
-        echo "SODIUM_SHARED=0" >> $GITHUB_ENV
         if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]]; then
           echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "TARGET_CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
@@ -102,15 +101,9 @@ jobs:
           echo "TARGET_CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
         fi
 
-    - name: Set environment variables for cross-compilation (Windows)
-      if: matrix.os == 'windows-latest'
-      run: |
-        echo "SODIUM_SHARED=0" >> $env:GITHUB_ENV
-
     - name: Build release binary
       uses: houseabsolute/actions-rust-cross@v1
       env:
-        SODIUM_SHARED: "0"
         SODIUM_USE_PKG_CONFIG: "0"
         RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
       with:

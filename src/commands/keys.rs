@@ -166,6 +166,20 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                 }
             }
         }
+        None => {
+            // No subcommand provided, show available subcommands
+            eprintln!("Error: No subcommand provided");
+            eprintln!();
+            eprintln!("Available subcommands:");
+            eprintln!("  generate    Generate a new keypair");
+            eprintln!("  list        List your private keys");
+            eprintln!("  pubkey      Show your public key");
+            eprintln!("  current     Show or set current keypair");
+            eprintln!("  delete      Delete a keypair");
+            eprintln!();
+            eprintln!("Use 'sss keys <subcommand> --help' for more information on a subcommand.");
+            std::process::exit(1);
+        }
         _ => unreachable!(),
     }
 

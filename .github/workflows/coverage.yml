@@ -1,0 +1,279 @@
+name: Coverage
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+  schedule:
+    # Run weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev pkg-config
+
+    - name: Install cargo-llvm-cov
+      run: cargo install cargo-llvm-cov
+
+    - name: Generate coverage report (LCOV)
+      run: |
+        cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+
+    - name: Generate coverage report (JSON)
+      run: |
+        cargo llvm-cov --all-features --workspace --json --output-path coverage.json
+
+    - name: Generate HTML coverage report
+      run: |
+        cargo llvm-cov --all-features --workspace --html
+
+    - name: Coverage summary
+      run: |
+        cargo llvm-cov --all-features --workspace --summary-only | tee coverage-summary.txt
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: lcov.info
+        fail_ci_if_error: false
+        verbose: true
+
+    - name: Upload HTML coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-html-report
+        path: target/llvm-cov/html/
+        retention-days: 30
+
+    - name: Upload coverage data
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-data
+        path: |
+          lcov.info
+          coverage.json
+          coverage-summary.txt
+        retention-days: 30
+
+    - name: Check coverage threshold
+      run: |
+        # Extract coverage percentage from summary
+        COVERAGE=$(cargo llvm-cov --all-features --workspace --summary-only | grep -oP '\d+\.\d+(?=%)' | head -1)
+        echo "Current coverage: $COVERAGE%"
+
+        # Set minimum coverage threshold (adjust as needed)
+        THRESHOLD=85
+
+        if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+          echo "Coverage $COVERAGE% is below threshold $THRESHOLD%"
+          exit 1
+        else
+          echo "Coverage $COVERAGE% meets threshold $THRESHOLD%"
+        fi
+
+  mutation-testing:
+    runs-on: ubuntu-latest
+    # Only run mutation tests on schedule or manual trigger (they take a long time)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev pkg-config
+
+    - name: Install cargo-mutants
+      run: cargo install cargo-mutants
+
+    - name: Run mutation tests (crypto module)
+      run: |
+        # Focus on crypto module as it's most critical
+        cargo mutants --package sss --file src/crypto.rs --timeout 300 --jobs 2
+      continue-on-error: true
+
+    - name: Run mutation tests (core modules)
+      run: |
+        # Test other core modules with timeout
+        cargo mutants --package sss --file src/processor.rs --timeout 180 --jobs 2
+        cargo mutants --package sss --file src/config.rs --timeout 120 --jobs 2
+      continue-on-error: true
+
+    - name: Upload mutation test results
+      uses: actions/upload-artifact@v4
+      with:
+        name: mutation-test-results
+        path: mutants.out/
+        retention-days: 30
+      if: always()
+
+  benchmark:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev pkg-config
+
+    - name: Install criterion
+      run: cargo install cargo-criterion
+
+    - name: Run performance tests
+      run: |
+        # Run performance tests if they exist
+        cargo test --release --test performance_tests -- --ignored
+      continue-on-error: true
+
+    - name: Run benchmarks
+      run: |
+        # Create simple benchmark if none exist
+        mkdir -p benches
+        cat > benches/crypto_bench.rs << 'EOF'
+        use criterion::{black_box, criterion_group, criterion_main, Criterion};
+        use sss::{Key, Processor};
+
+        fn bench_encryption(c: &mut Criterion) {
+            let key = Key::new();
+            let processor = Processor::new(key).unwrap();
+            let content = "Benchmark: ⊕{secret_content}";
+
+            c.bench_function("encrypt_content", |b| {
+                b.iter(|| processor.encrypt_content(black_box(content)))
+            });
+        }
+
+        fn bench_decryption(c: &mut Criterion) {
+            let key = Key::new();
+            let processor = Processor::new(key).unwrap();
+            let content = "Benchmark: ⊕{secret_content}";
+            let encrypted = processor.encrypt_content(content).unwrap();
+
+            c.bench_function("decrypt_content", |b| {
+                b.iter(|| processor.decrypt_content(black_box(&encrypted)))
+            });
+        }
+
+        criterion_group!(benches, bench_encryption, bench_decryption);
+        criterion_main!(benches);
+        EOF
+
+        # Add criterion to Cargo.toml if not present
+        if ! grep -q "criterion" Cargo.toml; then
+          echo '[dev-dependencies]' >> Cargo.toml
+          echo 'criterion = { version = "0.5", features = ["html_reports"] }' >> Cargo.toml
+          echo '[[bench]]' >> Cargo.toml
+          echo 'name = "crypto_bench"' >> Cargo.toml
+          echo 'harness = false' >> Cargo.toml
+        fi
+
+        cargo bench
+      continue-on-error: true
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark-results
+        path: target/criterion/
+        retention-days: 30
+      if: always()
+
+  security-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+
+    - name: Install cargo-deny
+      run: cargo install cargo-deny
+
+    - name: Run security audit
+      run: cargo audit
+
+    - name: Run cargo-deny (licenses and security)
+      run: |
+        # Create basic deny.toml if it doesn't exist
+        if [ ! -f deny.toml ]; then
+          cat > deny.toml << 'EOF'
+        [licenses]
+        confidence-threshold = 0.8
+        allow = [
+            "MIT",
+            "Apache-2.0",
+            "Apache-2.0 WITH LLVM-exception",
+            "BSD-2-Clause",
+            "BSD-3-Clause",
+            "ISC",
+            "Unicode-DFS-2016",
+        ]
+
+        [bans]
+        multiple-versions = "warn"
+        wildcards = "allow"
+
+        [advisories]
+        vulnerability = "deny"
+        unmaintained = "warn"
+        notice = "warn"
+        EOF
+        fi
+
+        cargo deny check
+      continue-on-error: true
+
+    - name: Upload security analysis results
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-analysis
+        path: |
+          audit-report.json
+          deny.toml
+        retention-days: 30
+      if: always()

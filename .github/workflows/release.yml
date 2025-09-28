@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release'
+        required: true
+        type: string
+
+jobs:
+  build-release:
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64 (musl for static linking)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-x86_64
+
+          # Linux ARM64 (musl for static linking)
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-aarch64
+
+          # Linux ARMv7 (musl for static linking)
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            name: linux-armv7
+
+          # macOS x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-x86_64
+
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-aarch64
+
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x86_64
+            ext: .exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install system dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsodium-dev pkg-config musl-tools
+        # For static linking with musl
+        if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+          sudo apt-get install -y musl-dev
+        fi
+
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install libsodium pkg-config
+
+    - name: Install system dependencies (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        # libsodium-sys will handle Windows dependencies automatically
+        echo "Windows dependencies managed by libsodium-sys"
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+
+    - name: Build release binary
+      uses: houseabsolute/actions-rust-cross@v1
+      env:
+        # Force static linking for libsodium-sys
+        SODIUM_LIB_DIR: ""
+        SODIUM_STATIC: "1"
+        # For musl targets, ensure static linking
+        RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
+      with:
+        command: build
+        target: ${{ matrix.target }}
+        args: "--locked --release"
+        strip: true
+
+    - name: Create release archive (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        mkdir -p release
+        cp target/${{ matrix.target }}/release/sss release/
+        ln -sf sss release/ssse
+        cp README.md release/
+        tar -czf sss-${{ matrix.name }}.tar.gz -C release .
+        rm -rf release
+
+    - name: Create release archive (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir release
+        cp target/${{ matrix.target }}/release/sss.exe release/
+        cp target/${{ matrix.target }}/release/sss.exe release/ssse.exe
+        cp README.md release/
+        7z a sss-${{ matrix.name }}.zip ./release/*
+        rm -rf release
+
+    - name: Generate checksums (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        sha256sum sss-${{ matrix.name }}.tar.gz > sss-${{ matrix.name }}.tar.gz.sha256
+
+    - name: Generate checksums (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        certutil -hashfile sss-${{ matrix.name }}.zip SHA256 > sss-${{ matrix.name }}.zip.sha256
+
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-${{ matrix.name }}
+        path: |
+          sss-${{ matrix.name }}.*
+        retention-days: 30
+
+  create-release:
+    needs: build-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir release-assets
+        find artifacts -name "sss-*" -type f -exec cp {} release-assets/ \;
+        ls -la release-assets/
+
+    - name: Determine tag
+      id: tag
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.tag.outputs.tag }}
+        name: Release ${{ steps.tag.outputs.tag }}
+        body: |
+          ## SSS Release ${{ steps.tag.outputs.tag }}
+
+          ### Downloads
+
+          Choose the appropriate binary for your platform:
+
+          - **Linux x86_64**: `sss-linux-x86_64.tar.gz` (static, works on any Linux)
+          - **Linux ARM64**: `sss-linux-aarch64.tar.gz` (for ARM64/aarch64 systems)
+          - **Linux ARMv7**: `sss-linux-armv7.tar.gz` (for ARMv7 systems like Raspberry Pi)
+          - **macOS x86_64**: `sss-macos-x86_64.tar.gz` (Intel Macs)
+          - **macOS ARM64**: `sss-macos-aarch64.tar.gz` (Apple Silicon Macs)
+          - **Windows x86_64**: `sss-windows-x86_64.zip`
+
+          ### Verification
+
+          All downloads include SHA256 checksums for verification.
+
+          ### Installation
+
+          1. Download the appropriate archive for your platform
+          2. Extract the archive
+          3. Copy `sss` to a directory in your PATH
+          4. Create symlink: `ln -sf sss ssse` (Unix) or copy `ssse.exe` (Windows)
+          5. Run `sss --init` to create your first configuration
+
+          For more details, see the README.md included in each archive.
+        files: release-assets/*
+        draft: false
+        prerelease: false

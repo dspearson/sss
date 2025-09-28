@@ -1,0 +1,116 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Linux x86_64 (musl for static linking)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-x86_64
+
+          # Linux ARM64 (musl for static linking)
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            name: linux-aarch64
+
+          # Linux ARMv7 (musl for static linking)
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            name: linux-armv7
+
+          # macOS x86_64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-x86_64
+
+          # macOS ARM64 (Apple Silicon)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-aarch64
+
+          # Windows x86_64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-x86_64
+            ext: .exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install system dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsodium-dev pkg-config musl-tools
+        # For static linking with musl
+        if [[ "${{ matrix.target }}" == *"musl"* ]]; then
+          sudo apt-get install -y musl-dev
+        fi
+
+    - name: Install system dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install libsodium pkg-config
+
+    - name: Install system dependencies (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        # libsodium-sys will handle Windows dependencies automatically
+        echo "Windows dependencies managed by libsodium-sys"
+
+    - name: Cache dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ matrix.target }}
+
+    - name: Build binary
+      uses: houseabsolute/actions-rust-cross@v1
+      env:
+        # Force static linking for libsodium-sys
+        SODIUM_LIB_DIR: ""
+        SODIUM_STATIC: "1"
+        # For musl targets, ensure static linking
+        RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
+      with:
+        command: build
+        target: ${{ matrix.target }}
+        args: "--locked --release"
+        strip: true
+
+    - name: Rename binary (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cp target/${{ matrix.target }}/release/sss sss-${{ matrix.name }}
+        cp target/${{ matrix.target }}/release/sss ssse-${{ matrix.name }}
+
+    - name: Rename binary (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        cp target/${{ matrix.target }}/release/sss.exe sss-${{ matrix.name }}.exe
+        cp target/${{ matrix.target }}/release/sss.exe ssse-${{ matrix.name }}.exe
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries-${{ matrix.name }}
+        path: |
+          sss-${{ matrix.name }}${{ matrix.ext }}
+          ssse-${{ matrix.name }}${{ matrix.ext }}
+        retention-days: 30

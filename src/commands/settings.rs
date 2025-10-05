@@ -1,11 +1,21 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use clap::ArgMatches;
+use std::path::PathBuf;
 
 use crate::config_manager::ConfigManager;
 use crate::validation::validate_username;
 
-pub fn handle_settings(matches: &ArgMatches) -> Result<()> {
-    let mut config_manager = ConfigManager::new()?;
+/// Create config manager instance based on global confdir parameter
+fn create_config_manager(main_matches: &ArgMatches) -> Result<ConfigManager> {
+    if let Some(confdir) = main_matches.get_one::<String>("confdir") {
+        ConfigManager::new_with_config_dir(PathBuf::from(confdir))
+    } else {
+        ConfigManager::new()
+    }
+}
+
+pub fn handle_settings(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
+    let mut config_manager = create_config_manager(main_matches)?;
 
     match matches.subcommand() {
         Some(("show", _)) => {
@@ -102,7 +112,6 @@ pub fn handle_settings(matches: &ArgMatches) -> Result<()> {
         }
 
         Some(("location", _)) => {
-            let config_manager = ConfigManager::new()?;
             if let Some(project_path) = config_manager.project_path() {
                 println!(
                     "Project config: {}",
@@ -117,19 +126,25 @@ pub fn handle_settings(matches: &ArgMatches) -> Result<()> {
             }
         }
 
-        _ => {
-            println!("Available settings commands:");
-            println!("  show     - Show current settings");
-            println!("  set      - Set configuration values");
-            println!("  reset    - Reset all settings to defaults");
-            println!("  location - Show configuration file locations");
+        None => {
+            // No subcommand provided, show available subcommands
+            return Err(anyhow!(
+                "No subcommand provided\n\n\
+                Available subcommands:\n\
+                  show        Show current settings\n\
+                  set         Set configuration values\n\
+                  reset       Reset all settings to defaults\n\
+                  location    Show configuration file locations\n\n\
+                Use 'sss settings <subcommand> --help' for more information on a subcommand."
+            ));
         }
+        _ => unreachable!(),
     }
 
     Ok(())
 }
 
-pub fn handle_config_deprecated(matches: &ArgMatches) -> Result<()> {
+pub fn handle_config_deprecated(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     eprintln!("Warning: 'sss config' is deprecated. Use 'sss settings' instead.");
-    handle_settings(matches)
+    handle_settings(main_matches, matches)
 }

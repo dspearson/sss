@@ -1,23 +1,35 @@
 ;;; sss-ui.el --- SSS UI components and transient menus -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024
-
-;; Author: SSS Contributors
+;; Author: Dominic Pearson <dsp@technoanimal.net>
 ;; Keywords: encryption, security, files
 ;; Version: 1.0
-;; Package-Requires: ((emacs "26.1") (transient "0.3.0"))
+;; Package-Requires: ((emacs "30.1"))
 
 ;;; Commentary:
 
-;; This file provides transient menus and enhanced UI components
-;; for the SSS Emacs interface.
+;; This file provides enhanced UI components for the SSS Emacs interface.
+;; Includes transient menus (if transient package is available) and
+;; various interactive settings functions.
 
 ;;; Code:
 
 (require 'sss)
-(require 'transient)
+
+;; Transient is optional - gracefully handle if not available
+(when (or (featurep 'transient)
+          (require 'transient nil t))
+  (message "SSS: Transient menus available"))
+
+;; If transient is not available, provide fallback message
+(unless (featurep 'transient)
+  (defun sss--transient-not-available ()
+    "Show message when transient is not available."
+    (interactive)
+    (message "Transient package not available. Install with: M-x package-install RET transient RET")))
 
 ;;; Transient menus
+
+(when (featurep 'transient)
 
 ;;;###autoload (autoload 'sss-menu "sss-ui" nil t)
 (transient-define-prefix sss-menu ()
@@ -102,7 +114,8 @@
    ("c" "Toggle coloured output" sss-toggle-coloured-output)
    ("a" "Toggle auto-decrypt" sss-toggle-auto-decrypt)
    ("s" "Toggle auto-encrypt" sss-toggle-auto-encrypt)
-   ("h" "Toggle highlighting" sss-toggle-highlighting)]
+   ("h" "Toggle highlighting" sss-toggle-highlighting)
+   ("f" "Toggle fancy mode" sss-toggle-fancy-mode)]
 
   ["Cache & Cleanup"
    ("C" "Clear password cache" sss-clear-cache)
@@ -112,6 +125,35 @@
    ("S" "Show settings" sss-show-settings)
    ("r" "Reset settings" sss-reset-settings)
    ("l" "Show config locations" sss-show-config-locations)])
+
+) ; End of (when (featurep 'transient))
+
+;; Fallback functions when transient is not available
+(unless (featurep 'transient)
+  (defun sss-menu ()
+    "Fallback menu when transient is not available."
+    (interactive)
+    (sss--transient-not-available))
+
+  (defun sss-project-menu ()
+    "Fallback project menu when transient is not available."
+    (interactive)
+    (sss--transient-not-available))
+
+  (defun sss-user-menu ()
+    "Fallback user menu when transient is not available."
+    (interactive)
+    (sss--transient-not-available))
+
+  (defun sss-key-menu ()
+    "Fallback key menu when transient is not available."
+    (interactive)
+    (sss--transient-not-available))
+
+  (defun sss-settings-menu ()
+    "Fallback settings menu when transient is not available."
+    (interactive)
+    (sss--transient-not-available)))
 
 ;;; Enhanced interactive functions
 
@@ -155,7 +197,7 @@
   "Set default USERNAME for SSS operations."
   (interactive "sDefault username (empty to clear): ")
   (setq sss-default-username (if (string-empty-p username) nil username))
-  (customise-save-variable 'sss-default-username sss-default-username)
+  (customize-save-variable 'sss-default-username sss-default-username)
   (message "Default username set to: %s" (or sss-default-username "auto")))
 
 ;;;###autoload
@@ -179,7 +221,7 @@
   "Toggle auto-decrypt on file open."
   (interactive)
   (setq sss-auto-decrypt-on-open (not sss-auto-decrypt-on-open))
-  (customise-save-variable 'sss-auto-decrypt-on-open sss-auto-decrypt-on-open)
+  (customize-save-variable 'sss-auto-decrypt-on-open sss-auto-decrypt-on-open)
   (message "Auto-decrypt on open: %s" sss-auto-decrypt-on-open))
 
 ;;;###autoload
@@ -187,7 +229,7 @@
   "Toggle auto-encrypt on file save."
   (interactive)
   (setq sss-auto-encrypt-on-save (not sss-auto-encrypt-on-save))
-  (customise-save-variable 'sss-auto-encrypt-on-save sss-auto-encrypt-on-save)
+  (customize-save-variable 'sss-auto-encrypt-on-save sss-auto-encrypt-on-save)
   (message "Auto-encrypt on save: %s" sss-auto-encrypt-on-save))
 
 ;;;###autoload
@@ -195,22 +237,22 @@
   "Toggle SSS pattern highlighting."
   (interactive)
   (setq sss-highlight-patterns (not sss-highlight-patterns))
-  (customise-save-variable 'sss-highlight-patterns sss-highlight-patterns)
+  (customize-save-variable 'sss-highlight-patterns sss-highlight-patterns)
   (message "SSS highlighting: %s" sss-highlight-patterns)
 
   ;; Refresh highlighting in current buffer if SSS mode is active
   (when sss-mode
     (if sss-highlight-patterns
-        (font-lock-add-keywords nil sss-font-lock-keywords)
+        (font-lock-add-keywords nil sss-font-lock-keywords 'append)
       (font-lock-remove-keywords nil sss-font-lock-keywords))
-    (font-lock-refresh-defaults)))
+    (font-lock-flush)))
 
 ;;;###autoload
 (defun sss-set-cache-timeout (timeout)
   "Set password cache TIMEOUT in seconds."
   (interactive "nCache timeout (seconds, 0 to disable): ")
   (setq sss-password-cache-timeout timeout)
-  (customise-save-variable 'sss-password-cache-timeout timeout)
+  (customize-save-variable 'sss-password-cache-timeout timeout)
   (message "Password cache timeout: %d seconds" timeout))
 
 ;;;###autoload

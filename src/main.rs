@@ -3,8 +3,8 @@ use clap::{Arg, Command};
 use std::env;
 
 use sss::commands::{
-    handle_aliases, handle_init, handle_keygen_deprecated, handle_keys, handle_process,
-    handle_settings, handle_users,
+    handle_agent, handle_init, handle_keygen_deprecated, handle_keys, handle_process,
+    handle_settings, handle_status, handle_users,
 };
 
 fn create_cli_app() -> Command {
@@ -21,7 +21,7 @@ fn create_cli_app() -> Command {
         .arg(
             Arg::new("file")
                 .value_name("FILE")
-                .help("File to process")
+                .help("File to process (use '-' for stdin)")
                 .required(false),
         )
         .arg(
@@ -36,21 +36,27 @@ fn create_cli_app() -> Command {
                 .short('x')
                 .long("in-place")
                 .help("Modify file in-place")
-                .action(clap::ArgAction::SetTrue),
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("render")
+                .conflicts_with("edit"),
         )
         .arg(
             Arg::new("render")
                 .short('r')
                 .long("render")
                 .help("Render encrypted content to raw text")
-                .action(clap::ArgAction::SetTrue),
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("in-place")
+                .conflicts_with("edit"),
         )
         .arg(
             Arg::new("edit")
                 .short('e')
                 .long("edit")
                 .help("Edit file with automatic encrypt/decrypt")
-                .action(clap::ArgAction::SetTrue),
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("in-place")
+                .conflicts_with("render"),
         )
         .subcommand(
             Command::new("init").about("Initialize a new project").arg(
@@ -118,6 +124,28 @@ fn create_cli_app() -> Command {
                                 .help("Key name or ID to set as current")
                                 .required(false),
                         ),
+                )
+                .subcommand(
+                    Command::new("rotate")
+                        .about("Rotate repository encryption key")
+                        .arg(
+                            Arg::new("force")
+                                .long("force")
+                                .help("Skip confirmation prompt")
+                                .action(clap::ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("no-backup")
+                                .long("no-backup")
+                                .help("Skip creating backup files")
+                                .action(clap::ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("dry-run")
+                                .long("dry-run")
+                                .help("Show what would be done without making changes")
+                                .action(clap::ArgAction::SetTrue),
+                        ),
                 ),
         )
         .subcommand(
@@ -151,22 +179,6 @@ fn create_cli_app() -> Command {
                                 .help("Username to show info for")
                                 .required(true),
                         ),
-                ),
-        )
-        .subcommand(
-            Command::new("aliases")
-                .about("Username alias management")
-                .subcommand(Command::new("list").about("List all aliases"))
-                .subcommand(
-                    Command::new("add")
-                        .about("Add a new alias")
-                        .arg(Arg::new("alias").help("Alias name").required(true))
-                        .arg(Arg::new("username").help("Target username").required(true)),
-                )
-                .subcommand(
-                    Command::new("remove")
-                        .about("Remove an alias")
-                        .arg(Arg::new("alias").help("Alias to remove").required(true)),
                 ),
         )
         .subcommand(
@@ -208,6 +220,65 @@ fn create_cli_app() -> Command {
                 )
                 .subcommand(Command::new("location").about("Show configuration file locations")),
         )
+        .subcommand(
+            Command::new("agent")
+                .about("Agent management operations")
+                .subcommand(
+                    Command::new("start")
+                        .about("Start the agent daemon")
+                        .arg(
+                            Arg::new("foreground")
+                                .long("foreground")
+                                .help("Run in foreground (don't daemonize)")
+                                .action(clap::ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("key-id")
+                                .long("key-id")
+                                .value_name("ID")
+                                .help("Specific key ID to load"),
+                        ),
+                )
+                .subcommand(Command::new("stop").about("Stop the agent daemon"))
+                .subcommand(Command::new("status").about("Check agent status"))
+                .subcommand(Command::new("lock").about("Lock agent (deny all requests)"))
+                .subcommand(Command::new("unlock").about("Unlock agent"))
+                .subcommand(
+                    Command::new("policies")
+                        .about("Manage agent policies")
+                        .subcommand(Command::new("list").about("List all policies"))
+                        .subcommand(
+                            Command::new("add")
+                                .about("Add a host to allowed list")
+                                .arg(
+                                    Arg::new("hostname")
+                                        .help("Hostname to allow")
+                                        .required(true),
+                                )
+                                .arg(
+                                    Arg::new("project")
+                                        .long("project")
+                                        .value_name("PATH")
+                                        .help("Restrict to specific project path"),
+                                ),
+                        )
+                        .subcommand(
+                            Command::new("remove")
+                                .about("Remove a host from policies")
+                                .arg(
+                                    Arg::new("hostname")
+                                        .help("Hostname to remove")
+                                        .required(true),
+                                ),
+                        )
+                        .subcommand(Command::new("clear").about("Clear all policies")),
+                ),
+        )
+        .subcommand(
+            Command::new("status")
+                .about("Show SSS project status")
+                .long_about("Check if current directory is in an SSS project. Exits 0 with project root path if in project, exits 1 if not in project.")
+        )
 }
 
 fn main() -> Result<()> {
@@ -239,8 +310,9 @@ fn main() -> Result<()> {
         Some(("keygen", sub_matches)) => handle_keygen_deprecated(&matches, sub_matches),
         Some(("keys", sub_matches)) => handle_keys(&matches, sub_matches),
         Some(("users", sub_matches)) => handle_users(&matches, sub_matches),
-        Some(("aliases", sub_matches)) => handle_aliases(&matches, sub_matches),
-        Some(("settings", sub_matches)) => handle_settings(sub_matches),
+        Some(("settings", sub_matches)) => handle_settings(&matches, sub_matches),
+        Some(("agent", sub_matches)) => handle_agent(sub_matches),
+        Some(("status", _)) => handle_status(&matches),
         None => {
             // Handle file processing (legacy mode)
             if matches.get_one::<String>("file").is_some() {

@@ -318,11 +318,11 @@ The package automatically detects SSS projects by looking for `.sss.toml` files.
 - `sss-open-project-config` - Open `.sss.toml` file
 - `sss-find-encrypted-files-interactive` - Find files with SSS patterns
 
-## Customisation
+## Customization
 
-### Customisation Groups
+### Customization Groups
 
-Use `M-x customise-group RET sss RET` to access all customisation options:
+Use `M-x customize-group RET sss RET` to access all customization options:
 
 - **sss-executable**: Path to SSS command
 - **sss-default-username**: Default username for operations

@@ -1,11 +1,9 @@
 ;;; sss-utils.el --- SSS utility functions and helpers -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024
-
-;; Author: SSS Contributors
+;; Author: Dominic Pearson <dsp@technoanimal.net>
 ;; Keywords: encryption, security, files
 ;; Version: 1.0
-;; Package-Requires: ((emacs "26.1"))
+;; Package-Requires: ((emacs "30.1"))
 
 ;;; Commentary:
 

@@ -9,6 +9,7 @@ use crate::{
     crypto::{open_repository_key, PublicKey},
     keystore::Keystore,
     project::ProjectConfig,
+    secure_memory::password,
 };
 
 /// Create keystore instance based on global confdir parameter
@@ -75,13 +76,13 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
 
             // Get our keypair to decrypt the repository key
             let keystore = create_keystore(main_matches)?;
-            let password = rpassword::prompt_password(
+            let password = password::read_password(
                 "Enter your passphrase to add user (or press Enter if none): ",
             )?;
             let password_opt = if password.is_empty() {
                 None
             } else {
-                Some(password.as_str())
+                Some(password.as_str()?)
             };
             let our_keypair = keystore.get_current_keypair(password_opt)?;
 
@@ -103,11 +104,77 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
         Some(("remove", sub_matches)) => {
             let username = sub_matches.get_one::<String>("username").unwrap();
 
+            // Load project config
             let mut config = ProjectConfig::load_from_file(config_path)?;
-            config.remove_user(username)?;
-            config.save_to_file(config_path)?;
 
-            println!("Removed user '{}' from project", username);
+            // Check if user exists
+            if !config.users.contains_key(username) {
+                return Err(anyhow!("User '{}' not found in project", username));
+            }
+
+            // Check if this is the last user
+            if config.users.len() == 1 {
+                return Err(anyhow!(
+                    "Cannot remove the last user from the project. Use 'sss init' to recreate the project if needed."
+                ));
+            }
+
+            // Remove user from config first
+            config.remove_user(username)?;
+
+            println!("Removing user '{}' from project...", username);
+            println!("⚠️  This will trigger automatic key rotation for security");
+
+            // Confirm rotation
+            use crate::rotation::{confirm_rotation, RotationReason};
+            let reason = RotationReason::UserRemoved(username.to_string());
+            if !confirm_rotation(&reason, false)? {
+                println!("Operation cancelled");
+                return Ok(());
+            }
+
+            // Get our keypair to decrypt the current repository key
+            let keystore = create_keystore(main_matches)?;
+            let password = password::read_password(
+                "Enter your passphrase to perform key rotation (or press Enter if none): ",
+            )?;
+            let password_opt = if password.is_empty() {
+                None
+            } else {
+                Some(password.as_str()?)
+            };
+            let our_keypair = keystore.get_current_keypair(password_opt)?;
+
+            // Get our sealed repository key and decrypt it
+            let current_user = std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "unknown".to_string());
+
+            // We need to get the current repository key before removing the user
+            // So we need to reload the original config
+            let original_config = ProjectConfig::load_from_file(config_path)?;
+            let sealed_key = original_config.get_sealed_key_for_user(&current_user)?;
+            let current_repository_key =
+                crate::crypto::open_repository_key(&sealed_key, &our_keypair)?;
+
+            // Now perform the key rotation
+            use crate::rotation::{RotationManager, RotationOptions};
+            let options = RotationOptions {
+                no_backup: false,
+                force: false,
+                dry_run: false,
+                show_progress: true,
+            };
+
+            let rotation_manager = RotationManager::new(options);
+            let result = rotation_manager.rotate_repository_key(
+                &std::path::PathBuf::from(config_path),
+                &current_repository_key,
+                reason,
+            )?;
+
+            result.print_summary();
+            println!("✓ User '{}' removed and repository key rotated", username);
         }
         Some(("info", sub_matches)) => {
             let username = sub_matches.get_one::<String>("username").unwrap();
@@ -133,16 +200,15 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
         }
         None => {
             // No subcommand provided, show available subcommands
-            eprintln!("Error: No subcommand provided");
-            eprintln!();
-            eprintln!("Available subcommands:");
-            eprintln!("  list        List project users");
-            eprintln!("  add         Add a user to the project");
-            eprintln!("  remove      Remove a user from the project");
-            eprintln!("  info        Show information about a user");
-            eprintln!();
-            eprintln!("Use 'sss users <subcommand> --help' for more information on a subcommand.");
-            std::process::exit(1);
+            return Err(anyhow!(
+                "No subcommand provided\n\n\
+                Available subcommands:\n\
+                  list        List project users\n\
+                  add         Add a user to the project\n\
+                  remove      Remove a user from the project\n\
+                  info        Show information about a user\n\n\
+                Use 'sss users <subcommand> --help' for more information on a subcommand."
+            ));
         }
         _ => unreachable!(),
     }

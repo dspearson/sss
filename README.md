@@ -6,7 +6,7 @@ SSS is a command-line tool for transparent encryption and decryption of text wit
 
 - **🔒 Secure Encryption**: Uses XChaCha20Poly1305 authenticated encryption with cryptographically secure random nonces
 - **👥 Multi-User Support**: Asymmetric encryption for team collaboration with individual private keys
-- **🔑 Advanced Key Management**: Integrated keystore with password-protected private keys and user aliases
+- **🔑 Advanced Key Management**: Integrated keystore with password-protected private keys
 - **📁 Transparent Operation**: Works with any text file format
 - **🛡️ Cross-Platform**: Supports Windows, macOS, and Linux
 - **⚡ High Performance**: Optimised with static regex compilation and buffered I/O
@@ -147,19 +147,6 @@ sss users list
 
 # Show user information
 sss users info <username>
-```
-
-### Alias Management
-
-```bash
-# List user aliases
-sss aliases list
-
-# Add new alias
-sss aliases add <alias> <username>
-
-# Remove alias
-sss aliases remove <alias>
 ```
 
 ### Settings Management
@@ -363,9 +350,9 @@ sss --user alice --in-place secrets.conf
 # Render encrypted file to raw plaintext
 sss --user alice --render encrypted.txt > plaintext.txt
 
-# Use alias for convenience
-sss aliases add prod alice-production
-sss --user prod config.txt
+# Use SSS_USER environment variable for convenience
+export SSS_USER=alice
+sss config.txt
 ```
 
 ## Building
@@ -414,7 +401,6 @@ The codebase is organised into well-defined modules:
   - `init.rs` - Project initialisation
   - `keys.rs` - Key management operations
   - `users.rs` - User management for multi-user projects
-  - `aliases.rs` - Username alias management
   - `process.rs` - File processing (encrypt/decrypt/edit)
   - `settings.rs` - Configuration and user settings management
 - `src/crypto.rs` - Core cryptographic operations

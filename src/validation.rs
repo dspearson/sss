@@ -5,68 +5,34 @@ use std::path::{Path, PathBuf};
 /// Security constants for input validation
 pub const MAX_USERNAME_LENGTH: usize = 255;
 pub const MAX_KEY_ID_LENGTH: usize = 64;
-pub const MAX_PATH_LENGTH: usize = 4096;
-pub const MAX_ALIAS_NAME_LENGTH: usize = 64;
 
-/// Validate and canonicalize a file path to prevent path traversal attacks
+/// Validate and canonicalize a file path with minimal restrictions
+///
+/// This function accepts absolute paths, relative paths, and resolves symlinks.
+/// No security restrictions are enforced - it's up to the client to use safely.
+///
+/// Processing:
+/// - Null bytes rejected (filesystem limitation)
+/// - Symlinks resolved for consistent behavior
 pub fn validate_file_path(file_path: &str) -> Result<PathBuf> {
-    // Check length to prevent DoS
-    if file_path.len() > MAX_PATH_LENGTH {
-        return Err(validation_error!(
-            "File path too long: {} characters (max: {})",
-            file_path.len(),
-            MAX_PATH_LENGTH
-        ));
-    }
-
-    let path = Path::new(file_path);
-
-    // Check for path traversal patterns
-    if file_path.contains("..") {
-        return Err(validation_error!(
-            "Path contains '..' which is not allowed for security reasons"
-        ));
-    }
-
-    // Check for current directory reference
-    if file_path == "." {
-        return Err(validation_error!(
-            "Current directory reference '.' is not allowed"
-        ));
-    }
-
-    // Check for absolute paths outside current working directory
-    if path.is_absolute() {
-        return Err(validation_error!(
-            "Absolute paths are not allowed for security reasons"
-        ));
-    }
-
-    // Check for null bytes
+    // Check for null bytes (filesystem limitation)
     if file_path.contains('\0') {
         return Err(validation_error!("Path contains null bytes"));
     }
 
-    // Check for control characters
-    if file_path.chars().any(|c| c.is_control() && c != '\t') {
-        return Err(validation_error!(
-            "Path contains invalid control characters"
-        ));
-    }
+    let path = Path::new(file_path);
 
-    // Canonicalize the path to resolve any remaining issues
-    let current_dir = std::env::current_dir()
-        .map_err(|e| validation_error!("Failed to get current directory: {}", e))?;
+    // Resolve the path
+    let full_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        let current_dir = std::env::current_dir()
+            .map_err(|e| validation_error!("Failed to get current directory: {}", e))?;
+        current_dir.join(path)
+    };
 
-    let full_path = current_dir.join(path);
-    let canonical_path = full_path.canonicalize().unwrap_or(full_path); // Allow non-existent files
-
-    // Ensure the canonical path is still within the current directory
-    if !canonical_path.starts_with(&current_dir) {
-        return Err(validation_error!(
-            "File path escapes current directory (security violation)"
-        ));
-    }
+    // Canonicalize to resolve symlinks for consistent behavior
+    let canonical_path = full_path.canonicalize().unwrap_or(full_path);
 
     Ok(canonical_path)
 }
@@ -152,39 +118,6 @@ pub fn validate_key_id(key_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate an alias name
-pub fn validate_alias_name(alias: &str) -> Result<()> {
-    if alias.is_empty() {
-        return Err(validation_error!("Alias name cannot be empty"));
-    }
-
-    if alias.len() > MAX_ALIAS_NAME_LENGTH {
-        return Err(validation_error!(
-            "Alias name too long: {} characters (max: {})",
-            alias.len(),
-            MAX_ALIAS_NAME_LENGTH
-        ));
-    }
-
-    // Similar rules to username but more restrictive
-    if !alias
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err(validation_error!(
-            "Alias name contains invalid characters. Only alphanumeric, underscore, and hyphen are allowed"
-        ));
-    }
-
-    if alias.starts_with('-') || alias.ends_with('-') {
-        return Err(validation_error!(
-            "Alias name cannot start or end with hyphens"
-        ));
-    }
-
-    Ok(())
-}
-
 /// Validate Base64 input for security
 pub fn validate_base64(input: &str, max_length: usize) -> Result<()> {
     if input.is_empty() {
@@ -263,20 +196,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_alias_name() {
-        // Valid aliases
-        assert!(validate_alias_name("prod").is_ok());
-        assert!(validate_alias_name("dev_env").is_ok());
-        assert!(validate_alias_name("test-user").is_ok());
-
-        // Invalid aliases
-        assert!(validate_alias_name("").is_err());
-        assert!(validate_alias_name("invalid.alias").is_err());
-        assert!(validate_alias_name("-invalid").is_err());
-        assert!(validate_alias_name("invalid-").is_err());
-    }
-
-    #[test]
     fn test_validate_base64() {
         // Valid Base64
         assert!(validate_base64("SGVsbG8=", 100).is_ok());
@@ -294,18 +213,30 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();
 
+        // Create test files
+        let test_file = temp_path.join("test.txt");
+        std::fs::write(&test_file, "test content").unwrap();
+
+        let subdir = temp_path.join("subdir");
+        std::fs::create_dir(&subdir).unwrap();
+        let subdir_file = subdir.join("test.txt");
+        std::fs::write(&subdir_file, "test content").unwrap();
+
         // Change to temp directory for testing
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_path).unwrap();
 
-        // Valid paths
+        // All valid paths should work (no restrictions)
         assert!(validate_file_path("test.txt").is_ok());
         assert!(validate_file_path("subdir/test.txt").is_ok());
+        assert!(validate_file_path("../").is_ok()); // Parent directories allowed
+        assert!(validate_file_path("/etc/passwd").is_ok()); // Absolute paths allowed
 
-        // Invalid paths
-        assert!(validate_file_path("../test.txt").is_err());
-        assert!(validate_file_path("/absolute/path").is_err());
-        assert!(validate_file_path(".").is_err());
+        // Symlinks should be resolved
+        assert!(validate_file_path(test_file.to_str().unwrap()).is_ok());
+
+        // Invalid: null bytes (filesystem limitation)
+        assert!(validate_file_path("test\0file.txt").is_err());
 
         // Restore original directory
         std::env::set_current_dir(original_dir).unwrap();

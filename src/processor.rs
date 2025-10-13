@@ -47,14 +47,14 @@ impl Processor {
 
     /// Helper to handle decryption errors with consistent warning
     fn handle_decrypt_error(&self, error: &anyhow::Error, original: &str, context: &str) -> String {
+        let context_str = if context.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", context)
+        };
         eprintln!(
             "Warning: Failed to decrypt ciphertext{}: {}",
-            if context.is_empty() {
-                ""
-            } else {
-                &format!(" {}", context)
-            },
-            error
+            context_str, error
         );
         original.to_string()
     }
@@ -202,6 +202,65 @@ impl Processor {
         });
 
         Ok(result.to_string())
+    }
+
+    /// Re-encrypt content from one repository key to another
+    /// Used during key rotation to migrate encrypted content
+    pub fn reencrypt_content(&self, content: &str, old_processor: &Processor) -> Result<String> {
+        // First decrypt with old key
+        let decrypted = old_processor.decrypt_content(content)?;
+
+        // Then encrypt with new key (self)
+        self.encrypt_content(&decrypted)
+    }
+
+    /// Batch re-encrypt multiple files with progress reporting
+    pub fn reencrypt_files_batch<F>(
+        &self,
+        files: &[std::path::PathBuf],
+        old_processor: &Processor,
+        mut progress_callback: F,
+    ) -> Result<(usize, usize)>
+    where
+        F: FnMut(usize, usize, &std::path::Path),
+    {
+        let mut processed = 0;
+        let mut failed = 0;
+
+        for (index, file_path) in files.iter().enumerate() {
+            progress_callback(index + 1, files.len(), file_path);
+
+            match self.reencrypt_single_file(file_path, old_processor) {
+                Ok(()) => processed += 1,
+                Err(_) => failed += 1,
+            }
+        }
+
+        Ok((processed, failed))
+    }
+
+    /// Re-encrypt a single file
+    fn reencrypt_single_file(
+        &self,
+        file_path: &std::path::Path,
+        old_processor: &Processor,
+    ) -> Result<()> {
+        // Read original content
+        let original_content = old_processor.process_file(file_path)?;
+
+        // Re-encrypt with new key
+        let reencrypted_content = self.process_content(&original_content)?;
+
+        // Write back to file
+        std::fs::write(file_path, reencrypted_content).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to write re-encrypted file {}: {}",
+                file_path.display(),
+                e
+            )
+        })?;
+
+        Ok(())
     }
 }
 

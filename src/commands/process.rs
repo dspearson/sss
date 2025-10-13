@@ -2,35 +2,17 @@ use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read, Write};
+use std::path::Path;
 use std::process;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 use crate::{
-    aliases::AliasManager,
-    config::load_project_config_with_repository_key,
-    constants::{BACKUP_FILE_PREFIX, BACKUP_FILE_SUFFIX, EDITOR_FALLBACKS},
-    validation::validate_file_path,
-    Processor,
+    config::load_project_config_with_repository_key, constants::EDITOR_FALLBACKS,
+    validation::validate_file_path, Processor,
 };
-
-/// Create alias manager instance based on global confdir parameter
-fn create_alias_manager(matches: &ArgMatches) -> Result<AliasManager> {
-    if let Some(confdir) = matches.get_one::<String>("confdir") {
-        AliasManager::new_with_config_dir(PathBuf::from(confdir))
-    } else {
-        AliasManager::new()
-    }
-}
-
-/// Resolve username through alias system with optional custom config dir
-fn resolve_username_with_config(username_or_alias: &str, matches: &ArgMatches) -> Result<String> {
-    let alias_manager = create_alias_manager(matches)?;
-    alias_manager.resolve(username_or_alias)
-}
 
 /// Get the default system username
 fn get_default_username() -> Result<String> {
@@ -43,23 +25,6 @@ fn get_default_username() -> Result<String> {
             "Could not determine username. Please specify with --user <username>"
         ))
     }
-}
-
-/// Create a backup of the file before editing
-fn create_backup(file_path: &Path) -> Result<PathBuf> {
-    let mut backup_path = file_path.to_path_buf();
-    backup_path.set_file_name(format!(
-        "{}{}{}",
-        BACKUP_FILE_PREFIX,
-        file_path.file_name().unwrap().to_string_lossy(),
-        BACKUP_FILE_SUFFIX
-    ));
-
-    if file_path.exists() {
-        fs::copy(file_path, &backup_path)?;
-    }
-
-    Ok(backup_path)
 }
 
 /// Launch editor for file editing
@@ -88,15 +53,57 @@ fn launch_editor(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn handle_stdin_process(matches: &ArgMatches) -> Result<()> {
+    let username = if let Some(user) = matches.get_one::<String>("user") {
+        user.to_string()
+    } else {
+        get_default_username()?
+    };
+    let render = matches.get_flag("render");
+
+    // in-place and edit don't make sense for stdin
+    if matches.get_flag("in-place") {
+        return Err(anyhow!("Cannot use --in-place with stdin"));
+    }
+    if matches.get_flag("edit") {
+        return Err(anyhow!("Cannot use --edit with stdin"));
+    }
+
+    let (_config, repository_key) =
+        load_project_config_with_repository_key(".sss.toml", &username)?;
+    let processor = Processor::new(repository_key)?;
+
+    // Read from stdin
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input)?;
+
+    // Process content
+    let output = if render {
+        processor.decrypt_to_raw(&input)?
+    } else {
+        processor.process_content(&input)?
+    };
+
+    // Write to stdout
+    print!("{}", output);
+    io::stdout().flush()?;
+
+    Ok(())
+}
+
 pub fn handle_process(matches: &ArgMatches) -> Result<()> {
     if let Some(file_path_str) = matches.get_one::<String>("file") {
+        // Handle stdin if file is "-"
+        if file_path_str == "-" {
+            return handle_stdin_process(matches);
+        }
+
         let file_path = validate_file_path(file_path_str)?;
-        let username_or_alias = if let Some(user) = matches.get_one::<String>("user") {
-            user.as_str()
+        let username = if let Some(user) = matches.get_one::<String>("user") {
+            user.to_string()
         } else {
-            &get_default_username()?
+            get_default_username()?
         };
-        let username = resolve_username_with_config(username_or_alias, matches)?;
         let in_place = matches.get_flag("in-place");
         let render = matches.get_flag("render");
         let edit = matches.get_flag("edit");
@@ -119,14 +126,10 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             if in_place {
                 // In-place render: replace file with rendered content
                 fs::write(&file_path, raw_content)?;
-                println!("File rendered in-place: {:?}", file_path);
+                eprintln!("File rendered in-place: {:?}", file_path);
             } else {
-                // Copy original to .sss and write rendered content to original location
-                let backup_path = format!("{}.sss", file_path.to_string_lossy());
-                fs::copy(&file_path, &backup_path)?;
-                fs::write(&file_path, raw_content)?;
-                println!("Original saved to: {:?}", backup_path);
-                println!("Rendered content written to: {:?}", file_path);
+                // Output to stdout
+                print!("{}", raw_content);
             }
             return Ok(());
         }
@@ -137,9 +140,6 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             if !file_path.exists() {
                 return Err(anyhow!("File does not exist: {:?}", file_path));
             }
-
-            // Create backup
-            let _backup_path = create_backup(&file_path)?;
 
             // Read and prepare content for editing
             let content = fs::read_to_string(&file_path)?;
@@ -178,8 +178,6 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             let processed_content = processor.process_content(&content)?;
 
             if in_place {
-                // Create backup before in-place modification
-                let _backup_path = create_backup(&file_path)?;
                 fs::write(&file_path, processed_content)?;
                 println!("File processed in-place: {:?}", file_path);
             } else {

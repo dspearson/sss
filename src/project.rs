@@ -39,6 +39,10 @@ pub struct ProjectConfig {
     #[serde(default, skip_serializing_if = "HooksConfig::is_empty")]
     pub hooks: HooksConfig,
 
+    /// Key rotation metadata
+    #[serde(default, skip_serializing_if = "RotationMetadata::is_empty")]
+    pub rotation: RotationMetadata,
+
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -59,6 +63,7 @@ impl Default for ProjectConfig {
             created: default_created(),
             users: HashMap::new(),
             hooks: HooksConfig::default(),
+            rotation: RotationMetadata::default(),
             key: None,
         }
     }
@@ -77,6 +82,26 @@ impl HooksConfig {
     }
 }
 
+/// Key rotation metadata
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct RotationMetadata {
+    /// Timestamp of last key rotation
+    pub last_rotation: Option<String>,
+    /// Number of rotations performed
+    #[serde(default)]
+    pub rotation_count: u32,
+    /// Reason for last rotation
+    pub last_rotation_reason: Option<String>,
+}
+
+impl RotationMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.last_rotation.is_none()
+            && self.rotation_count == 0
+            && self.last_rotation_reason.is_none()
+    }
+}
+
 impl ProjectConfig {
     /// Create a new project configuration with a single user
     /// Generates a new repository key and seals it for the user
@@ -89,7 +114,7 @@ impl ProjectConfig {
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
-            sealed_key: sealed_key,
+            sealed_key,
             added: default_created(),
         };
 
@@ -101,6 +126,7 @@ impl ProjectConfig {
             created: default_created(),
             users,
             hooks: HooksConfig::default(),
+            rotation: RotationMetadata::default(),
             key: None,
         })
     }
@@ -149,7 +175,7 @@ impl ProjectConfig {
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
-            sealed_key: sealed_key,
+            sealed_key,
             added: default_created(),
         };
 
@@ -247,6 +273,32 @@ impl ProjectConfig {
         }
 
         Ok(())
+    }
+
+    /// Update rotation metadata after a key rotation
+    pub fn update_rotation_metadata(&mut self, reason: String) {
+        self.rotation.last_rotation = Some(Utc::now().to_rfc3339());
+        self.rotation.rotation_count += 1;
+        self.rotation.last_rotation_reason = Some(reason);
+    }
+
+    /// Get rotation history information
+    pub fn get_rotation_info(&self) -> String {
+        if self.rotation.rotation_count == 0 {
+            "No key rotations performed".to_string()
+        } else {
+            let last_rotation = self.rotation.last_rotation.as_deref().unwrap_or("unknown");
+            let reason = self
+                .rotation
+                .last_rotation_reason
+                .as_deref()
+                .unwrap_or("unspecified");
+
+            format!(
+                "Rotations: {} | Last: {} | Reason: {}",
+                self.rotation.rotation_count, last_rotation, reason
+            )
+        }
     }
 }
 

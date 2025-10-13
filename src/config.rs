@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
-use std::path::Path;
+use std::env;
+use std::path::{Path, PathBuf};
 
 use crate::crypto::PublicKey;
 use crate::keyring_manager::KeyringManager;
@@ -10,6 +11,36 @@ pub use crate::project::{HooksConfig, ProjectConfig as Config};
 
 /// Default config file name in project directories
 const DEFAULT_CONFIG_FILE: &str = ".sss.toml";
+
+/// Find SSS project root by searching upward for .sss.toml file
+/// Similar to how git finds the repository root by searching for .git
+pub fn find_project_root() -> Result<PathBuf> {
+    let mut current_dir =
+        env::current_dir().map_err(|e| anyhow!("Failed to get current directory: {}", e))?;
+
+    loop {
+        let config_path = current_dir.join(DEFAULT_CONFIG_FILE);
+        if config_path.exists() {
+            return Ok(current_dir);
+        }
+
+        match current_dir.parent() {
+            Some(parent) => current_dir = parent.to_path_buf(),
+            None => break,
+        }
+    }
+
+    Err(anyhow!(
+        "No SSS project found. Could not locate {} in current directory or any parent directory.",
+        DEFAULT_CONFIG_FILE
+    ))
+}
+
+/// Get the path to the project config file
+pub fn get_project_config_path() -> Result<PathBuf> {
+    let project_root = find_project_root()?;
+    Ok(project_root.join(DEFAULT_CONFIG_FILE))
+}
 
 /// Check if a config file exists and determine its format
 pub fn detect_config_format<P: AsRef<Path>>(config_path: P) -> Result<ConfigFormat> {
@@ -126,12 +157,21 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
     config_path: P,
     username: &str,
 ) -> Result<(ProjectConfig, crate::crypto::RepositoryKey)> {
-    let format = detect_config_format(&config_path)?;
+    let config_path = config_path.as_ref();
+
+    // If config_path is just the filename, search for project root
+    let actual_config_path = if config_path == Path::new(DEFAULT_CONFIG_FILE) {
+        get_project_config_path()?
+    } else {
+        config_path.to_path_buf()
+    };
+
+    let format = detect_config_format(&actual_config_path)?;
 
     match format {
         ConfigFormat::Missing => Err(anyhow!(
             "No project configuration found at {}. Run 'sss init' to create one.",
-            config_path.as_ref().display()
+            actual_config_path.display()
         )),
         ConfigFormat::Legacy => Err(anyhow!(
             "Legacy configuration format detected. This format is no longer supported."
@@ -140,7 +180,7 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
             "Project configuration exists but has no users. Add yourself with 'sss user add'."
         )),
         ConfigFormat::Modern => {
-            let config = ProjectConfig::load_from_file(&config_path)?;
+            let config = ProjectConfig::load_from_file(&actual_config_path)?;
             config.validate()?;
 
             // Check if user is in project
@@ -152,31 +192,70 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
                 ));
             }
 
-            // Get user's keypair from keystore
-            let keystore = crate::keystore::Keystore::new()?;
-
-            // Try without password first
-            let user_keypair = match keystore.get_current_keypair(None) {
-                Ok(keypair) => keypair,
-                Err(_) => {
-                    // Try with password
-                    let password = rpassword::prompt_password(
-                        "Enter your passphrase (or press Enter if none): ",
-                    )?;
-                    let password_opt = if password.is_empty() {
-                        None
-                    } else {
-                        Some(password.as_str())
-                    };
-                    keystore.get_current_keypair(password_opt)?
-                }
-            };
-
             // Get the sealed repository key for this user
             let sealed_key = config.get_sealed_key_for_user(username)?;
 
-            // Decrypt the repository key
-            let repository_key = crate::crypto::open_repository_key(&sealed_key, &user_keypair)?;
+            // Try to use agent first, if available (works transparently on remote machines)
+            let repository_key = if crate::agent::is_agent_available() {
+                // Build context for agent request
+                let mut context =
+                    crate::agent_protocol::RequestContext::from_environment(username.to_string());
+                context.project_path = Some(actual_config_path.display().to_string());
+
+                // Request unsealing from agent
+                match crate::agent::unseal_with_agent(&sealed_key, context) {
+                    Ok(key) => key,
+                    Err(e) => {
+                        eprintln!(
+                            "Agent unsealing failed: {}, falling back to local keystore",
+                            e
+                        );
+                        // Fall back to local keystore
+                        let keystore = crate::keystore::Keystore::new()?;
+
+                        // Try without password first
+                        let user_keypair = match keystore.get_current_keypair(None) {
+                            Ok(keypair) => keypair,
+                            Err(_) => {
+                                // Try with password
+                                let password = rpassword::prompt_password(
+                                    "Enter your passphrase (or press Enter if none): ",
+                                )?;
+                                let password_opt = if password.is_empty() {
+                                    None
+                                } else {
+                                    Some(password.as_str())
+                                };
+                                keystore.get_current_keypair(password_opt)?
+                            }
+                        };
+
+                        crate::crypto::open_repository_key(&sealed_key, &user_keypair)?
+                    }
+                }
+            } else {
+                // No agent available, use local keystore
+                let keystore = crate::keystore::Keystore::new()?;
+
+                // Try without password first
+                let user_keypair = match keystore.get_current_keypair(None) {
+                    Ok(keypair) => keypair,
+                    Err(_) => {
+                        // Try with password
+                        let password = rpassword::prompt_password(
+                            "Enter your passphrase (or press Enter if none): ",
+                        )?;
+                        let password_opt = if password.is_empty() {
+                            None
+                        } else {
+                            Some(password.as_str())
+                        };
+                        keystore.get_current_keypair(password_opt)?
+                    }
+                };
+
+                crate::crypto::open_repository_key(&sealed_key, &user_keypair)?
+            };
 
             Ok((config, repository_key))
         }

@@ -36,9 +36,11 @@ fn test_validation_module_integration() {
         // Valid relative path
         assert!(validate_file_path("test.txt").is_ok());
 
-        // Invalid paths
-        assert!(validate_file_path("../outside").is_err()); // Path traversal
-        assert!(validate_file_path("/absolute/path").is_err()); // Absolute path
+        // Invalid paths (only null bytes should fail now)
+        assert!(validate_file_path("test\0file.txt").is_err()); // Null bytes
+
+        // Note: Path traversal and absolute paths are now allowed but will be
+        // validated against project boundaries at runtime
     });
 
     // Test Base64 validation
@@ -162,7 +164,7 @@ fn test_error_handling_robustness() {
 
 #[test]
 fn test_security_validation_coverage() {
-    use sss::validation::{validate_alias_name, validate_key_id, validate_username};
+    use sss::validation::{validate_key_id, validate_username};
 
     // Test comprehensive username validation
     let long_username = "x".repeat(300);
@@ -196,12 +198,161 @@ fn test_security_validation_coverage() {
         );
     }
 
-    // Test alias validation
-    assert!(validate_alias_name("prod").is_ok());
-    assert!(validate_alias_name("dev_env").is_ok());
-    assert!(validate_alias_name("invalid.alias").is_err());
-
     // Test key ID validation
     assert!(validate_key_id("abc123").is_ok());
     assert!(validate_key_id("invalid-key").is_err());
+}
+
+#[test]
+fn test_cli_flag_mutual_exclusion() {
+    use clap::{Arg, ArgAction, Command};
+
+    // Create a simplified version of the CLI to test flag conflicts
+    let app = Command::new("sss_test")
+        .arg(
+            Arg::new("in-place")
+                .short('x')
+                .long("in-place")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("render")
+                .conflicts_with("edit"),
+        )
+        .arg(
+            Arg::new("render")
+                .short('r')
+                .long("render")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("in-place")
+                .conflicts_with("edit"),
+        )
+        .arg(
+            Arg::new("edit")
+                .short('e')
+                .long("edit")
+                .action(ArgAction::SetTrue)
+                .conflicts_with("in-place")
+                .conflicts_with("render"),
+        );
+
+    // Test that single flags work
+    let result_x = app.clone().try_get_matches_from(vec!["sss_test", "-x"]);
+    assert!(result_x.is_ok(), "Single -x flag should work");
+
+    let result_r = app.clone().try_get_matches_from(vec!["sss_test", "-r"]);
+    assert!(result_r.is_ok(), "Single -r flag should work");
+
+    let result_e = app.clone().try_get_matches_from(vec!["sss_test", "-e"]);
+    assert!(result_e.is_ok(), "Single -e flag should work");
+
+    // Test that conflicting flags are rejected
+    let result_xr = app
+        .clone()
+        .try_get_matches_from(vec!["sss_test", "-x", "-r"]);
+    assert!(
+        result_xr.is_err(),
+        "Conflicting -x and -r flags should be rejected"
+    );
+
+    let result_xe = app
+        .clone()
+        .try_get_matches_from(vec!["sss_test", "-x", "-e"]);
+    assert!(
+        result_xe.is_err(),
+        "Conflicting -x and -e flags should be rejected"
+    );
+
+    let result_re = app
+        .clone()
+        .try_get_matches_from(vec!["sss_test", "-r", "-e"]);
+    assert!(
+        result_re.is_err(),
+        "Conflicting -r and -e flags should be rejected"
+    );
+
+    // Test that all three together are also rejected
+    let result_all = app
+        .clone()
+        .try_get_matches_from(vec!["sss_test", "-x", "-r", "-e"]);
+    assert!(
+        result_all.is_err(),
+        "All three conflicting flags should be rejected"
+    );
+}
+
+#[test]
+fn test_config_manager_with_custom_confdir() {
+    use sss::config_manager::ConfigManager;
+
+    // Create a temporary directory for testing
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let custom_confdir = temp_dir.path().join("custom_config");
+    fs::create_dir_all(&custom_confdir).expect("Failed to create custom confdir");
+
+    // Test creating ConfigManager with custom config directory
+    let config_manager = ConfigManager::new_with_config_dir(custom_confdir.clone());
+    assert!(
+        config_manager.is_ok(),
+        "Should create ConfigManager with custom confdir"
+    );
+
+    // The config manager should use the custom directory for settings
+    let config_manager = config_manager.unwrap();
+
+    // Test that we can set and save settings with custom confdir
+    let mut mutable_manager = config_manager;
+    mutable_manager
+        .set_default_username(Some("testuser".to_string()))
+        .expect("Failed to set username");
+
+    // Save should work with custom confdir
+    let save_result = mutable_manager.save_user_settings();
+    assert!(
+        save_result.is_ok(),
+        "Should be able to save settings to custom confdir"
+    );
+
+    // Verify the settings file was created in the custom directory
+    let settings_path = custom_confdir.join("settings.toml");
+    assert!(
+        settings_path.exists(),
+        "Settings file should exist in custom confdir: {:?}",
+        settings_path
+    );
+}
+
+#[test]
+fn test_fingerprint_formatting() {
+    // Test the fingerprint shortening logic used in keys pubkey --fingerprint
+    // This simulates what happens in keys.rs when --fingerprint flag is used
+
+    let test_cases = vec![
+        (
+            "SGVsbG8gV29ybGQhVGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZw==",
+            "SGVsbG8gV29ybGQh...",
+        ),
+        ("ShortKey", "ShortKey..."),
+        ("1234567890123456", "1234567890123456..."),
+        ("12345", "12345..."),
+    ];
+
+    for (full_key, expected_fingerprint) in test_cases {
+        // Simulate the fingerprint logic from keys.rs
+        let fingerprint = format!("{}...", &full_key[..16.min(full_key.len())]);
+
+        assert_eq!(
+            fingerprint, expected_fingerprint,
+            "Fingerprint formatting should match expected output"
+        );
+    }
+
+    // Test edge case: very short key
+    let short_key = "abc";
+    let short_fingerprint = format!("{}...", &short_key[..16.min(short_key.len())]);
+    assert_eq!(short_fingerprint, "abc...");
+
+    // Test that fingerprint is always shorter than original for long keys
+    let long_key = "A".repeat(100);
+    let long_fingerprint = format!("{}...", &long_key[..16.min(long_key.len())]);
+    assert!(long_fingerprint.len() < long_key.len());
+    assert_eq!(long_fingerprint.len(), 19); // 16 chars + "..."
 }

@@ -64,7 +64,7 @@ fn validate_and_decode_base64(
 }
 
 /// Symmetric key for repository encryption
-#[derive(Debug, Zeroize, ZeroizeOnDrop)]
+#[derive(Debug, Clone, Zeroize, ZeroizeOnDrop)]
 pub struct RepositoryKey([u8; SYMMETRIC_KEY_SIZE]);
 
 impl Default for RepositoryKey {
@@ -109,6 +109,14 @@ impl RepositoryKey {
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
+    }
+
+    /// Generate a new repository key for rotation
+    /// Returns a tuple of (old_key, new_key) where old_key is a copy of self
+    pub fn rotate(&self) -> (RepositoryKey, RepositoryKey) {
+        let old_key = RepositoryKey(self.0);
+        let new_key = RepositoryKey::new();
+        (old_key, new_key)
     }
 }
 

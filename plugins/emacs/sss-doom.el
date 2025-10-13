@@ -1,11 +1,9 @@
 ;;; sss-doom.el --- Doom Emacs integration for SSS -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2024
-
-;; Author: SSS Contributors
+;; Author: Dominic Pearson <dsp@technoanimal.net>
 ;; Keywords: encryption, security, files, doom
 ;; Version: 1.0
-;; Package-Requires: ((emacs "26.1") (doom-core "3.0.0"))
+;; Package-Requires: ((emacs "30.1") (doom-core "3.0.0"))
 
 ;;; Commentary:
 
@@ -17,9 +15,6 @@
 ;;     :after sss)
 
 ;;; Code:
-
-(require 'sss)
-(require 'sss-mode)
 
 ;;; Doom detection and requirements
 
@@ -55,48 +50,20 @@
 (defun sss--setup-doom-keybindings ()
   "Set up Doom-style keybindings for SSS."
   (when (fboundp 'map!)
-    ;; Global leader bindings under 'e' for encryption
+    ;; Ensure functions are available
+    (require 'sss)
+    (require 'sss-ui)
+
+    ;; Global leader bindings - only for project setup and key management
     (map! :leader
           (:prefix-map ("e" . "encryption")
-           :desc "SSS menu" "SPC" #'sss-menu
-           :desc "Encrypt region" "e" #'sss-encrypt-region
-           :desc "Decrypt region" "d" #'sss-decrypt-region
-           :desc "Toggle at point" "t" #'sss-toggle-at-point
-           :desc "Process buffer" "b" #'sss-process-buffer
-           :desc "Render buffer" "r" #'sss-render-buffer
-           :desc "Process file" "f" #'sss-process-file
-           :desc "Render file" "R" #'sss-render-file
-           :desc "Edit file" "E" #'sss-edit-file
-
            (:prefix-map ("p" . "project")
-            :desc "Initialize project" "i" #'sss-init-project
-            :desc "Project info" "I" #'sss-show-project-info
-            :desc "Project status" "s" #'sss-project-status
-            :desc "List users" "l" #'sss-list-users
-            :desc "Add user" "a" #'sss-add-user
-            :desc "Remove user" "r" #'sss-remove-user
-            :desc "Select user" "u" #'sss-select-user
-            :desc "Open config" "c" #'sss-open-project-config
-            :desc "Goto root" "g" #'sss-goto-project-root
-            :desc "Find encrypted files" "f" #'sss-find-encrypted-files-interactive)
+            :desc "Initialize project" "i" #'sss-init-project)
 
            (:prefix-map ("k" . "keys")
             :desc "Generate keypair" "g" #'sss-generate-keypair
             :desc "List keys" "l" #'sss-list-keys
-            :desc "Show public key" "p" #'sss-show-pubkey
-            :desc "Show fingerprint" "f" #'sss-show-fingerprint
-            :desc "Set current key" "c" #'sss-set-current-key
-            :desc "Delete key" "d" #'sss-delete-key)
-
-           (:prefix-map ("s" . "settings")
-            :desc "Show settings" "s" #'sss-show-settings
-            :desc "Set username" "u" #'sss-set-default-username
-            :desc "Set editor" "e" #'sss-set-editor
-            :desc "Toggle auto-decrypt" "d" #'sss-toggle-auto-decrypt
-            :desc "Toggle auto-encrypt" "E" #'sss-toggle-auto-encrypt
-            :desc "Toggle highlighting" "h" #'sss-toggle-highlighting
-            :desc "Clear cache" "c" #'sss-clear-cache
-            :desc "Reset settings" "r" #'sss-reset-settings)
+            :desc "Show public key" "p" #'sss-show-pubkey)
 
            :desc "Help" "h" #'sss-help
            :desc "Version" "v" #'sss-show-version))
@@ -108,12 +75,11 @@
           :desc "Encrypt region" "e" #'sss-encrypt-region
           :desc "Decrypt region" "d" #'sss-decrypt-region
           :desc "Toggle at point" "t" #'sss-toggle-at-point
+          :desc "Preview secret" "s" #'sss-preview-secret-at-point
           :desc "Process buffer" "b" #'sss-process-buffer
+          :desc "Preview buffer" "v" #'sss-preview-buffer
           :desc "Render buffer" "r" #'sss-render-buffer
           :desc "Select user" "u" #'sss-select-user
-          :desc "List patterns" "l" #'sss-list-patterns-in-buffer
-          :desc "Count patterns" "c" #'sss-count-patterns-interactive
-          :desc "Show pattern at point" "p" #'sss-show-pattern-at-point
           :desc "Next pattern" "n" #'sss-goto-next-pattern
           :desc "Previous pattern" "N" #'sss-goto-previous-pattern
           :desc "Copy pattern content" "y" #'sss-copy-pattern-content
@@ -130,99 +96,10 @@
             :desc "Encrypt selection" "E" #'sss-encrypt-region
             :desc "Decrypt selection" "D" #'sss-decrypt-region))))
 
-;;; Doom modeline integration
 
-(defun sss--doom-modeline-segment ()
-  "Doom modeline segment for SSS."
-  (when sss-mode
-    (concat " "
-            (propertize "SSS" 'face 'doom-modeline-info)
-            (when sss--current-username
-              (propertize (format "[%s]" sss--current-username)
-                         'face 'doom-modeline-buffer-minor-mode)))))
 
-;; Add to doom modeline if available
-(with-eval-after-load 'doom-modeline
-  (doom-modeline-def-segment sss
-    (sss--doom-modeline-segment))
 
-  ;; Add to default segments (users can customise this)
-  (doom-modeline-def-modeline 'sss-modeline
-    '(bar workspace-name window-number modals matches follow buffer-info remote-host buffer-position word-count parrot selection-info)
-    '(misc-info persp-name battery grip irc mu4e gnus github debug repl lsp minor-modes sss input-method indent-info buffer-encoding major-mode process vcs checker)))
 
-;;; Doom snippets integration
-
-(defvar sss-doom-snippets-dir
-  (expand-file-name "snippets" (file-name-directory (or load-file-name buffer-file-name)))
-  "Directory for SSS yasnippet snippets.")
-
-(defun sss--setup-doom-snippets ()
-  "Set up SSS snippets for Doom."
-  (when (and (featurep 'yasnippet) (bound-and-true-p yas-global-mode))
-    (when (file-exists-p sss-doom-snippets-dir)
-      (add-to-list 'yas-snippet-dirs sss-doom-snippets-dir t)
-      (yas-reload-all))))
-
-;;; Which-key integration for Doom
-
-(defun sss--setup-doom-which-key ()
-  "Set up which-key integration for Doom."
-  (when (featurep 'which-key)
-    (which-key-add-key-based-replacements
-      (concat doom-leader-key " e") "encryption"
-      (concat doom-leader-key " e p") "project"
-      (concat doom-leader-key " e k") "keys"
-      (concat doom-leader-key " e s") "settings"
-      (concat doom-localleader-key " SPC") "sss-menu")
-
-    ;; Add descriptions for evil operators
-    (when (featurep 'evil)
-      (which-key-add-key-based-replacements
-        "g e" "sss-encrypt"
-        "g d" "sss-decrypt"
-        "g t" "sss-toggle"))))
-
-;;; Doom project integration
-
-(with-eval-after-load 'projectile
-  (defun sss--projectile-project-p (project-root)
-    "Check if PROJECT-ROOT is an SSS project."
-    (file-exists-p (expand-file-name ".sss.toml" project-root)))
-
-  (add-to-list 'projectile-project-root-functions #'sss--projectile-project-p))
-
-;;; Doom popup integration
-
-(when (featurep 'doom-popup)
-  (set-popup-rule! "^\\*SSS" :side 'bottom :height 0.3 :select t :quit t)
-  (set-popup-rule! "^\\*SSS Menu\\*" :side 'bottom :height 0.4 :select t :quit t)
-  (set-popup-rule! "^\\*SSS Project Info\\*" :side 'right :width 0.4 :select t :quit t)
-  (set-popup-rule! "^\\*SSS Keys\\*" :side 'bottom :height 0.3 :select t :quit t)
-  (set-popup-rule! "^\\*SSS Help\\*" :side 'right :width 0.5 :select t :quit t))
-
-;;; Doom treemacs integration
-
-(with-eval-after-load 'treemacs
-  (defun sss--treemacs-icon-for-sss-file (file)
-    "Return icon for SSS FILE."
-    (when (sss-file-has-patterns-p file)
-      "🔒"))
-
-  (when (fboundp 'treemacs-define-custom-icon)
-    (treemacs-define-custom-icon sss--treemacs-icon-for-sss-file "sss")))
-
-;;; Doom workspace integration
-
-(with-eval-after-load '+workspace
-  (defun sss--workspace-contains-sss-files ()
-    "Check if current workspace contains SSS files."
-    (when-let ((files (sss-find-encrypted-files)))
-      (> (length files) 0)))
-
-  ;; Add to workspace buffer display rules
-  (when (fboundp '+workspace-buffer-predicate-add)
-    (+workspace-buffer-predicate-add #'sss--workspace-contains-sss-files)))
 
 ;;; Auto-setup for Doom
 
@@ -230,13 +107,10 @@
   "Set up SSS for Doom Emacs."
   (interactive)
   (sss--setup-doom-keybindings)
-  (sss--setup-doom-which-key)
-  (sss--setup-doom-snippets)
-  (message "SSS Doom integration configured"))
+  (message "SSS Doom integration configured (keybindings)"))
 
-;; Auto-setup when this file is loaded in Doom
-(when (featurep 'doom-core)
-  (add-hook 'doom-init-ui-hook #'sss-doom-setup))
+;; Note: Auto-setup disabled to prevent conflicts
+;; Call (sss-doom-setup) manually in your config
 
 ;;; Configuration helpers for Doom users
 
@@ -252,8 +126,7 @@
   ;; Set default username
   (setq sss-default-username \"your-username\")
 
-  ;; Enable auto-modes
-  (add-hook 'doom-first-file-hook #'sss-setup-auto-mode)
+  ;; SSS mode should be enabled manually or via sss status check
 
   :config
   ;; Load Doom integration

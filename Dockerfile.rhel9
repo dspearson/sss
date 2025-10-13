@@ -1,0 +1,32 @@
+# Dockerfile for building SSS on RHEL 9 / Rocky Linux 9
+FROM rockylinux:9
+
+# Enable EPEL repository (required for libsodium)
+RUN dnf install -y epel-release && dnf clean all
+
+# Install build dependencies
+RUN dnf install -y \
+    gcc \
+    gcc-c++ \
+    make \
+    libsodium-devel \
+    pkg-config \
+    openssl-devel \
+    perl \
+    && dnf clean all
+
+# Install Rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Set working directory
+WORKDIR /build
+
+# Copy source
+COPY . .
+
+# Build release binary
+RUN cargo build --release
+
+# The binary will be in /build/target/release/
+# Additional binaries: sss-agent, sss-askpass-tty, sss-askpass-gui

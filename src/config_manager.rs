@@ -77,6 +77,19 @@ impl ConfigManager {
         })
     }
 
+    /// Create a new configuration manager with a custom config directory
+    pub fn new_with_config_dir(config_dir: PathBuf) -> Result<Self> {
+        let system_settings = SystemSettings::load_with_config_dir(config_dir)?;
+        let user_settings = UserSettings::load(&system_settings.config_dir)?;
+
+        Ok(Self {
+            project_config: None,
+            user_settings,
+            system_settings,
+            project_path: None,
+        })
+    }
+
     /// Load project configuration from a specific path
     pub fn load_project<P: AsRef<Path>>(&mut self, config_path: P) -> Result<()> {
         let config_path = config_path.as_ref();
@@ -274,6 +287,10 @@ impl SystemSettings {
             .ok_or_else(|| anyhow!("Could not determine config directory"))?
             .join("sss");
 
+        Self::load_with_config_dir(config_dir)
+    }
+
+    fn load_with_config_dir(config_dir: PathBuf) -> Result<Self> {
         let default_editor = if cfg!(windows) {
             "notepad".to_string()
         } else {

@@ -1,4 +1,8 @@
-pub mod aliases;
+pub mod agent;
+pub mod agent_policy;
+pub mod agent_protocol;
+pub mod askpass;
+pub mod audit_log;
 pub mod commands;
 pub mod config;
 pub mod config_manager;
@@ -11,10 +15,11 @@ pub mod keystore;
 pub mod processor;
 pub mod project;
 pub mod rate_limiter;
+pub mod rotation;
+pub mod scanner;
 pub mod secure_memory;
 pub mod validation;
 
-pub use aliases::AliasManager;
 pub use config::{load_key, load_key_for_user, Config};
 pub use crypto::{KeyPair, RepositoryKey};
 pub use error::{Result, SssError};

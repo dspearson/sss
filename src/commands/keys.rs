@@ -90,17 +90,24 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                 }
             }
         }
-        Some(("pubkey", _)) => {
+        Some(("pubkey", sub_matches)) => {
+            let show_fingerprint = sub_matches.get_flag("fingerprint");
             let password =
-                rpassword::prompt_password("Enter passphrase (or press Enter if unprotected): ")?;
+                password::read_password("Enter passphrase (or press Enter if unprotected): ")?;
             let password_opt = if password.is_empty() {
                 None
             } else {
-                Some(password.as_str())
+                Some(password.as_str()?)
             };
 
             let keypair = keystore.get_current_keypair(password_opt)?;
-            println!("{}", keypair.public_key.to_base64());
+            if show_fingerprint {
+                // Show a shortened fingerprint (first 16 chars of base64)
+                let full_key = keypair.public_key.to_base64();
+                println!("{}...", &full_key[..16.min(full_key.len())]);
+            } else {
+                println!("{}", keypair.public_key.to_base64());
+            }
         }
         Some(("delete", sub_matches)) => {
             let key_name = sub_matches.get_one::<String>("name").unwrap();
@@ -164,21 +171,83 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                 }
             }
         }
+        Some(("rotate", sub_matches)) => {
+            handle_keys_rotate_command(main_matches, sub_matches)?;
+        }
         None => {
             // No subcommand provided, show available subcommands
-            eprintln!("Error: No subcommand provided");
-            eprintln!();
-            eprintln!("Available subcommands:");
-            eprintln!("  generate    Generate a new keypair");
-            eprintln!("  list        List your private keys");
-            eprintln!("  pubkey      Show your public key");
-            eprintln!("  current     Show or set current keypair");
-            eprintln!("  delete      Delete a keypair");
-            eprintln!();
-            eprintln!("Use 'sss keys <subcommand> --help' for more information on a subcommand.");
-            std::process::exit(1);
+            return Err(anyhow!(
+                "No subcommand provided\n\n\
+                Available subcommands:\n\
+                  generate    Generate a new keypair\n\
+                  list        List your private keys\n\
+                  pubkey      Show your public key\n\
+                  current     Show or set current keypair\n\
+                  delete      Delete a keypair\n\
+                  rotate      Rotate repository encryption key\n\n\
+                Use 'sss keys <subcommand> --help' for more information on a subcommand."
+            ));
         }
         _ => unreachable!(),
+    }
+
+    Ok(())
+}
+
+fn handle_keys_rotate_command(_main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
+    use crate::{
+        config::load_project_config_with_repository_key,
+        constants::CONFIG_FILE_NAME,
+        rotation::{confirm_rotation, RotationManager, RotationOptions, RotationReason},
+    };
+
+    let force = matches.get_flag("force");
+    let no_backup = matches.get_flag("no-backup");
+    let dry_run = matches.get_flag("dry-run");
+
+    // Check if we're in a project
+    let config_path = CONFIG_FILE_NAME;
+    if !std::path::Path::new(config_path).exists() {
+        return Err(anyhow!(
+            "No project configuration found. Run 'sss init' first."
+        ));
+    }
+
+    let reason = RotationReason::ManualRotation;
+
+    // Confirm rotation unless forced or dry run
+    if !dry_run && !confirm_rotation(&reason, force)? {
+        println!("Key rotation cancelled");
+        return Ok(());
+    }
+
+    // Get current user and repository key
+    let current_user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let (_, repository_key) = load_project_config_with_repository_key(config_path, &current_user)?;
+
+    // Set up rotation options
+    let options = RotationOptions {
+        no_backup,
+        force,
+        dry_run,
+        show_progress: true,
+    };
+
+    // Perform the rotation
+    let rotation_manager = RotationManager::new(options);
+    let result = rotation_manager.rotate_repository_key(
+        &std::path::PathBuf::from(config_path),
+        &repository_key,
+        reason,
+    )?;
+
+    result.print_summary();
+
+    if dry_run {
+        println!("This was a dry run. Use 'sss keys rotate' (without --dry-run) to perform the actual rotation.");
     }
 
     Ok(())

@@ -3,8 +3,8 @@ use clap::{Arg, Command};
 use std::env;
 
 use sss::commands::{
-    handle_agent, handle_init, handle_keygen_deprecated, handle_keys, handle_process,
-    handle_settings, handle_status, handle_users,
+    handle_agent, handle_edit, handle_init, handle_keygen_deprecated, handle_keys, handle_open,
+    handle_process, handle_render, handle_seal, handle_settings, handle_status, handle_users,
 };
 
 fn create_cli_app() -> Command {
@@ -279,6 +279,91 @@ fn create_cli_app() -> Command {
                 .about("Show SSS project status")
                 .long_about("Check if current directory is in an SSS project. Exits 0 with project root path if in project, exits 1 if not in project.")
         )
+        .subcommand(
+            Command::new("seal")
+                .about("Encrypt plaintext markers in file")
+                .arg(
+                    Arg::new("file")
+                        .help("File to process (use '-' for stdin)")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("user")
+                        .short('u')
+                        .long("user")
+                        .value_name("USERNAME")
+                        .help("Username for encryption"),
+                )
+                .arg(
+                    Arg::new("in-place")
+                        .short('x')
+                        .long("in-place")
+                        .help("Modify file in-place (default: output to stdout)")
+                        .action(clap::ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
+            Command::new("open")
+                .about("Decrypt ciphertext to plaintext markers")
+                .arg(
+                    Arg::new("file")
+                        .help("File to process (use '-' for stdin)")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("user")
+                        .short('u')
+                        .long("user")
+                        .value_name("USERNAME")
+                        .help("Username for decryption"),
+                )
+                .arg(
+                    Arg::new("in-place")
+                        .short('x')
+                        .long("in-place")
+                        .help("Modify file in-place (default: output to stdout)")
+                        .action(clap::ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
+            Command::new("render")
+                .about("Decrypt to raw text (remove all markers)")
+                .arg(
+                    Arg::new("file")
+                        .help("File to process (use '-' for stdin)")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("user")
+                        .short('u')
+                        .long("user")
+                        .value_name("USERNAME")
+                        .help("Username for decryption"),
+                )
+                .arg(
+                    Arg::new("in-place")
+                        .short('x')
+                        .long("in-place")
+                        .help("Modify file in-place (default: output to stdout)")
+                        .action(clap::ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
+            Command::new("edit")
+                .about("Edit file with automatic encrypt/decrypt")
+                .arg(
+                    Arg::new("file")
+                        .help("File to edit")
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("user")
+                        .short('u')
+                        .long("user")
+                        .value_name("USERNAME")
+                        .help("Username for encryption/decryption"),
+                ),
+        )
 }
 
 fn main() -> Result<()> {
@@ -313,6 +398,10 @@ fn main() -> Result<()> {
         Some(("settings", sub_matches)) => handle_settings(&matches, sub_matches),
         Some(("agent", sub_matches)) => handle_agent(sub_matches),
         Some(("status", _)) => handle_status(&matches),
+        Some(("seal", sub_matches)) => handle_seal(&matches, sub_matches),
+        Some(("open", sub_matches)) => handle_open(&matches, sub_matches),
+        Some(("render", sub_matches)) => handle_render(&matches, sub_matches),
+        Some(("edit", sub_matches)) => handle_edit(&matches, sub_matches),
         None => {
             // Handle file processing (legacy mode)
             if matches.get_one::<String>("file").is_some() {

@@ -21,14 +21,16 @@ fi
 
 # Check if libsodium is available
 if pkg-config --exists libsodium 2>/dev/null; then
-    echo "Using system libsodium (dynamic linking)"
+    echo "Using system libsodium (dynamic linking via Homebrew)"
 else
     echo "Warning: libsodium not found via pkg-config"
-    echo "Attempting to build with static libsodium (slower first build)..."
+    echo "Building libsodium from source (slower first build)..."
     echo "To speed up future builds: brew install libsodium"
     echo ""
+    # Build libsodium from source (bundled with libsodium-sys)
     export SODIUM_BUILD_STATIC=1
-    export SODIUM_STATIC=1
+    # Note: SODIUM_STATIC is deprecated, don't use it
+    # SODIUM_BUILD_STATIC=1 automatically uses static linking
 fi
 
 # Detect architecture

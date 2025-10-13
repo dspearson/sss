@@ -14,15 +14,21 @@ use crate::{
     validation::validate_file_path, Processor,
 };
 
-/// Get the default system username
+/// Get the default username with precedence: SSS_USER > USER > USERNAME
 fn get_default_username() -> Result<String> {
+    // Check SSS_USER first
+    if let Ok(sss_user) = env::var("SSS_USER") {
+        return Ok(sss_user);
+    }
+
+    // Fall back to system username
     if let Ok(system_user) = env::var("USER") {
         Ok(system_user)
     } else if let Ok(system_user) = env::var("USERNAME") {
         Ok(system_user)
     } else {
         Err(anyhow!(
-            "Could not determine username. Please specify with --user <username>"
+            "Could not determine username. Please specify with --user or set SSS_USER"
         ))
     }
 }

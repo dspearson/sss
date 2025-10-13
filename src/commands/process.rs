@@ -198,3 +198,140 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         Err(anyhow!("No file specified for processing"))
     }
 }
+
+/// Process a file or stdin with a specific operation
+fn process_file_or_stdin(
+    _main_matches: &ArgMatches,
+    sub_matches: &ArgMatches,
+    operation: &str,
+) -> Result<()> {
+    let file_path_str = sub_matches.get_one::<String>("file").unwrap();
+    let username = if let Some(user) = sub_matches.get_one::<String>("user") {
+        user.to_string()
+    } else {
+        get_default_username()?
+    };
+    let in_place = sub_matches.get_flag("in-place");
+
+    // Load project config and repository key
+    let (_config, repository_key) =
+        load_project_config_with_repository_key(".sss.toml", &username)?;
+    let processor = Processor::new(repository_key)?;
+
+    // Handle stdin
+    if file_path_str == "-" {
+        if in_place {
+            return Err(anyhow!("Cannot use --in-place with stdin"));
+        }
+
+        let mut input = String::new();
+        io::stdin().read_to_string(&mut input)?;
+
+        let output = match operation {
+            "seal" => processor.encrypt_content(&input)?,
+            "open" => processor.decrypt_content(&input)?,
+            "render" => processor.decrypt_to_raw(&input)?,
+            _ => unreachable!(),
+        };
+
+        print!("{}", output);
+        io::stdout().flush()?;
+        return Ok(());
+    }
+
+    // Handle file
+    let file_path = validate_file_path(file_path_str)?;
+
+    if !file_path.exists() {
+        return Err(anyhow!("File does not exist: {:?}", file_path));
+    }
+
+    let content = fs::read_to_string(&file_path)?;
+    let output = match operation {
+        "seal" => processor.encrypt_content(&content)?,
+        "open" => processor.decrypt_content(&content)?,
+        "render" => processor.decrypt_to_raw(&content)?,
+        _ => unreachable!(),
+    };
+
+    if in_place {
+        fs::write(&file_path, &output)?;
+        eprintln!("File processed in-place: {:?}", file_path);
+    } else {
+        print!("{}", output);
+        io::stdout().flush()?;
+    }
+
+    Ok(())
+}
+
+/// Handle 'seal' command - encrypt plaintext markers
+pub fn handle_seal(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(main_matches, sub_matches, "seal")
+}
+
+/// Handle 'open' command - decrypt ciphertext to plaintext markers
+pub fn handle_open(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(main_matches, sub_matches, "open")
+}
+
+/// Handle 'render' command - decrypt to raw text (remove all markers)
+pub fn handle_render(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(main_matches, sub_matches, "render")
+}
+
+/// Handle 'edit' command - edit file with automatic encrypt/decrypt
+pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let file_path_str = sub_matches.get_one::<String>("file").unwrap();
+    let username = if let Some(user) = sub_matches.get_one::<String>("user") {
+        user.to_string()
+    } else {
+        get_default_username()?
+    };
+
+    // Cannot edit stdin
+    if file_path_str == "-" {
+        return Err(anyhow!("Cannot use edit mode with stdin"));
+    }
+
+    let file_path = validate_file_path(file_path_str)?;
+
+    if !file_path.exists() {
+        return Err(anyhow!("File does not exist: {:?}", file_path));
+    }
+
+    let (_config, repository_key) =
+        load_project_config_with_repository_key(".sss.toml", &username)?;
+    let processor = Processor::new(repository_key)?;
+
+    // Read and prepare content for editing
+    let content = fs::read_to_string(&file_path)?;
+    let edit_content = processor.prepare_for_editing(&content)?;
+
+    // Write to temporary file
+    let temp_path = format!("{}.tmp", file_path.to_string_lossy());
+    fs::write(&temp_path, edit_content)?;
+
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&temp_path)?.permissions();
+        perms.set_mode(0o600);
+        fs::set_permissions(&temp_path, perms)?;
+    }
+
+    // Launch editor
+    launch_editor(Path::new(&temp_path))?;
+
+    // Read edited content and process it
+    let edited_content = fs::read_to_string(&temp_path)?;
+    let final_content = processor.finalise_after_editing(&edited_content)?;
+
+    // Write back to original file
+    fs::write(&file_path, final_content)?;
+
+    // Remove temp file
+    fs::remove_file(&temp_path)?;
+
+    eprintln!("File edited and encrypted: {:?}", file_path);
+    Ok(())
+}

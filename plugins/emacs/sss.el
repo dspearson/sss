@@ -8,7 +8,7 @@
 ;;; Commentary:
 
 ;; SSS (Secret String Substitution) is a command-line tool for transparent
-;; encryption and decryption of text within files using XChaCha20Poly1305
+;; encryption and decryption of text within files using XChaCha20-Poly1305
 ;; with a modern multi-user architecture.
 ;;
 ;; This package provides an ergonomic Emacs interface to SSS functionality,

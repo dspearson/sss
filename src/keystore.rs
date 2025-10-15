@@ -253,6 +253,21 @@ impl Keystore {
         self.read_current_key_id()
     }
 
+    /// Check if the current key is password protected
+    pub fn is_current_key_password_protected(&self) -> Result<bool> {
+        let key_id = self.read_current_key_id()?;
+        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+
+        if !key_file.exists() {
+            return Err(anyhow!("Key file not found: {}", key_id));
+        }
+
+        let content = fs::read_to_string(&key_file)?;
+        let stored_keypair: StoredKeyPair = toml::from_str(&content)?;
+
+        Ok(stored_keypair.is_password_protected)
+    }
+
     /// List all available key IDs with their metadata
     pub fn list_key_ids(&self) -> Result<Vec<(String, StoredKeyPair)>> {
         let mut keys = Vec::new();

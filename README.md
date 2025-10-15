@@ -1,10 +1,10 @@
 # SSS - Secret String Substitution
 
-SSS is a command-line tool for transparent encryption and decryption of text within files using XChaCha20Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
+SSS is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
 
 ## Features
 
-- **🔒 Secure Encryption**: Uses XChaCha20Poly1305 authenticated encryption with cryptographically secure random nonces
+- **🔒 Secure Encryption**: Uses XChaCha20-Poly1305 authenticated encryption with cryptographically secure random nonces
 - **👥 Multi-User Support**: Asymmetric encryption for team collaboration with individual private keys
 - **🔑 Advanced Key Management**: Integrated keystore with password-protected private keys
 - **📁 Transparent Operation**: Works with any text file format
@@ -46,18 +46,21 @@ cargo build --release
    echo "password=⊕{my-secret-password}" > config.txt
 
    # Encrypt marked content
-   sss --user yourname config.txt > config.encrypted.txt
+   sss seal config.txt > config.encrypted.txt
+   # Or with username: sss seal --user yourname config.txt
    ```
 
 4. **Decrypt for viewing**:
    ```bash
-   sss --user yourname config.encrypted.txt
+   sss open config.encrypted.txt
+   # Or with username: sss open --user yourname config.encrypted.txt
    ```
 
 5. **Edit files with automatic encryption/decryption**:
    ```bash
+   sss edit config.encrypted.txt
+   # Or use the ssse command which uses your system username automatically
    ssse config.encrypted.txt
-   # Uses your system username automatically
    ```
 
 ## String Patterns
@@ -96,7 +99,8 @@ cargo build --release
 3. **Team members can now access files**:
    ```bash
    # Bob can encrypt/decrypt using his private key
-   sss --user bob secrets.txt
+   sss seal --user bob secrets.txt
+   sss open --user bob secrets.txt
    ```
 
 ## Commands
@@ -107,11 +111,22 @@ cargo build --release
 # Initialise new project
 sss init [username]
 
-# Process files (encrypt/decrypt)
-sss --user <username> <file>
-sss --user <username> --in-place <file>
-sss --user <username> --edit <file>
-sss --user <username> --render <file>  # Decrypt and strip markers to plain text
+# Process files with verb-based commands
+sss seal <file>                    # Encrypt plaintext markers (outputs to stdout)
+sss seal -x <file>                 # Encrypt in-place
+sss open <file>                    # Decrypt to plaintext markers (outputs to stdout)
+sss open -x <file>                 # Decrypt in-place
+sss render <file>                  # Decrypt and strip markers to plain text (outputs to stdout)
+sss render -x <file>               # Decrypt to plain text in-place
+sss edit <file>                    # Edit with auto-encrypt/decrypt (always in-place)
+
+# All commands support stdin with '-'
+echo "⊕{secret}" | sss seal -
+
+# Specify username via --user flag or SSS_USER environment variable
+sss seal --user alice config.txt
+export SSS_USER=alice
+sss seal config.txt
 ```
 
 ### Key Management
@@ -189,7 +204,7 @@ The editor:
 
 ### Cryptographic Security
 
-1. **Authenticated Encryption**: XChaCha20Poly1305 provides both confidentiality and integrity
+1. **Authenticated Encryption**: XChaCha20-Poly1305 provides both confidentiality and integrity
 2. **Large Nonce Space**: 192-bit random nonces eliminate collision concerns in practice
 3. **Cryptographically Secure Randomness**: Nonces generated using libsodium's CSPRNG
 4. **Forward Security**: Changing keys invalidates all previous ciphertexts
@@ -323,8 +338,8 @@ sss init alice
 sss users add bob bob-public-key.txt
 
 # Process files
-sss --user alice config.txt
-sss --user bob config.txt  # Both can access same files
+sss seal --user alice config.txt
+sss open --user bob config.txt  # Both can access same files
 ```
 
 ### Key Management
@@ -345,14 +360,15 @@ sss keys current my-key-id
 
 ```bash
 # Edit file in-place with encryption
-sss --user alice --in-place secrets.conf
+sss edit --user alice secrets.conf
 
 # Render encrypted file to raw plaintext
-sss --user alice --render encrypted.txt > plaintext.txt
+sss render --user alice encrypted.txt > plaintext.txt
 
 # Use SSS_USER environment variable for convenience
 export SSS_USER=alice
-sss config.txt
+sss seal config.txt
+sss open secrets.conf
 ```
 
 ## Building

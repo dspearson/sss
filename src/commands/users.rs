@@ -76,13 +76,24 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
 
             // Get our keypair to decrypt the repository key
             let keystore = create_keystore(main_matches)?;
-            let password = password::read_password(
-                "Enter your passphrase to add user (or press Enter if none): ",
-            )?;
-            let password_opt = if password.is_empty() {
-                None
+
+            // Only prompt for password if the current key is password protected
+            let password = if keystore.is_current_key_password_protected()? {
+                Some(password::read_password(
+                    "Enter your passphrase to add user (or press Enter if none): ",
+                )?)
             } else {
-                Some(password.as_str()?)
+                None
+            };
+
+            let password_opt = if let Some(ref pwd) = password {
+                if pwd.is_empty() {
+                    None
+                } else {
+                    Some(pwd.as_str()?)
+                }
+            } else {
+                None
             };
             let our_keypair = keystore.get_current_keypair(password_opt)?;
 
@@ -135,13 +146,24 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
 
             // Get our keypair to decrypt the current repository key
             let keystore = create_keystore(main_matches)?;
-            let password = password::read_password(
-                "Enter your passphrase to perform key rotation (or press Enter if none): ",
-            )?;
-            let password_opt = if password.is_empty() {
-                None
+
+            // Only prompt for password if the current key is password protected
+            let password = if keystore.is_current_key_password_protected()? {
+                Some(password::read_password(
+                    "Enter your passphrase to perform key rotation (or press Enter if none): ",
+                )?)
             } else {
-                Some(password.as_str()?)
+                None
+            };
+
+            let password_opt = if let Some(ref pwd) = password {
+                if pwd.is_empty() {
+                    None
+                } else {
+                    Some(pwd.as_str()?)
+                }
+            } else {
+                None
             };
             let our_keypair = keystore.get_current_keypair(password_opt)?;
 

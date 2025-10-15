@@ -44,8 +44,8 @@ pub struct KeystoreSettings {
 /// UI and output preferences
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UiSettings {
-    /// Use colored output
-    pub colored_output: Option<bool>,
+    /// Use coloured output
+    pub coloured_output: Option<bool>,
     /// Show progress bars
     pub show_progress: Option<bool>,
     /// Verbosity level (0-3)
@@ -164,13 +164,13 @@ impl ConfigManager {
     }
 
     /// Get UI preferences
-    pub fn use_colored_output(&self) -> bool {
-        // Check if output supports color
+    pub fn use_coloured_output(&self) -> bool {
+        // Check if output supports colour
         if !atty::is(atty::Stream::Stdout) {
             return false;
         }
 
-        self.user_settings.ui.colored_output.unwrap_or(true)
+        self.user_settings.ui.coloured_output.unwrap_or(true)
     }
 
     pub fn show_progress(&self) -> bool {
@@ -223,8 +223,8 @@ impl ConfigManager {
         self.user_settings.editor = editor;
     }
 
-    pub fn set_colored_output(&mut self, enabled: bool) {
-        self.user_settings.ui.colored_output = Some(enabled);
+    pub fn set_coloured_output(&mut self, enabled: bool) {
+        self.user_settings.ui.coloured_output = Some(enabled);
     }
 
     /// Get the current project path

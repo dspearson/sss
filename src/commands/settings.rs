@@ -33,7 +33,7 @@ pub fn handle_settings(main_matches: &ArgMatches, matches: &ArgMatches) -> Resul
             println!("Editor: {}", editor);
 
             // Show UI preferences
-            println!("Colored output: {}", config_manager.use_colored_output());
+            println!("Coloured output: {}", config_manager.use_coloured_output());
             println!("Show progress: {}", config_manager.show_progress());
             println!("Verbosity level: {}", config_manager.verbosity_level());
             println!(
@@ -83,9 +83,9 @@ pub fn handle_settings(main_matches: &ArgMatches, matches: &ArgMatches) -> Resul
                 }
             }
 
-            if let Some(colored) = sub_matches.get_one::<bool>("colored") {
-                config_manager.set_colored_output(*colored);
-                println!("Set colored output to: {}", colored);
+            if let Some(coloured) = sub_matches.get_one::<bool>("coloured") {
+                config_manager.set_coloured_output(*coloured);
+                println!("Set coloured output to: {}", coloured);
             }
 
             // Save settings
@@ -105,7 +105,7 @@ pub fn handle_settings(main_matches: &ArgMatches, matches: &ArgMatches) -> Resul
             // Reset to defaults
             config_manager.set_default_username(None)?;
             config_manager.set_editor(None);
-            config_manager.set_colored_output(true);
+            config_manager.set_coloured_output(true);
 
             config_manager.save_user_settings()?;
             println!("All settings have been reset to defaults");

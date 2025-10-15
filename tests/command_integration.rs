@@ -203,81 +203,9 @@ fn test_security_validation_coverage() {
     assert!(validate_key_id("invalid-key").is_err());
 }
 
-#[test]
-fn test_cli_flag_mutual_exclusion() {
-    use clap::{Arg, ArgAction, Command};
-
-    // Create a simplified version of the CLI to test flag conflicts
-    let app = Command::new("sss_test")
-        .arg(
-            Arg::new("in-place")
-                .short('x')
-                .long("in-place")
-                .action(ArgAction::SetTrue)
-                .conflicts_with("render")
-                .conflicts_with("edit"),
-        )
-        .arg(
-            Arg::new("render")
-                .short('r')
-                .long("render")
-                .action(ArgAction::SetTrue)
-                .conflicts_with("in-place")
-                .conflicts_with("edit"),
-        )
-        .arg(
-            Arg::new("edit")
-                .short('e')
-                .long("edit")
-                .action(ArgAction::SetTrue)
-                .conflicts_with("in-place")
-                .conflicts_with("render"),
-        );
-
-    // Test that single flags work
-    let result_x = app.clone().try_get_matches_from(vec!["sss_test", "-x"]);
-    assert!(result_x.is_ok(), "Single -x flag should work");
-
-    let result_r = app.clone().try_get_matches_from(vec!["sss_test", "-r"]);
-    assert!(result_r.is_ok(), "Single -r flag should work");
-
-    let result_e = app.clone().try_get_matches_from(vec!["sss_test", "-e"]);
-    assert!(result_e.is_ok(), "Single -e flag should work");
-
-    // Test that conflicting flags are rejected
-    let result_xr = app
-        .clone()
-        .try_get_matches_from(vec!["sss_test", "-x", "-r"]);
-    assert!(
-        result_xr.is_err(),
-        "Conflicting -x and -r flags should be rejected"
-    );
-
-    let result_xe = app
-        .clone()
-        .try_get_matches_from(vec!["sss_test", "-x", "-e"]);
-    assert!(
-        result_xe.is_err(),
-        "Conflicting -x and -e flags should be rejected"
-    );
-
-    let result_re = app
-        .clone()
-        .try_get_matches_from(vec!["sss_test", "-r", "-e"]);
-    assert!(
-        result_re.is_err(),
-        "Conflicting -r and -e flags should be rejected"
-    );
-
-    // Test that all three together are also rejected
-    let result_all = app
-        .clone()
-        .try_get_matches_from(vec!["sss_test", "-x", "-r", "-e"]);
-    assert!(
-        result_all.is_err(),
-        "All three conflicting flags should be rejected"
-    );
-}
+// Note: Test for deprecated flag mutual exclusion removed as those flags (-r, -e)
+// have been replaced with commands (render, edit). The -x (in-place) flag is now
+// only available within individual commands (seal, open, render).
 
 #[test]
 fn test_config_manager_with_custom_confdir() {
@@ -355,4 +283,81 @@ fn test_fingerprint_formatting() {
     let long_fingerprint = format!("{}...", &long_key[..16.min(long_key.len())]);
     assert!(long_fingerprint.len() < long_key.len());
     assert_eq!(long_fingerprint.len(), 19); // 16 chars + "..."
+}
+
+#[test]
+fn test_sha256_fingerprint_generation() {
+    use libsodium_sys::{crypto_hash_sha256, crypto_hash_sha256_BYTES};
+
+    // Test SHA256 fingerprint generation
+    let test_data = b"test public key data";
+    let mut hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+
+    unsafe {
+        crypto_hash_sha256(
+            hash.as_mut_ptr(),
+            test_data.as_ptr(),
+            test_data.len() as u64,
+        );
+    }
+
+    // Verify hash is 32 bytes (256 bits)
+    assert_eq!(hash.len(), 32);
+
+    // Verify hash is deterministic
+    let mut hash2 = vec![0u8; crypto_hash_sha256_BYTES as usize];
+    unsafe {
+        crypto_hash_sha256(
+            hash2.as_mut_ptr(),
+            test_data.as_ptr(),
+            test_data.len() as u64,
+        );
+    }
+    assert_eq!(hash, hash2);
+
+    // Verify different input produces different hash
+    let different_data = b"different public key";
+    let mut hash3 = vec![0u8; crypto_hash_sha256_BYTES as usize];
+    unsafe {
+        crypto_hash_sha256(
+            hash3.as_mut_ptr(),
+            different_data.as_ptr(),
+            different_data.len() as u64,
+        );
+    }
+    assert_ne!(hash, hash3);
+}
+
+#[test]
+fn test_hex_fingerprint_formatting() {
+    // Test hex formatting with colons
+    let test_hash = [0x12, 0x34, 0x56, 0x78, 0xab, 0xcd, 0xef, 0x90];
+    let hex_string: String = test_hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(":");
+
+    assert_eq!(hex_string, "12:34:56:78:ab:cd:ef:90");
+
+    // Verify lowercase hex
+    assert!(!hex_string.contains(|c: char| c.is_ascii_uppercase()));
+}
+
+#[test]
+fn test_randomart_field_dimensions() {
+    // Test that randomart field dimensions are correct (SSH compatible)
+    const WIDTH: usize = 17;
+    const HEIGHT: usize = 9;
+
+    let field = [[0u8; WIDTH]; HEIGHT];
+
+    assert_eq!(field.len(), HEIGHT);
+    assert_eq!(field[0].len(), WIDTH);
+
+    // Verify center position
+    let center_x = WIDTH / 2;
+    let center_y = HEIGHT / 2;
+    assert_eq!(center_x, 8);
+    assert_eq!(center_y, 4);
 }

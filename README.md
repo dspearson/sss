@@ -2,18 +2,6 @@
 
 SSS is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
 
-## Features
-
-- **🔒 Secure Encryption**: Uses XChaCha20-Poly1305 authenticated encryption with cryptographically secure random nonces
-- **👥 Multi-User Support**: Asymmetric encryption for team collaboration with individual private keys
-- **🔑 Advanced Key Management**: Integrated keystore with password-protected private keys
-- **📁 Transparent Operation**: Works with any text file format
-- **🛡️ Cross-Platform**: Supports Windows, macOS, and Linux
-- **⚡ High Performance**: Optimised with static regex compilation and buffered I/O
-- **🛡️ Enhanced Security**: Comprehensive input validation, rate limiting, and path traversal protection
-- **⚙️ Flexible Configuration**: Layered configuration system with user settings persistence
-- **🧪 Well-Tested**: Comprehensive test suite
-
 ## Quick Start
 
 ### Installation
@@ -28,16 +16,15 @@ cargo build --release
 
 ### Basic Usage
 
-1. **Initialise a new project**:
-   ```bash
-   sss init
-   # You'll be prompted to enter a username and passphrase for your private key
-   ```
-
-2. **Generate a keypair** (if needed):
+1. **Generate a keypair** (if needed):
    ```bash
    sss keys generate
-   # Creates a new keypair with passphrase protection
+   # Creates a new keypair encrypted with your passphrase
+   ```
+
+2. **Initialise a new project**:
+   ```bash
+   sss init
    ```
 
 3. **Encrypt sensitive data in a file**:
@@ -47,20 +34,16 @@ cargo build --release
 
    # Encrypt marked content
    sss seal config.txt > config.encrypted.txt
-   # Or with username: sss seal --user yourname config.txt
    ```
 
 4. **Decrypt for viewing**:
    ```bash
    sss open config.encrypted.txt
-   # Or with username: sss open --user yourname config.encrypted.txt
    ```
 
 5. **Edit files with automatic encryption/decryption**:
    ```bash
    sss edit config.encrypted.txt
-   # Or use the ssse command which uses your system username automatically
-   ssse config.encrypted.txt
    ```
 
 ## String Patterns
@@ -71,12 +54,6 @@ cargo build --release
 - **Ciphertext marker**: `⊠{content}` - Indicates encrypted content (always UTF-8)
 
 ## Multi-User Architecture
-
-### Key Concepts
-
-- **Private Keys**: Individual Ed25519 keypairs stored encrypted in local keystore
-- **Repository Keys**: Symmetric keys for file encryption, sealed for each project user
-- **Project Configuration**: `.sss.toml` file containing user public keys and sealed repository keys
 
 ### Team Collaboration Workflow
 
@@ -139,7 +116,9 @@ sss keys generate [--force]
 sss keys list
 
 # Show public key
-sss keys pubkey [--fingerprint]
+sss keys pubkey                    # Your public key
+sss keys pubkey --fingerprint      # SHA256 fingerprint with visual randomart
+sss keys pubkey --user <username>  # Another user's public key from project
 
 # Show or set current keypair
 sss keys current [key-id]
@@ -205,28 +184,26 @@ The editor:
 ### Cryptographic Security
 
 1. **Authenticated Encryption**: XChaCha20-Poly1305 provides both confidentiality and integrity
-2. **Large Nonce Space**: 192-bit random nonces eliminate collision concerns in practice
-3. **Cryptographically Secure Randomness**: Nonces generated using libsodium's CSPRNG
-4. **Forward Security**: Changing keys invalidates all previous ciphertexts
-5. **Unique Ciphertexts**: Random nonces ensure identical plaintexts produce different ciphertexts
+2. **Large Nonce Space**: 192-bit nonces eliminate collision concerns in practice
+3. **Forward Security**: Changing keys invalidates all previous ciphertexts
+4. **Unique Ciphertexts**: Identical plaintexts produce different ciphertexts
 
 ### Key Management Security
 
 1. **Asymmetric Architecture**: Private keys never shared between users
-2. **Password Protection**: Private keys encrypted with user passphrases using Argon2id
-3. **Sealed Repository Keys**: Symmetric keys encrypted for each user individually
+2. **Key Derivation**: Encryption keys derived from user passphrases using Argon2id
+3. **Sealed Repository Keys**: Symmetric keys encrypted for each user individually using crypto_box_seal
 4. **Local Keystore**: Private keys stored locally, never transmitted
-5. **Memory Protection**: Cryptographic material securely cleared from memory
+5. **Memory Protection**: Cryptographic material securely cleared from memory using zeroize
 
-### Additional Security Features
+### Implementation Details
 
-1. **Input Validation**: Comprehensive validation with size limits (prevents DoS)
-2. **Rate Limiting**: Password attempt limiting to prevent brute force attacks
-3. **Path Traversal Protection**: File paths validated and canonicalised
+1. **Input Validation**: Size limits prevent denial of service attacks
+2. **Rate Limiting**: Password attempts limited to prevent brute force attacks
+3. **Path Handling**: Symlinks resolved for consistent behaviour
 4. **Error Handling**: Sensitive information not leaked in error messages
 5. **Secure Temporary Files**: Created with restrictive permissions (0600 on Unix)
-6. **Memory Safety**: Cryptographic material securely cleared from memory using zeroize
-7. **Custom Error Types**: Structured error handling with specific error categories
+6. **Atomic Operations**: Prevent time-of-check to time-of-use vulnerabilities
 
 ## Editor Integrations
 
@@ -348,6 +325,40 @@ sss open --user bob config.txt  # Both can access same files
 # View your keys
 sss keys list
 sss keys pubkey
+
+# View key fingerprint with visual randomart (like SSH)
+sss keys pubkey --fingerprint
+# Output (with colours when terminal supports it):
+# +----[SSS KEY]----+
+# |                 |  78:9f:95:91
+# |           . .   |  28:7b:49:22
+# |o   . + o o o    |  4a:1f:a3:b3
+# |.=.+ + = = o o   |  c0:b0:8a:94
+# |.oB = o S o *    |
+# |+  = +.. o + o . |  f0:39:79:6b
+# |o o =oo.  o . . E|  68:5b:e7:e4
+# | . + =+  ...     |  c3:b4:fb:f9
+# |  .   ++o..o.    |  f3:14:c6:df
+# +-----------------+
+#
+# The randomart uses a heat map colour scheme (blue → green → yellow → red)
+# based on visit frequency. The hex bytes use an improved perceptually uniform
+# colour mapping where:
+# - High nibble (first hex digit) determines the hue (16 distinct colour families)
+# - Low nibble (second hex digit) determines brightness (4 levels per family)
+# - Identical bytes have IDENTICAL colours, making patterns immediately visible
+# - Text colour (black/white) is automatically chosen for WCAG-compliant contrast
+#
+# A geometric medallion (9x9 grid) appears to the right using cryptographic mixing:
+# - Uses avalanche effect: single bit change creates dramatically different pattern
+# - 8 different block characters (▀▄█▌▐░▒▓) for geometric variety
+# - Colours derived from position-aware hashing for maximum differentiation
+# - Provides instant visual verification - identical fingerprints = identical medallions
+#
+# Colours respect NO_COLOR environment variable and are disabled for non-TTY output.
+
+# View another user's public key
+sss keys pubkey --user alice
 
 # Generate new keypair
 sss keys generate --force  # Overwrites existing

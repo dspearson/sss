@@ -76,9 +76,7 @@ fn test_processor_render_operation() {
     let sealed = processor.encrypt_content(input).expect("Failed to seal");
 
     // Then render to raw text
-    let rendered = processor
-        .decrypt_to_raw(&sealed)
-        .expect("Failed to render");
+    let rendered = processor.decrypt_to_raw(&sealed).expect("Failed to render");
 
     // Should contain raw text without markers
     assert_eq!(rendered, "password=my-secret");
@@ -94,9 +92,7 @@ fn test_seal_open_roundtrip() {
     let original = "secret=⊕{test123}\nother=o+{value456}";
 
     // Seal
-    let sealed = processor
-        .encrypt_content(original)
-        .expect("Failed to seal");
+    let sealed = processor.encrypt_content(original).expect("Failed to seal");
     assert!(sealed.contains("⊠{"));
 
     // Open
@@ -202,7 +198,8 @@ fn test_newlines_in_secrets() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
 
-    let input = "cert=⊕{-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHCgVZU\n-----END CERTIFICATE-----}";
+    let input =
+        "cert=⊕{-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAKHHCgVZU\n-----END CERTIFICATE-----}";
 
     let sealed = processor.encrypt_content(input).expect("Failed to seal");
     let opened = processor.decrypt_content(&sealed).expect("Failed to open");
@@ -242,7 +239,9 @@ fn test_processor_toggle_behavior() {
     assert!(opened.contains("⊕{"));
 
     // Processing again seals it
-    let resealed = processor.process_content(&opened).expect("Failed to reseal");
+    let resealed = processor
+        .process_content(&opened)
+        .expect("Failed to reseal");
     assert!(resealed.contains("⊠{"));
 
     // All should render to the same raw value
@@ -317,10 +316,14 @@ fn test_seal_leaves_encrypted_content_unchanged() {
 
     // Create content that's already sealed
     let plaintext = "value=⊕{secret}";
-    let sealed = processor.encrypt_content(plaintext).expect("Failed to seal");
+    let sealed = processor
+        .encrypt_content(plaintext)
+        .expect("Failed to seal");
 
     // Sealing again should leave it unchanged (no plaintext markers to encrypt)
-    let sealed_again = processor.encrypt_content(&sealed).expect("Failed to seal again");
+    let sealed_again = processor
+        .encrypt_content(&sealed)
+        .expect("Failed to seal again");
     assert_eq!(sealed, sealed_again);
 }
 
@@ -333,7 +336,9 @@ fn test_open_leaves_plaintext_markers_unchanged() {
     let plaintext = "value=⊕{secret}";
 
     // Opening content with no ciphertext should leave it unchanged
-    let opened = processor.decrypt_content(plaintext).expect("Failed to open");
+    let opened = processor
+        .decrypt_content(plaintext)
+        .expect("Failed to open");
     assert_eq!(plaintext, opened);
 }
 
@@ -344,13 +349,17 @@ fn test_seal_and_open_are_independent() {
 
     // Mix of plaintext and ciphertext
     let plaintext = "plain=⊕{secret1}";
-    let sealed_part = processor.encrypt_content(plaintext).expect("Failed to seal");
+    let sealed_part = processor
+        .encrypt_content(plaintext)
+        .expect("Failed to seal");
 
     // Create mixed content (this would be the result of partial encryption)
     let mixed = format!("{}\nmore=⊕{{secret2}}", sealed_part);
 
     // Seal should only encrypt the plaintext marker
-    let sealed_mixed = processor.encrypt_content(&mixed).expect("Failed to seal mixed");
+    let sealed_mixed = processor
+        .encrypt_content(&mixed)
+        .expect("Failed to seal mixed");
 
     // Count ciphertext markers - should have 2 (one from before, one just encrypted)
     assert_eq!(sealed_mixed.matches("⊠{").count(), 2);

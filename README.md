@@ -1,6 +1,6 @@
-# SSS - Secret String Substitution
+# sss - Secret String Substitution
 
-SSS is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
+sss is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
 
 ## Quick Start
 
@@ -179,87 +179,6 @@ The editor:
 2. Launches `$EDITOR` (fallback to `$VISUAL`, then sensible defaults)
 3. Re-encrypts all `⊕{}` and `o+{}` patterns to `⊠{}` on save/exit
 
-## Security Properties
-
-### Cryptographic Security
-
-1. **Authenticated Encryption**: XChaCha20-Poly1305 provides both confidentiality and integrity
-2. **Large Nonce Space**: 192-bit nonces eliminate collision concerns in practice
-3. **Forward Security**: Changing keys invalidates all previous ciphertexts
-4. **Unique Ciphertexts**: Identical plaintexts produce different ciphertexts
-
-### Key Management Security
-
-1. **Asymmetric Architecture**: Private keys never shared between users
-2. **Key Derivation**: Encryption keys derived from user passphrases using Argon2id
-3. **Sealed Repository Keys**: Symmetric keys encrypted for each user individually using crypto_box_seal
-4. **Local Keystore**: Private keys stored locally, never transmitted
-5. **Memory Protection**: Cryptographic material securely cleared from memory using zeroize
-
-### Implementation Details
-
-1. **Input Validation**: Size limits prevent denial of service attacks
-2. **Rate Limiting**: Password attempts limited to prevent brute force attacks
-3. **Path Handling**: Symlinks resolved for consistent behaviour
-4. **Error Handling**: Sensitive information not leaked in error messages
-5. **Secure Temporary Files**: Created with restrictive permissions (0600 on Unix)
-6. **Atomic Operations**: Prevent time-of-check to time-of-use vulnerabilities
-
-## Editor Integrations
-
-### 📝 Emacs Package
-
-SSS includes a comprehensive Emacs package providing seamless integration with powerful features:
-
-#### Features
-- **🔐 Interactive Operations**: Encrypt/decrypt regions, toggle patterns at point, process entire buffers
-- **👥 Multi-User Support**: Project management, user switching, team collaboration
-- **🎨 Syntax Highlighting**: Visual distinction of `⊕{}`, `o+{}`, and `⊠{}` patterns
-- **⚡ Auto-Processing**: Automatic encrypt/decrypt on file open/save
-- **🔥 Doom Integration**: Full Evil operator support, leader keys, text objects
-- **🎯 Smart UI**: Transient menus, completion, password caching
-
-#### Quick Setup
-
-**Standard Emacs:**
-```elisp
-(add-to-list 'load-path "/path/to/sss/plugins/emacs")
-(require 'sss)
-(require 'sss-mode)
-(sss-setup-auto-mode)
-```
-
-**Doom Emacs:**
-```elisp
-;; packages.el
-(package! sss :recipe (:local-repo "/path/to/sss/plugins/emacs"))
-
-;; config.el
-(use-package! sss
-  :commands sss-mode
-  :config (require 'sss-doom))
-```
-
-#### Key Bindings
-- **Standard**: `C-c s e/d/t` (encrypt/decrypt/toggle)
-- **Doom**: `SPC e e/d/t` + Evil operators `g e/d/t`
-- **Evil Text Objects**: `i s`/`a s` (inner/outer SSS pattern)
-
-See [`plugins/emacs/README.md`](plugins/emacs/README.md) for complete documentation.
-
-### 🔧 Other Editors
-
-SSS works with any editor through the `ssse` command:
-
-```bash
-# Edit with automatic encrypt/decrypt
-ssse myfile.conf
-
-# Or set your preferred editor
-export EDITOR=vim
-ssse myfile.conf
-```
-
 ## Configuration
 
 ### Project Configuration (`.sss.toml`)
@@ -340,22 +259,6 @@ sss keys pubkey --fingerprint
 # | . + =+  ...     |  c3:b4:fb:f9
 # |  .   ++o..o.    |  f3:14:c6:df
 # +-----------------+
-#
-# The randomart uses a heat map colour scheme (blue → green → yellow → red)
-# based on visit frequency. The hex bytes use an improved perceptually uniform
-# colour mapping where:
-# - High nibble (first hex digit) determines the hue (16 distinct colour families)
-# - Low nibble (second hex digit) determines brightness (4 levels per family)
-# - Identical bytes have IDENTICAL colours, making patterns immediately visible
-# - Text colour (black/white) is automatically chosen for WCAG-compliant contrast
-#
-# A geometric medallion (9x9 grid) appears to the right using cryptographic mixing:
-# - Uses avalanche effect: single bit change creates dramatically different pattern
-# - 8 different block characters (▀▄█▌▐░▒▓) for geometric variety
-# - Colours derived from position-aware hashing for maximum differentiation
-# - Provides instant visual verification - identical fingerprints = identical medallions
-#
-# Colours respect NO_COLOR environment variable and are disabled for non-TTY output.
 
 # View another user's public key
 sss keys pubkey --user alice
@@ -441,17 +344,6 @@ The codebase is organised into well-defined modules:
 - `src/secure_memory.rs` - Secure memory handling utilities
 - `tests/` - Comprehensive test suite with unit and integration tests
 
-## Contributing
-
-Contributions are welcome! Please ensure all tests pass and follow the existing code style.
-
-### Development Guidelines
-
-- Use British English spelling in all documentation and user-facing text
-- Follow Rust conventions and run `cargo clippy` before submitting
-- Add tests for new functionality
-- Update documentation for any API changes
-
 ## Licence
 
 This project is licensed under the ISC Licence - see the [LICENCE](LICENCE) file for details.
@@ -459,4 +351,3 @@ This project is licensed under the ISC Licence - see the [LICENCE](LICENCE) file
 ## Acknowledgements
 
 - Built with [libsodium](https://libsodium.gitbook.io/) for cryptographic operations
-- Uses modern Rust cryptography patterns and best practices

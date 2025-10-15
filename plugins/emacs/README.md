@@ -1,6 +1,6 @@
 # SSS Emacs Package
 
-A comprehensive Emacs interface for [SSS (Secret String Substitution)](../../README.md), providing seamless encryption and decryption of text within files using XChaCha20Poly1305 with a modern multi-user architecture.
+A comprehensive Emacs interface for [SSS (Secret String Substitution)](../../README.md), providing seamless encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture.
 
 ## ✨ Features
 

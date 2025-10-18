@@ -194,3 +194,97 @@ fn parse_input(input: &str) -> Result<String> {
         _ => Err(anyhow!("Invalid choice: {}", input)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_input_deny_once() {
+        let result = parse_input("1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "deny_once");
+    }
+
+    #[test]
+    fn test_parse_input_deny_all() {
+        let result = parse_input("2");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "deny_all");
+    }
+
+    #[test]
+    fn test_parse_input_allow_once() {
+        let result = parse_input("3");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "allow_once");
+    }
+
+    #[test]
+    fn test_parse_input_allow_always() {
+        let result = parse_input("4");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "allow_always");
+    }
+
+    #[test]
+    fn test_parse_input_empty_defaults_to_deny() {
+        let result = parse_input("");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "deny_once");
+    }
+
+    #[test]
+    fn test_parse_input_invalid() {
+        let result = parse_input("5");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid choice"));
+    }
+
+    #[test]
+    fn test_parse_input_invalid_text() {
+        let result = parse_input("invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_request_context_deserialization() {
+        // Test that RequestContext can deserialize from valid JSON
+        let json = r#"{
+            "hostname": "example.com",
+            "remote_user": "alice",
+            "project_path": "/home/alice/project",
+            "sss_username": "alice"
+        }"#;
+
+        let context: Result<RequestContext, _> = serde_json::from_str(json);
+        assert!(context.is_ok());
+
+        let context = context.unwrap();
+        assert_eq!(context.hostname, Some("example.com".to_string()));
+        assert_eq!(context.remote_user, Some("alice".to_string()));
+        assert_eq!(context.project_path, Some("/home/alice/project".to_string()));
+        assert_eq!(context.sss_username, "alice");
+    }
+
+    #[test]
+    fn test_request_context_minimal() {
+        // Test that RequestContext can deserialize with only required fields
+        let json = r#"{
+            "sss_username": "bob"
+        }"#;
+
+        let context: Result<RequestContext, _> = serde_json::from_str(json);
+        assert!(context.is_ok());
+
+        let context = context.unwrap();
+        assert_eq!(context.hostname, None);
+        assert_eq!(context.remote_user, None);
+        assert_eq!(context.project_path, None);
+        assert_eq!(context.sss_username, "bob");
+    }
+
+    // Note: show_prompt() and get_user_input() are not easily unit testable
+    // as they interact with stderr/stdin and system time. These are better
+    // tested manually or via integration tests.
+}

@@ -1,0 +1,575 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use Cwd qw(abs_path getcwd);
+use File::Basename;
+use File::Path qw(make_path);
+use Fcntl qw(:flock);
+use DBI;
+use Getopt::Long;
+use POSIX qw(strftime);
+
+# Configuration
+my $config_dir = "$ENV{HOME}/.config/git-pull";
+my $db_path = "$config_dir/db";
+my $lockfile = "$config_dir/autopull.lock";
+
+# Ensure config directory exists
+make_path($config_dir) unless -d $config_dir;
+
+# Parse command line arguments
+my ($opt_add, $opt_remove, $opt_status, $opt_show_log, $opt_help);
+GetOptions(
+    'add:s'     => \$opt_add,
+    'remove:s'  => \$opt_remove,
+    'status'    => \$opt_status,
+    'show-log'  => \$opt_show_log,
+    'help'      => \$opt_help,
+) or die "Error parsing options\n";
+
+if ($opt_help) {
+    print_help();
+    exit 0;
+}
+
+# Initialize database
+my $dbh = init_database($db_path);
+
+# Handle different modes
+if (defined $opt_add) {
+    add_repository($dbh, $opt_add);
+    exit 0;
+} elsif (defined $opt_remove) {
+    remove_repository($dbh, $opt_remove);
+    exit 0;
+} elsif ($opt_status) {
+    show_status($dbh, $opt_show_log);
+    exit 0;
+}
+
+# Default mode: pull all configured repositories
+pull_all_repositories($dbh);
+
+$dbh->disconnect();
+exit 0;
+
+# ============================================================================
+# Database Functions
+# ============================================================================
+
+sub init_database {
+    my ($db_path) = @_;
+
+    my $dbh = DBI->connect("dbi:SQLite:dbname=$db_path", "", "", {
+        RaiseError => 1,
+        AutoCommit => 1,
+        sqlite_unicode => 1,
+    }) or die "Cannot connect to database: $DBI::errstr\n";
+
+    # Create tables if they don't exist
+    $dbh->do(q{
+        CREATE TABLE IF NOT EXISTS repositories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            enabled INTEGER DEFAULT 1
+        )
+    });
+
+    $dbh->do(q{
+        CREATE TABLE IF NOT EXISTS pull_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_id INTEGER NOT NULL,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            finished_at TIMESTAMP,
+            success INTEGER,
+            had_changes INTEGER DEFAULT 0,
+            error_message TEXT,
+            FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+        )
+    });
+
+    $dbh->do(q{
+        CREATE TABLE IF NOT EXISTS pull_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            history_id INTEGER NOT NULL,
+            step TEXT NOT NULL,
+            output TEXT,
+            exit_code INTEGER,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (history_id) REFERENCES pull_history(id) ON DELETE CASCADE
+        )
+    });
+
+    # Create indexes for better query performance
+    $dbh->do(q{
+        CREATE INDEX IF NOT EXISTS idx_pull_history_repo
+        ON pull_history(repo_id, started_at DESC)
+    });
+
+    $dbh->do(q{
+        CREATE INDEX IF NOT EXISTS idx_pull_logs_history
+        ON pull_logs(history_id, timestamp)
+    });
+
+    return $dbh;
+}
+
+# ============================================================================
+# Repository Management Functions
+# ============================================================================
+
+sub add_repository {
+    my ($dbh, $path) = @_;
+
+    # If no path specified, use current directory's git root
+    if (!$path || $path eq '') {
+        $path = getcwd();
+        # Try to find git root
+        my ($exit_code, $output) = run_command('git rev-parse --show-toplevel');
+        if ($exit_code == 0) {
+            chomp $output;
+            $path = $output;
+        } else {
+            die "Error: Not in a git repository\n";
+        }
+    }
+
+    # Resolve to absolute path
+    $path = abs_path($path);
+
+    unless (-d $path) {
+        die "Error: Directory does not exist: $path\n";
+    }
+
+    # Check if it's a git repository
+    chdir $path or die "Cannot change to directory $path: $!\n";
+    my ($exit_code, $output) = run_command('git rev-parse --git-dir');
+    if ($exit_code != 0) {
+        die "Error: Not a git repository: $path\n";
+    }
+
+    # Add to database
+    eval {
+        $dbh->do('INSERT INTO repositories (path) VALUES (?)', undef, $path);
+        print "Added repository: $path\n";
+    };
+    if ($@) {
+        if ($@ =~ /UNIQUE constraint failed/) {
+            print "Repository already configured: $path\n";
+        } else {
+            die "Error adding repository: $@\n";
+        }
+    }
+}
+
+sub remove_repository {
+    my ($dbh, $path) = @_;
+
+    # If no path specified, use current directory
+    if (!$path || $path eq '') {
+        $path = getcwd();
+        # Try to find git root
+        my ($exit_code, $output) = run_command('git rev-parse --show-toplevel');
+        if ($exit_code == 0) {
+            chomp $output;
+            $path = $output;
+        }
+    }
+
+    $path = abs_path($path);
+
+    my $rows = $dbh->do('DELETE FROM repositories WHERE path = ?', undef, $path);
+
+    if ($rows > 0) {
+        print "Removed repository: $path\n";
+    } else {
+        print "Repository not found in configuration: $path\n";
+    }
+}
+
+# ============================================================================
+# Status Display Functions
+# ============================================================================
+
+sub show_status {
+    my ($dbh, $show_log) = @_;
+
+    # Get all repositories
+    my $repos = $dbh->selectall_arrayref(
+        'SELECT id, path FROM repositories ORDER BY path',
+        { Slice => {} }
+    );
+
+    if (@$repos == 0) {
+        print "No repositories configured.\n";
+        print "Use: git-pull --add /path/to/repo\n";
+        return;
+    }
+
+    print "=" x 80 . "\n";
+    print "GIT-PULL STATUS\n";
+    print "=" x 80 . "\n\n";
+
+    foreach my $repo (@$repos) {
+        print "Repository: $repo->{path}\n";
+        print "-" x 80 . "\n";
+
+        # Get recent pull history
+        my $history = $dbh->selectall_arrayref(q{
+            SELECT
+                started_at,
+                finished_at,
+                success,
+                had_changes,
+                error_message
+            FROM pull_history
+            WHERE repo_id = ?
+            ORDER BY started_at DESC
+            LIMIT 5
+        }, { Slice => {} }, $repo->{id});
+
+        if (@$history == 0) {
+            print "  No pull history yet\n\n";
+            next;
+        }
+
+        # Statistics
+        my $total = $dbh->selectrow_array(
+            'SELECT COUNT(*) FROM pull_history WHERE repo_id = ?',
+            undef, $repo->{id}
+        );
+        my $successful = $dbh->selectrow_array(
+            'SELECT COUNT(*) FROM pull_history WHERE repo_id = ? AND success = 1',
+            undef, $repo->{id}
+        );
+        my $with_changes = $dbh->selectrow_array(
+            'SELECT COUNT(*) FROM pull_history WHERE repo_id = ? AND had_changes = 1',
+            undef, $repo->{id}
+        );
+
+        print "  Statistics:\n";
+        print "    Total pulls: $total\n";
+        print "    Successful: $successful\n";
+        print "    Failed: " . ($total - $successful) . "\n";
+        print "    Pulls with changes: $with_changes\n\n";
+
+        print "  Recent history:\n";
+        foreach my $h (@$history) {
+            my $status = $h->{success} ? "SUCCESS" : "FAILED";
+            my $changes = $h->{had_changes} ? " (had changes)" : " (no changes)";
+            my $time = $h->{started_at};
+
+            print "    [$time] $status$changes\n";
+
+            if (!$h->{success} && $h->{error_message}) {
+                print "      Error: $h->{error_message}\n";
+            }
+
+            if ($show_log) {
+                show_pull_logs($dbh, $h->{id} || 0);
+            }
+        }
+
+        print "\n";
+    }
+}
+
+sub show_pull_logs {
+    my ($dbh, $history_id) = @_;
+
+    return unless $history_id;
+
+    my $logs = $dbh->selectall_arrayref(q{
+        SELECT step, output, exit_code, timestamp
+        FROM pull_logs
+        WHERE history_id = ?
+        ORDER BY timestamp
+    }, { Slice => {} }, $history_id);
+
+    if (@$logs > 0) {
+        print "      Detailed log:\n";
+        foreach my $log (@$logs) {
+            print "        [$log->{timestamp}] $log->{step} (exit: $log->{exit_code})\n";
+            if ($log->{output}) {
+                my @lines = split /\n/, $log->{output};
+                foreach my $line (@lines) {
+                    print "          | $line\n";
+                }
+            }
+        }
+    }
+}
+
+# ============================================================================
+# Pull Functions
+# ============================================================================
+
+sub pull_all_repositories {
+    my ($dbh) = @_;
+
+    # Acquire lock
+    open my $lock_fh, '>', $lockfile or die "Cannot open lockfile: $!\n";
+    unless (flock($lock_fh, LOCK_EX | LOCK_NB)) {
+        print STDERR "Another instance is already running, exiting.\n";
+        exit 0;
+    }
+
+    # Get all enabled repositories
+    my $repos = $dbh->selectall_arrayref(
+        'SELECT id, path FROM repositories WHERE enabled = 1 ORDER BY path',
+        { Slice => {} }
+    );
+
+    if (@$repos == 0) {
+        print "No repositories configured for auto-pull.\n";
+        print "Use: git-pull --add /path/to/repo\n";
+        return;
+    }
+
+    print "Pulling " . scalar(@$repos) . " repositories...\n\n";
+
+    my $success_count = 0;
+    my $fail_count = 0;
+
+    foreach my $repo (@$repos) {
+        print "=" x 80 . "\n";
+        print "Repository: $repo->{path}\n";
+        print "=" x 80 . "\n";
+
+        my $result = pull_repository($dbh, $repo->{id}, $repo->{path});
+
+        if ($result->{success}) {
+            $success_count++;
+            if ($result->{had_changes}) {
+                print "✓ Pull successful with changes\n";
+            } else {
+                print "✓ Pull successful, already up-to-date\n";
+            }
+        } else {
+            $fail_count++;
+            print "✗ Pull failed: $result->{error_message}\n";
+        }
+
+        print "\n";
+    }
+
+    print "=" x 80 . "\n";
+    print "Summary: $success_count successful, $fail_count failed\n";
+    print "=" x 80 . "\n";
+
+    close $lock_fh;
+}
+
+sub pull_repository {
+    my ($dbh, $repo_id, $repo_path) = @_;
+
+    # Create history record
+    my $sth = $dbh->prepare('INSERT INTO pull_history (repo_id, started_at) VALUES (?, datetime("now"))');
+    $sth->execute($repo_id);
+    my $history_id = $dbh->last_insert_id("", "", "", "");
+
+    my $result = {
+        success => 0,
+        had_changes => 0,
+        error_message => '',
+    };
+
+    # Change to repository directory
+    unless (chdir $repo_path) {
+        $result->{error_message} = "Cannot change to directory: $!";
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    # Ensure we're in a git repository
+    my ($exit_code, $output) = run_command('git rev-parse --git-dir');
+    log_command($dbh, $history_id, 'git rev-parse --git-dir', $output, $exit_code);
+
+    if ($exit_code != 0) {
+        $result->{error_message} = "Not in a git repository";
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    # Attempt to pull
+    print "Attempting to pull from upstream...\n";
+    ($exit_code, $output) = run_command('git pull');
+    log_command($dbh, $history_id, 'git pull', $output, $exit_code);
+
+    if ($exit_code == 0) {
+        print "Pull successful.\n";
+        $result->{success} = 1;
+        $result->{had_changes} = ($output !~ /Already up to date/i);
+
+        # Clean up any old conflict files
+        unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    # Pull failed, attempt stash-pull-unstash sequence
+    print "Pull failed, attempting to stash changes...\n";
+    ($exit_code, $output) = run_command('git stash push -u -m "autopull stash at ' . localtime() . '"');
+    log_command($dbh, $history_id, 'git stash push', $output, $exit_code);
+
+    if ($exit_code != 0) {
+        # Stash failed
+        my $msg = "Failed to stash changes before pulling";
+        write_conflict_file($msg, $output);
+        $result->{error_message} = $msg;
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    # Check if anything was actually stashed
+    my $stash_created = ($output !~ /No local changes to save/);
+
+    # Attempt pull again
+    print "Pulling after stash...\n";
+    ($exit_code, $output) = run_command('git pull');
+    log_command($dbh, $history_id, 'git pull (after stash)', $output, $exit_code);
+
+    if ($exit_code != 0) {
+        my $msg = "Pull failed even after stashing changes";
+        write_conflict_file($msg, $output);
+        $result->{error_message} = $msg;
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    print "Pull successful after stashing.\n";
+    $result->{had_changes} = 1;
+
+    # If we didn't actually stash anything, we're done
+    if (!$stash_created) {
+        print "No changes were stashed, operation complete.\n";
+        $result->{success} = 1;
+        unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    # Attempt to pop the stash
+    print "Restoring stashed changes...\n";
+    ($exit_code, $output) = run_command('git stash pop');
+    log_command($dbh, $history_id, 'git stash pop', $output, $exit_code);
+
+    if ($exit_code != 0) {
+        # Unstash failed - likely conflicts
+        my $msg = "Successfully pulled changes, but failed to restore stashed changes";
+        write_conflict_file($msg, $output);
+        $result->{error_message} = $msg;
+        update_history($dbh, $history_id, $result);
+        return $result;
+    }
+
+    print "Successfully restored stashed changes.\n";
+    $result->{success} = 1;
+    unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+    update_history($dbh, $history_id, $result);
+
+    return $result;
+}
+
+sub update_history {
+    my ($dbh, $history_id, $result) = @_;
+
+    $dbh->do(q{
+        UPDATE pull_history
+        SET finished_at = datetime("now"),
+            success = ?,
+            had_changes = ?,
+            error_message = ?
+        WHERE id = ?
+    }, undef,
+        $result->{success} ? 1 : 0,
+        $result->{had_changes} ? 1 : 0,
+        $result->{error_message},
+        $history_id
+    );
+}
+
+sub log_command {
+    my ($dbh, $history_id, $step, $output, $exit_code) = @_;
+
+    $dbh->do(q{
+        INSERT INTO pull_logs (history_id, step, output, exit_code, timestamp)
+        VALUES (?, ?, ?, ?, datetime("now"))
+    }, undef, $history_id, $step, $output, $exit_code);
+}
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
+sub run_command {
+    my ($cmd) = @_;
+    my $output = `$cmd 2>&1`;
+    my $exit_code = $? >> 8;
+    return ($exit_code, $output);
+}
+
+sub write_conflict_file {
+    my ($message, $details) = @_;
+    my $conflict_file = '.git/AUTOPULL_CONFLICT';
+
+    open my $fh, '>', $conflict_file or die "Cannot write to $conflict_file: $!\n";
+    print $fh "=" x 70 . "\n";
+    print $fh "AUTOMATIC PULL CONFLICT\n";
+    print $fh "=" x 70 . "\n\n";
+    print $fh $message . "\n\n";
+    print $fh "Error output:\n$details\n\n";
+    print $fh "ACTION REQUIRED:\n";
+    print $fh "1. Check the error output above\n";
+    print $fh "2. Manually resolve the issue\n";
+    print $fh "3. Delete this file: rm .git/AUTOPULL_CONFLICT\n";
+    print $fh "\n" . "=" x 70 . "\n";
+    close $fh;
+
+    print STDERR "Conflict details written to $conflict_file\n";
+}
+
+sub print_help {
+    print <<'HELP';
+git-pull - Automated git pull manager with SQLite-based configuration
+
+USAGE:
+    git-pull                      Pull all configured repositories
+    git-pull --add [PATH]         Add a repository to auto-pull list (current git root if no path)
+    git-pull --remove [PATH]      Remove a repository (current git root if no path)
+    git-pull --status             Show pull statistics and history
+    git-pull --status --show-log  Show pull statistics with detailed logs
+    git-pull --help               Show this help message
+
+CONFIGURATION:
+    Database location: ~/.config/git-pull/db
+    Lock file: ~/.config/git-pull/autopull.lock
+
+EXAMPLES:
+    # Add current git repository to auto-pull list
+    git-pull --add
+
+    # Add a specific repository
+    git-pull --add /home/user/myproject
+
+    # Remove current git repository from list
+    git-pull --remove
+
+    # Pull all configured repositories
+    git-pull
+
+    # View pull history and statistics
+    git-pull --status
+
+    # View detailed logs
+    git-pull --status --show-log
+
+DESCRIPTION:
+    This tool manages automatic git pulls across multiple repositories.
+    It handles conflicts intelligently by stashing changes before pulling
+    and restoring them afterwards. All operations are logged to a SQLite
+    database for easy tracking and debugging.
+
+HELP
+}

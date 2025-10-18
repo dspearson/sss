@@ -1,6 +1,8 @@
 # Rust build artifacts
 /target/
 Cargo.lock
+/build
+*.rpm
 
 # IDE files
 .vscode/
@@ -24,6 +26,13 @@ Thumbs.db
 # SSS specific
 .sss.toml
 
+# Temporary build/test documentation
+BUILD_AND_USE.md
+COVERAGE_REPORT.md
+REPORT.md
+sss-old/
+sss-master/
+
 # Packaging and build infrastructure
 /debian/
 /rpm-build/
@@ -34,3 +43,4 @@ Thumbs.db
 
 # Container build artifacts
 *.tar.gz.asc
+vendor/

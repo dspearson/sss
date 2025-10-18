@@ -17,3 +17,10 @@ pub fn handle_status(_matches: &ArgMatches) -> Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // Note: handle_status() calls process::exit() which makes it difficult to unit test
+    // directly. The function is simple and delegates to find_project_root() which is
+    // tested in the config module. Integration tests verify the full behavior.
+}

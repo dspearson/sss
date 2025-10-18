@@ -1,0 +1,365 @@
+.TH sss 1 "2025-10-16" "sss" "User Commands"
+.SH NAME
+sss \- Secret String Substitution: transparent encryption for text files
+.SH SYNOPSIS
+.B sss
+.I COMMAND
+.RI [ OPTIONS ]
+.RI [ ARGS ]
+.SH DESCRIPTION
+.B sss
+is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
+.PP
+sss uses a hybrid cryptographic approach combining asymmetric (Ed25519) and symmetric (XChaCha20-Poly1305) cryptography. Each user has a keypair, and file content is encrypted with shared project keys that are individually sealed for each authorised user.
+.SH COMMANDS
+.SS Project Management
+.TP
+.B sss init \fR[\fIusername\fR]
+Initialise a new sss project in the current directory. Creates a
+.I .sss.toml
+configuration file and sets up the initial user. If username is not provided, uses the configured default username or prompts for one.
+.TP
+.B sss status
+Check if the current directory is within an sss project. Outputs the project root path and exits with status 0 if in a project, 1 otherwise.
+.TP
+.B sss project users list
+List all users configured in the current project, showing their usernames and public key fingerprints.
+.TP
+.B sss project users add \fIusername\fR \fIpubkey\fR
+Add a new user to the project. The public key can be provided as base64-encoded text or as a file path. The project key will be sealed for the new user.
+.TP
+.B sss project users remove \fIusername\fR
+Remove a user from the project. This triggers automatic key rotation to ensure the removed user cannot access future secrets.
+.TP
+.B sss project users info \fIusername\fR
+Display detailed information about a specific project user, including their public key and fingerprint.
+.SS Key Management
+.TP
+.B sss keys generate \fR[\fB--force\fR] [\fB--no-password\fR]
+Generate a new Ed25519 keypair. The private key is encrypted with a passphrase (unless
+.B --no-password
+is specified) and stored in the local keystore. Use
+.B --force
+to overwrite an existing keypair with the same name.
+.TP
+.B sss keys list
+List all keypairs stored in the local keystore, showing their names, IDs, and creation dates.
+.TP
+.B sss keys pubkey \fR[\fB--fingerprint\fR] [\fB--user\fR \fIusername\fR]
+Display the public key of the current keypair, or of a specific project user if
+.B --user
+is specified. With
+.B --fingerprint\fR,
+shows the SHA256 fingerprint with visual randomart for verification.
+.TP
+.B sss keys current \fR[\fIname\fR]
+Show the currently active keypair. If a name is provided, sets that keypair as current.
+.TP
+.B sss keys delete \fIname\fR
+Delete a keypair from the local keystore by name or ID. This operation cannot be undone.
+.TP
+.B sss keys rotate \fR[\fB--force\fR] [\fB--no-backup\fR] [\fB--dry-run\fR]
+Rotate the project encryption key. This generates a new symmetric key, re-encrypts all secrets, and updates the project creation timestamp. Use
+.B --dry-run
+to preview changes without applying them.
+.TP
+.B sss keygen \fR[\fB--force\fR] [\fB--no-password\fR]
+.I (Deprecated: use "sss keys generate" instead)
+Generate a new Ed25519 keypair.
+.SS User Settings
+.TP
+.B sss settings show
+Display current user settings including default username, editor, output preferences, and auto-processing settings.
+.TP
+.B sss settings set \fB--username\fR \fIuser\fR
+Set the default username for sss operations. Use 'none' to clear.
+.TP
+.B sss settings set \fB--editor\fR \fIeditor\fR
+Set the preferred text editor for
+.B sss edit\fR.
+Use 'none' to clear and fall back to $EDITOR or system defaults.
+.TP
+.B sss settings set \fB--coloured\fR \fItrue|false\fR
+Enable or disable coloured terminal output.
+.TP
+.B sss settings set \fB--auto-render-projects\fR \fItrue|false\fR
+Enable or disable automatic rendering for all projects globally.
+.TP
+.B sss settings set \fB--auto-open-projects\fR \fItrue|false\fR
+Enable or disable automatic opening for all projects globally.
+.TP
+.B sss settings reset \fB--confirm\fR
+Reset all user settings to defaults. Requires
+.B --confirm
+to prevent accidental resets.
+.TP
+.B sss settings location
+Show the locations of configuration files on the current system.
+.SS Project Settings
+.TP
+.B sss project show
+Display settings for the current project including render and open permissions.
+.TP
+.B sss project list
+List all projects that have been configured with specific settings.
+.TP
+.B sss project enable render
+Allow automatic rendering for the current project. Used by git hooks.
+.TP
+.B sss project disable render
+Disallow automatic rendering for the current project.
+.TP
+.B sss project enable open
+Allow automatic opening (decryption to plaintext markers) for the current project. Used by git hooks.
+.TP
+.B sss project disable open
+Disallow automatic opening for the current project.
+.TP
+.B sss project remove \fR[\fIpath\fR]
+Remove project-specific settings. Uses current directory if path not specified.
+.SS Git Hooks Management
+.TP
+.B sss hooks install
+Install sss git hooks to the current repository's
+.I .git/hooks/
+directory. Recommended for automatic encryption/decryption during git operations.
+.TP
+.B sss hooks export
+Export sss git hooks to
+.I ~/.config/sss/hooks/
+for manual installation or inspection.
+.TP
+.B sss hooks list
+List all available git hooks embedded in the sss binary.
+.TP
+.B sss hooks show \fIhook-name\fR
+Display the contents of a specific hook (e.g., pre-commit, post-merge, post-checkout).
+.SS File Operations
+.TP
+.B sss seal \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+Encrypt plaintext markers (⊕{...} or o+{...}) to ciphertext markers (⊠{...}). By default, outputs to stdout. Use
+.B -x
+for in-place modification. Use
+.B --project
+to seal all files in the project (always in-place). Accepts '-' to read from stdin.
+.TP
+.B sss open \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+Decrypt ciphertext markers to plaintext markers. By default, outputs to stdout. Use
+.B -x
+for in-place modification. Use
+.B --project
+to open all files in the project (requires permission). Accepts '-' to read from stdin.
+.TP
+.B sss render \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+Decrypt ciphertext markers to raw text (removes all markers). By default, outputs to stdout. Use
+.B -x
+for in-place modification. Use
+.B --project
+to render all files in the project (requires permission). Accepts '-' to read from stdin.
+.TP
+.B sss edit \fR[\fB--user\fR \fIusername\fR] \fIfile\fR
+Edit a file with automatic encryption/decryption. Opens the file in the configured editor with markers in plaintext form, then automatically seals it on save. Always modifies in-place.
+.SH STRING PATTERNS
+sss recognises the following patterns in text files:
+.TP
+.B ⊕{content}
+Plaintext marker (UTF-8). Default output format for decrypted content.
+.TP
+.B o+{content}
+Plaintext marker (ASCII alternative). Useful for systems with limited Unicode support.
+.TP
+.B ⊠{content}
+Ciphertext marker. Contains base64-encoded encrypted data.
+.SH EXAMPLES
+.SS Initial Setup
+Generate a keypair and initialise a project:
+.PP
+.nf
+.RS
+$ sss keys generate
+Enter passphrase: ****
+$ cd my-project
+$ sss init alice
+.RE
+.fi
+.SS Basic Usage
+Encrypt a configuration file:
+.PP
+.nf
+.RS
+$ cat config.yaml
+database_url: ⊕{postgresql://user:secret@localhost/db}
+api_key: ⊕{sk_live_abc123}
+
+$ sss seal -x config.yaml
+$ cat config.yaml
+database_url: ⊠{base64_encrypted_data...}
+api_key: ⊠{base64_encrypted_data...}
+.RE
+.fi
+.PP
+Decrypt for viewing:
+.PP
+.nf
+.RS
+$ sss open config.yaml
+database_url: ⊕{postgresql://user:secret@localhost/db}
+api_key: ⊕{sk_live_abc123}
+.RE
+.fi
+.PP
+Render to raw text (no markers):
+.PP
+.nf
+.RS
+$ sss render config.yaml
+database_url: postgresql://user:secret@localhost/db
+api_key: sk_live_abc123
+.RE
+.fi
+.SS Multi-User Workflow
+Add a collaborator:
+.PP
+.nf
+.RS
+$ sss project users add bob "$(cat bob_pubkey.txt)"
+$ sss project users list
+alice   SHA256:abc123...
+bob     SHA256:def456...
+.RE
+.fi
+.PP
+Remove a user (triggers key rotation):
+.PP
+.nf
+.RS
+$ sss project users remove bob
+Rotating project key...
+Re-encrypting 15 files...
+.RE
+.fi
+.SS Git Integration
+Install hooks for automatic processing:
+.PP
+.nf
+.RS
+$ sss hooks install
+$ sss project enable render
+$ sss project enable open
+
+# Now git operations automatically handle encryption
+$ git add config.yaml    # pre-commit hook seals secrets
+$ git pull              # post-merge hook opens secrets
+.RE
+.fi
+.SS Key Management
+View your public key:
+.PP
+.nf
+.RS
+$ sss keys pubkey --fingerprint
+SHA256:abcdef1234567890...
++---[ED25519]----+
+|    . o..       |
+|   . = +        |
+|  . + B         |
++-----------------+
+.RE
+.fi
+.PP
+Rotate project key:
+.PP
+.nf
+.RS
+$ sss keys rotate --dry-run
+Would re-encrypt 15 files
+$ sss keys rotate
+Rotating project key...
+.RE
+.fi
+.SS Using stdin
+Process secrets via pipes:
+.PP
+.nf
+.RS
+$ echo "API key: ⊕{secret123}" | sss seal -
+API key: ⊠{encrypted...}
+
+$ cat encrypted.txt | sss render - > plaintext.txt
+.RE
+.fi
+.SS Settings Management
+Configure defaults:
+.PP
+.nf
+.RS
+$ sss settings set --username alice
+$ sss settings set --editor vim
+$ sss settings set --auto-render-projects true
+$ sss settings show
+.RE
+.fi
+.SH FILES
+.TP
+.I .sss.toml
+Project configuration file containing user public keys and sealed project keys.
+.TP
+.I ~/.config/sss/keystore.toml
+Keystore metadata (Linux and BSD).
+.TP
+.I ~/.config/sss/keys/
+Directory containing encrypted private keys (Linux and BSD).
+.TP
+.I ~/.config/sss/settings.toml
+User settings and preferences.
+.TP
+.I ~/Library/Application Support/sss/
+Keystore location on macOS.
+.TP
+.I %APPDATA%\\sss\\
+Keystore location on Windows.
+.SH ENVIRONMENT
+.TP
+.B SSS_USER
+Override the default username for SSS operations. Takes precedence over configured default.
+.TP
+.B EDITOR
+Fallback text editor if not configured via
+.B sss settings set --editor\fR.
+.TP
+.B VISUAL
+Secondary fallback for text editor selection.
+.SH SECURITY
+sss uses XChaCha20-Poly1305 authenticated encryption with deterministic nonce generation for content encryption. Private keys are protected using Argon2id key derivation and stored encrypted in the local keystore.
+.PP
+Key security properties:
+.IP \(bu 2
+Deterministic encryption: same plaintext in the same file → same ciphertext → clean git diffs
+.IP \(bu 2
+No nonce reuse: different plaintexts always get different nonces
+.IP \(bu 2
+Cross-file protection: same secret in different files → different ciphertexts
+.IP \(bu 2
+Cross-project protection: different projects → different ciphertexts
+.IP \(bu 2
+Forward security: key rotation changes both key and timestamp
+.PP
+Private keys are never shared between users. Project keys are sealed individually for each user using crypto_box_seal (X25519 + XChaCha20-Poly1305).
+.SH EXIT STATUS
+.TP
+.B 0
+Success
+.TP
+.B 1
+General error (invalid usage, file not found, cryptographic failure, etc.)
+.SH SEE ALSO
+.BR ssse (1),
+.BR git-hooks (5)
+.PP
+Full documentation and source code: https://github.com/dspearson/sss
+.SH AUTHORS
+Written and maintained by Dominic Pearson. 
+.SH COPYRIGHT
+Copyright \(co 2025 Dominic Pearson. Licence: ISC
+.PP
+This is free software; see the source for copying conditions.

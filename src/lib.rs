@@ -8,15 +8,24 @@ pub mod config;
 pub mod config_manager;
 pub mod constants;
 pub mod crypto;
+pub mod editor;
 pub mod error;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
+pub mod fuse_fs;
+#[cfg(all(target_os = "windows", feature = "winfsp"))]
+pub mod winfsp_fs;
+#[cfg(feature = "ninep")]
+pub mod ninep_fs;
 pub mod kdf;
 pub mod keyring_manager;
 pub mod keystore;
+pub mod merge;
 pub mod processor;
 pub mod project;
 pub mod rate_limiter;
 pub mod rotation;
 pub mod scanner;
+pub mod secrets;
 pub mod secure_memory;
 pub mod validation;
 
@@ -27,6 +36,9 @@ pub use keyring_manager::KeyringManager;
 pub use keystore::Keystore;
 pub use processor::Processor;
 pub use project::ProjectConfig;
+
+#[cfg(feature = "ninep")]
+pub use ninep_fs::SssNinepFS;
 
 #[cfg(test)]
 mod tests {
@@ -55,7 +67,7 @@ mod tests {
         let _keyring_manager = KeyringManager::new();
 
         // Test Processor can be created
-        let processor = Processor::new(key).unwrap();
+        let processor = Processor::new_with_context(key, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();
 
         // Test basic processor functionality
         let test_content = "No secrets here";
@@ -77,7 +89,7 @@ mod tests {
         let _crypto_key = crypto::RepositoryKey::new();
         let _keyring = keyring_manager::KeyringManager::new();
         let key = crypto::RepositoryKey::new();
-        let _processor = processor::Processor::new(key).unwrap();
+        let _processor = processor::Processor::new_with_context(key, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();
     }
 
     #[test]
@@ -87,7 +99,7 @@ mod tests {
         let config = Config::new("testuser", &keypair.public_key).unwrap();
         let key = RepositoryKey::new();
         let keyring_manager = KeyringManager::new();
-        let processor = Processor::new(key).unwrap();
+        let processor = Processor::new_with_context(key, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();
 
         // Verify these work as expected
         assert!(config.users.contains_key("testuser"));
@@ -114,15 +126,15 @@ mod tests {
         let key1 = RepositoryKey::new();
         let key2 = RepositoryKey::from_base64(&key1.to_base64()).unwrap();
 
-        let processor1 = Processor::new(key1).unwrap();
-        let processor2 = Processor::new(key2).unwrap();
+        let processor1 = Processor::new_with_context(key1, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();
+        let processor2 = Processor::new_with_context(key2, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();
 
         let test_text = "Test ⊕{secret} content";
         let encrypted1 = processor1.encrypt_content(test_text).unwrap();
         let encrypted2 = processor2.encrypt_content(test_text).unwrap();
 
-        // Different nonces should produce different ciphertext
-        assert_ne!(encrypted1, encrypted2);
+        // With deterministic nonces and same context, same secrets should produce SAME ciphertext
+        assert_eq!(encrypted1, encrypted2);
 
         // But both should decrypt back to the same plaintext with either processor
         let decrypted1_1 = processor1.decrypt_content(&encrypted1).unwrap();

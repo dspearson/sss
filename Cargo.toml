@@ -1,7 +1,15 @@
 [package]
 name = "sss"
-version = "1.0.0"
+version = "1.1.1"
 edition = "2021"
+license = "ISC"
+authors = ["Dominic Pearson <dsp@technoanimal.net"]
+
+[features]
+default = []
+fuse = ["dep:fuser", "dep:parking_lot"]
+winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
+ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
 
 [[bin]]
 name = "sss"
@@ -42,6 +50,18 @@ dirs = "5.0"
 atty = "0.2"
 ctrlc = "3.4"
 serde_json = "1.0"
+fuser = { version = "0.14", optional = true }
+parking_lot = { version = "0.12", optional = true }
+winfsp = { version = "0.12", optional = true }
+widestring = { version = "1.1", optional = true }
+winapi = { version = "0.3", features = ["fileapi", "handleapi", "winbase", "winnt"], optional = true }
+similar = "2.3"
+libc = "0.2.177"
+rs9p = { package = "rust-9p", path = "vendor/rust-9p", optional = true }
+tokio = { version = "1", features = ["full"], optional = true }
+tokio-stream = { version = "0.1", features = ["fs"], optional = true }
+async-trait = { version = "0.1", optional = true }
+nix = { version = "0.26", optional = true }
 
 [dev-dependencies]
 tempfile = "3.21.0"

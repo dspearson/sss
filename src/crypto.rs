@@ -14,6 +14,9 @@ const PUBLIC_KEY_SIZE: usize = sodium::crypto_box_PUBLICKEYBYTES as usize;
 const SECRET_KEY_SIZE: usize = sodium::crypto_box_SECRETKEYBYTES as usize;
 const SEALED_BOX_OVERHEAD: usize = sodium::crypto_box_SEALBYTES as usize;
 
+// BLAKE2b constants (for deterministic nonce derivation)
+const BLAKE2B_PERSONALBYTES: usize = sodium::crypto_generichash_blake2b_PERSONALBYTES as usize;
+
 // Ensure libsodium is initialised
 fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
@@ -32,11 +35,12 @@ fn validate_and_decode_base64(
 ) -> Result<Vec<u8>> {
     use base64::prelude::*;
 
-    if encoded.len() > 100 {
+    if encoded.len() > crate::constants::MAX_BASE64_KEY_LENGTH {
         return Err(anyhow!(
-            "Base64 encoded {} too long: {} characters (max: 100)",
+            "Base64 encoded {} too long: {} characters (max: {})",
             key_type,
-            encoded.len()
+            encoded.len(),
+            crate::constants::MAX_BASE64_KEY_LENGTH
         ));
     }
 
@@ -297,11 +301,73 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
     RepositoryKey::from_base64(&repo_key_b64)
 }
 
-pub fn encrypt(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
+/// Derive a deterministic nonce using BLAKE2b
+///
+/// The nonce is derived from:
+/// - Project creation timestamp (ensures per-project uniqueness)
+/// - File path relative to project root (ensures per-file uniqueness)
+/// - Plaintext content (ensures different secrets get different nonces)
+/// - Project key (used as BLAKE2b key parameter for additional security)
+///
+/// This ensures:
+/// - Same secret in same file → same nonce → same ciphertext (deterministic, clean git diffs)
+/// - Different secrets → different nonces → no plaintext disclosure
+/// - Different files → different nonces (file path in derivation)
+/// - Different projects → different nonces (unique timestamps)
+fn derive_nonce(
+    project_timestamp: &str,
+    file_path: &str,
+    plaintext: &[u8],
+    key: &Key,
+) -> Result<[u8; SYMMETRIC_NONCE_SIZE]> {
+    ensure_sodium_init();
+
+    // Personal parameter for domain separation
+    let personal = b"sss_autononce_v1";
+    if personal.len() > BLAKE2B_PERSONALBYTES {
+        return Err(anyhow!("Personal parameter too long"));
+    }
+    let mut personal_padded = [0u8; BLAKE2B_PERSONALBYTES];
+    personal_padded[..personal.len()].copy_from_slice(personal);
+
+    // Concatenate inputs: timestamp || filepath || plaintext
+    let mut input = Vec::with_capacity(
+        project_timestamp.len() + 1 + file_path.len() + 1 + plaintext.len(),
+    );
+    input.extend_from_slice(project_timestamp.as_bytes());
+    input.push(0); // Null separator
+    input.extend_from_slice(file_path.as_bytes());
+    input.push(0); // Null separator
+    input.extend_from_slice(plaintext);
+
+    let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
+
+    unsafe {
+        let ret = sodium::crypto_generichash_blake2b_salt_personal(
+            nonce.as_mut_ptr(),                      // output
+            SYMMETRIC_NONCE_SIZE,                    // output length (24 bytes)
+            input.as_ptr(),                          // input data
+            input.len() as u64,                      // input length
+            key.0.as_ptr(),                          // key (project key)
+            key.0.len(),                             // key length
+            std::ptr::null(),                        // salt (unused)
+            personal_padded.as_ptr(),                // personal parameter
+        );
+
+        if ret != 0 {
+            return Err(anyhow!("BLAKE2b nonce derivation failed"));
+        }
+    }
+
+    Ok(nonce)
+}
+
+/// Internal encrypt function with random nonce (for key encryption, not file secrets)
+/// This is pub(crate) so it can be used by keystore and other internal modules
+pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     ensure_sodium_init();
 
     // Generate cryptographically secure random nonce (192 bits)
-    // XChaCha20-Poly1305's large nonce space eliminates collision concerns
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
     unsafe {
         sodium::randombytes_buf(
@@ -309,6 +375,46 @@ pub fn encrypt(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
             SYMMETRIC_NONCE_SIZE,
         );
     }
+
+    // Allocate space for nonce + ciphertext + MAC
+    let mut result = vec![0u8; SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE];
+
+    // Store nonce at beginning
+    result[0..SYMMETRIC_NONCE_SIZE].copy_from_slice(&nonce);
+
+    unsafe {
+        let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
+            result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
+            plaintext.as_ptr(),                            // plaintext input
+            plaintext.len() as u64,                        // plaintext length
+            nonce.as_ptr(),                                // nonce
+            key.0.as_ptr(),                                // key
+        );
+
+        if ret != 0 {
+            return Err(anyhow!("Encryption failed"));
+        }
+    }
+
+    Ok(result)
+}
+
+/// Encrypt plaintext with deterministic nonce derived from context
+///
+/// The nonce is deterministically derived from project timestamp, file path, and plaintext.
+/// This ensures:
+/// - Same secret in same file → same ciphertext (clean git diffs)
+/// - Different secrets → different ciphertexts (no plaintext disclosure)
+pub fn encrypt(
+    plaintext: &[u8],
+    key: &Key,
+    project_timestamp: &str,
+    file_path: &str,
+) -> Result<Vec<u8>> {
+    ensure_sodium_init();
+
+    // Derive deterministic nonce from context
+    let nonce = derive_nonce(project_timestamp, file_path, plaintext, key)?;
 
     // Allocate space for nonce + ciphertext + MAC
     let mut result = vec![0u8; SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE];
@@ -364,18 +470,42 @@ pub fn decrypt(ciphertext_with_nonce: &[u8], key: &Key) -> Result<Vec<u8>> {
     Ok(plaintext)
 }
 
+/// Encrypt to base64 with random nonce (for key encryption, internal use)
 pub fn encrypt_to_base64(plaintext: &str, key: &Key) -> Result<String> {
     use base64::prelude::*;
 
     // Validate input size to prevent DoS (max 10KB plaintext)
-    if plaintext.len() > 10_000 {
+    if plaintext.len() > crate::constants::MAX_MARKER_CONTENT_SIZE {
         return Err(anyhow!(
-            "Plaintext too long: {} bytes (max: 10000)",
-            plaintext.len()
+            "Plaintext too long: {} bytes (max: {})",
+            plaintext.len(),
+            crate::constants::MAX_MARKER_CONTENT_SIZE
         ));
     }
 
-    let encrypted = encrypt(plaintext.as_bytes(), key)?;
+    let encrypted = encrypt_internal(plaintext.as_bytes(), key)?;
+    Ok(BASE64_STANDARD.encode(&encrypted))
+}
+
+/// Encrypt to base64 with deterministic nonce (for file secrets, clean git diffs)
+pub fn encrypt_to_base64_deterministic(
+    plaintext: &str,
+    key: &Key,
+    project_timestamp: &str,
+    file_path: &str,
+) -> Result<String> {
+    use base64::prelude::*;
+
+    // Validate input size to prevent DoS (max 10KB plaintext)
+    if plaintext.len() > crate::constants::MAX_MARKER_CONTENT_SIZE {
+        return Err(anyhow!(
+            "Plaintext too long: {} bytes (max: {})",
+            plaintext.len(),
+            crate::constants::MAX_MARKER_CONTENT_SIZE
+        ));
+    }
+
+    let encrypted = encrypt(plaintext.as_bytes(), key, project_timestamp, file_path)?;
     Ok(BASE64_STANDARD.encode(&encrypted))
 }
 
@@ -383,10 +513,11 @@ pub fn decrypt_from_base64(encoded_ciphertext: &str, key: &Key) -> Result<String
     use base64::prelude::*;
 
     // Validate input size to prevent DoS (max ~14KB encrypted gives ~19KB Base64)
-    if encoded_ciphertext.len() > 20_000 {
+    if encoded_ciphertext.len() > crate::constants::MAX_BASE64_CIPHERTEXT_LENGTH {
         return Err(anyhow!(
-            "Base64 encoded ciphertext too long: {} characters (max: 20000)",
-            encoded_ciphertext.len()
+            "Base64 encoded ciphertext too long: {} characters (max: {})",
+            encoded_ciphertext.len(),
+            crate::constants::MAX_BASE64_CIPHERTEXT_LENGTH
         ));
     }
 
@@ -407,133 +538,82 @@ pub fn decrypt_from_base64(encoded_ciphertext: &str, key: &Key) -> Result<String
         .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {}", e))
 }
 
-/// Multi-user encryption: encrypt data with a random key, then encrypt that key for each user
-pub fn encrypt_for_users(plaintext: &str, user_keys: &[&Key]) -> Result<MultiUserCiphertext> {
-    if user_keys.is_empty() {
-        return Err(anyhow!("No users provided for encryption"));
-    }
-
-    // Generate a random data encryption key (DEK)
-    let dek = Key::new();
-
-    // Encrypt the plaintext with the DEK
-    let encrypted_data = encrypt_to_base64(plaintext, &dek)?;
-
-    // Encrypt the DEK for each user
-    let mut encrypted_keys = Vec::new();
-    for user_key in user_keys {
-        let encrypted_dek = encrypt_to_base64(&dek.to_base64(), user_key)?;
-        encrypted_keys.push(encrypted_dek);
-    }
-
-    Ok(MultiUserCiphertext {
-        data: encrypted_data,
-        keys: encrypted_keys,
-        algorithm: "xchacha20poly1305".to_string(),
-    })
-}
-
-/// Decrypt multi-user ciphertext with a specific user's key
-pub fn decrypt_for_user(
-    ciphertext: &MultiUserCiphertext,
-    user_key: &Key,
-    user_index: usize,
-) -> Result<String> {
-    if user_index >= ciphertext.keys.len() {
-        return Err(anyhow!(
-            "User index {} out of range (max: {})",
-            user_index,
-            ciphertext.keys.len() - 1
-        ));
-    }
-
-    // Decrypt the DEK with the user's key
-    let dek_b64 = decrypt_from_base64(&ciphertext.keys[user_index], user_key)?;
-    let dek = Key::from_base64(&dek_b64)?;
-
-    // Decrypt the data with the DEK
-    decrypt_from_base64(&ciphertext.data, &dek)
-}
-
-/// Multi-user ciphertext structure
-#[derive(Debug, Clone)]
-pub struct MultiUserCiphertext {
-    /// Encrypted data (base64)
-    pub data: String,
-    /// Encrypted keys for each user (base64)
-    pub keys: Vec<String>,
-    /// Algorithm used
-    pub algorithm: String,
-}
-
-impl std::fmt::Display for MultiUserCiphertext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use base64::prelude::*;
-
-        let keys_joined = self.keys.join(",");
-        let combined = format!("{}::{}", self.data, keys_joined);
-
-        write!(
-            f,
-            "sss-multi:{}:{}",
-            self.algorithm,
-            BASE64_STANDARD.encode(combined)
-        )
-    }
-}
-
-impl MultiUserCiphertext {
-    /// Serialize to a compact string format
-    pub fn to_display_string(&self) -> String {
-        self.to_string()
-    }
-
-    /// Parse from string format
-    pub fn from_string(s: &str) -> Result<Self> {
-        use base64::prelude::*;
-
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 3 || parts[0] != "sss-multi" {
-            return Err(anyhow!("Invalid multi-user ciphertext format"));
-        }
-
-        let algorithm = parts[1].to_string();
-        let encoded_combined = parts[2];
-
-        let combined = BASE64_STANDARD
-            .decode(encoded_combined)
-            .map_err(|e| anyhow!("Invalid base64 in multi-user ciphertext: {}", e))?;
-
-        let combined_str = String::from_utf8(combined)
-            .map_err(|e| anyhow!("Invalid UTF-8 in multi-user ciphertext: {}", e))?;
-
-        let combined_parts: Vec<&str> = combined_str.split("::").collect();
-        if combined_parts.len() != 2 {
-            return Err(anyhow!("Invalid multi-user ciphertext structure"));
-        }
-
-        let data = combined_parts[0].to_string();
-        let keys: Vec<String> = combined_parts[1]
-            .split(',')
-            .map(|s| s.to_string())
-            .collect();
-
-        Ok(Self {
-            data,
-            keys,
-            algorithm,
-        })
-    }
-
-    /// Get the number of users this ciphertext is encrypted for
-    pub fn user_count(&self) -> usize {
-        self.keys.len()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_deterministic_nonce_generation() {
+        let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let filepath = "./config.yml";
+        let plaintext = b"secret123";
+
+        // Generate nonce twice with same inputs
+        let nonce1 = derive_nonce(timestamp, filepath, plaintext, &key).unwrap();
+        let nonce2 = derive_nonce(timestamp, filepath, plaintext, &key).unwrap();
+
+        // Should be identical (deterministic)
+        assert_eq!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_deterministic_nonce_different_plaintexts() {
+        let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let filepath = "./config.yml";
+
+        let nonce1 = derive_nonce(timestamp, filepath, b"secret1", &key).unwrap();
+        let nonce2 = derive_nonce(timestamp, filepath, b"secret2", &key).unwrap();
+
+        // Different plaintexts should produce different nonces
+        assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_deterministic_nonce_different_files() {
+        let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let plaintext = b"secret";
+
+        let nonce1 = derive_nonce(timestamp, "./file1.yml", plaintext, &key).unwrap();
+        let nonce2 = derive_nonce(timestamp, "./file2.yml", plaintext, &key).unwrap();
+
+        // Different files should produce different nonces
+        assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_deterministic_nonce_different_timestamps() {
+        let key = Key::new();
+        let filepath = "./config.yml";
+        let plaintext = b"secret";
+
+        let nonce1 = derive_nonce("2025-01-01T00:00:00Z", filepath, plaintext, &key).unwrap();
+        let nonce2 = derive_nonce("2025-01-02T00:00:00Z", filepath, plaintext, &key).unwrap();
+
+        // Different timestamps should produce different nonces
+        assert_ne!(nonce1, nonce2);
+    }
+
+    #[test]
+    fn test_deterministic_encryption() {
+        let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let filepath = "./config.yml";
+        let plaintext = "mysecret";
+
+        // Encrypt same plaintext twice
+        let encrypted1 = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
+        let encrypted2 = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
+
+        // Should produce identical ciphertext (deterministic)
+        assert_eq!(encrypted1, encrypted2);
+
+        // But different plaintexts should produce different ciphertexts
+        let encrypted3 = encrypt_to_base64_deterministic("differentsecret", &key, timestamp, filepath).unwrap();
+        assert_ne!(encrypted1, encrypted3);
+    }
 
     #[test]
     fn test_key_roundtrip() {
@@ -546,23 +626,28 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let filepath = "./test.yml";
         let plaintext = "Hello, world!";
 
-        let encrypted = encrypt_to_base64(plaintext, &key).unwrap();
+        let encrypted = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
         let decrypted = decrypt_from_base64(&encrypted, &key).unwrap();
 
         assert_eq!(plaintext, decrypted);
     }
 
     #[test]
-    fn test_nonce_misuse_resistance() {
+    fn test_deterministic_behavior_same_inputs() {
         let key = Key::new();
+        let timestamp = "2025-01-01T00:00:00Z";
+        let filepath = "./test.yml";
         let plaintext = "repeated message";
 
-        let encrypted1 = encrypt_to_base64(plaintext, &key).unwrap();
-        let encrypted2 = encrypt_to_base64(plaintext, &key).unwrap();
+        // Same inputs should produce same ciphertext (deterministic)
+        let encrypted1 = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
+        let encrypted2 = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
 
-        assert_ne!(encrypted1, encrypted2);
+        assert_eq!(encrypted1, encrypted2);
 
         let decrypted1 = decrypt_from_base64(&encrypted1, &key).unwrap();
         let decrypted2 = decrypt_from_base64(&encrypted2, &key).unwrap();
@@ -602,8 +687,9 @@ mod tests {
     #[test]
     fn test_oversized_plaintext() {
         let key = Key::new();
-        let large_plaintext = "A".repeat(15000);
-        let result = encrypt_to_base64(&large_plaintext, &key);
+        // MAX_MARKER_CONTENT_SIZE is 100MB, use 101MB to exceed limit
+        let large_plaintext = "A".repeat(101 * 1024 * 1024);
+        let result = encrypt_to_base64_deterministic(&large_plaintext, &key, "2025-01-01T00:00:00Z", "./test.yml");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too long"));
     }
@@ -611,7 +697,8 @@ mod tests {
     #[test]
     fn test_oversized_ciphertext() {
         let key = Key::new();
-        let large_ciphertext = "A".repeat(25000);
+        // MAX_BASE64_CIPHERTEXT_LENGTH is 140M chars, use 141M to exceed limit
+        let large_ciphertext = "A".repeat(141_000_000);
         let result = decrypt_from_base64(&large_ciphertext, &key);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("too long"));
@@ -663,7 +750,7 @@ mod tests {
         let plaintext = "test message for libsodium compatibility";
 
         // Encrypt with our implementation
-        let encrypted = encrypt(plaintext.as_bytes(), &key).unwrap();
+        let encrypted = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
 
         // Verify structure: nonce (24 bytes) + ciphertext + MAC (16 bytes)
         assert!(encrypted.len() >= NONCE_SIZE + plaintext.len() + 16);
@@ -679,21 +766,21 @@ mod tests {
     }
 
     #[test]
-    fn test_libsodium_different_nonces() {
+    fn test_deterministic_same_ciphertexts() {
         let key = Key::new();
         let plaintext = "same message";
 
-        // Encrypt the same message multiple times
-        let encrypted1 = encrypt(plaintext.as_bytes(), &key).unwrap();
-        let encrypted2 = encrypt(plaintext.as_bytes(), &key).unwrap();
-        let encrypted3 = encrypt(plaintext.as_bytes(), &key).unwrap();
+        // Encrypt the same message multiple times with same context
+        let encrypted1 = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
+        let encrypted2 = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
+        let encrypted3 = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
 
-        // Due to NMR, each encryption should produce different ciphertext
-        assert_ne!(encrypted1, encrypted2);
-        assert_ne!(encrypted2, encrypted3);
-        assert_ne!(encrypted1, encrypted3);
+        // With deterministic nonces, same inputs should produce SAME ciphertext
+        assert_eq!(encrypted1, encrypted2);
+        assert_eq!(encrypted2, encrypted3);
+        assert_eq!(encrypted1, encrypted3);
 
-        // But all should decrypt to the same plaintext
+        // All should decrypt to the same plaintext
         assert_eq!(decrypt(&encrypted1, &key).unwrap(), plaintext.as_bytes());
         assert_eq!(decrypt(&encrypted2, &key).unwrap(), plaintext.as_bytes());
         assert_eq!(decrypt(&encrypted3, &key).unwrap(), plaintext.as_bytes());
@@ -706,14 +793,14 @@ mod tests {
         // Test various message sizes
         for size in [0, 1, 15, 16, 17, 255, 256, 1000] {
             let plaintext = "A".repeat(size);
-            let encrypted = encrypt(plaintext.as_bytes(), &key).unwrap();
+            let encrypted = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
             let decrypted = decrypt(&encrypted, &key).unwrap();
             assert_eq!(decrypted, plaintext.as_bytes(), "Failed at size {}", size);
         }
 
         // Test with binary data
         let binary_data = (0..256).map(|i| i as u8).collect::<Vec<u8>>();
-        let encrypted = encrypt(&binary_data, &key).unwrap();
+        let encrypted = encrypt(&binary_data, &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
         let decrypted = decrypt(&encrypted, &key).unwrap();
         assert_eq!(decrypted, binary_data);
     }
@@ -722,7 +809,7 @@ mod tests {
     fn test_libsodium_ciphertext_tampering() {
         let key = Key::new();
         let plaintext = "important message";
-        let mut encrypted = encrypt(plaintext.as_bytes(), &key).unwrap();
+        let mut encrypted = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
 
         // Tamper with different parts of the ciphertext
 
@@ -755,7 +842,7 @@ mod tests {
         let key = Key::new();
         let empty_message = b"";
 
-        let encrypted = encrypt(empty_message, &key).unwrap();
+        let encrypted = encrypt(empty_message, &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
         // Empty message should still have nonce + MAC
         assert_eq!(encrypted.len(), NONCE_SIZE + 16);
 
@@ -782,7 +869,7 @@ mod tests {
         ];
 
         for plaintext in test_cases {
-            let encrypted = encrypt_to_base64(plaintext, &key).unwrap();
+            let encrypted = encrypt_to_base64_deterministic(plaintext, &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
 
             // Critical: Base64 output must never contain { or }
             assert!(
@@ -806,7 +893,7 @@ mod tests {
     fn test_base64_character_set_security() {
         // Verify Base64 only uses safe characters: A-Z, a-z, 0-9, +, /, =
         let key = Key::new();
-        let encrypted = encrypt_to_base64("test content", &key).unwrap();
+        let encrypted = encrypt_to_base64_deterministic("test content", &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
 
         for ch in encrypted.chars() {
             assert!(
@@ -817,92 +904,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_multi_user_encryption() {
-        let user1_key = Key::new();
-        let user2_key = Key::new();
-        let user3_key = Key::new();
-
-        let plaintext = "Secret message for multiple users";
-        let user_keys = vec![&user1_key, &user2_key, &user3_key];
-
-        // Encrypt for all users
-        let multi_ciphertext = encrypt_for_users(plaintext, &user_keys).unwrap();
-        assert_eq!(multi_ciphertext.user_count(), 3);
-
-        // Each user should be able to decrypt
-        let decrypted1 = decrypt_for_user(&multi_ciphertext, &user1_key, 0).unwrap();
-        let decrypted2 = decrypt_for_user(&multi_ciphertext, &user2_key, 1).unwrap();
-        let decrypted3 = decrypt_for_user(&multi_ciphertext, &user3_key, 2).unwrap();
-
-        assert_eq!(decrypted1, plaintext);
-        assert_eq!(decrypted2, plaintext);
-        assert_eq!(decrypted3, plaintext);
-    }
-
-    #[test]
-    fn test_multi_user_wrong_key() {
-        let user1_key = Key::new();
-        let user2_key = Key::new();
-        let wrong_key = Key::new();
-
-        let plaintext = "Secret message";
-        let user_keys = vec![&user1_key, &user2_key];
-
-        let multi_ciphertext = encrypt_for_users(plaintext, &user_keys).unwrap();
-
-        // Wrong key should fail
-        let result = decrypt_for_user(&multi_ciphertext, &wrong_key, 0);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_multi_user_serialization() {
-        let user1_key = Key::new();
-        let user2_key = Key::new();
-
-        let plaintext = "Test serialization";
-        let user_keys = vec![&user1_key, &user2_key];
-
-        let multi_ciphertext = encrypt_for_users(plaintext, &user_keys).unwrap();
-
-        // Serialize and deserialize
-        let serialized = multi_ciphertext.to_string();
-        assert!(serialized.starts_with("sss-multi:"));
-
-        let deserialized = MultiUserCiphertext::from_string(&serialized).unwrap();
-        assert_eq!(deserialized.user_count(), 2);
-        assert_eq!(deserialized.algorithm, "xchacha20poly1305");
-
-        // Should still decrypt correctly
-        let decrypted = decrypt_for_user(&deserialized, &user1_key, 0).unwrap();
-        assert_eq!(decrypted, plaintext);
-    }
-
-    #[test]
-    fn test_multi_user_index_bounds() {
-        let user_key = Key::new();
-        let user_keys = vec![&user_key];
-
-        let multi_ciphertext = encrypt_for_users("test", &user_keys).unwrap();
-
-        // Valid index should work
-        assert!(decrypt_for_user(&multi_ciphertext, &user_key, 0).is_ok());
-
-        // Out of bounds index should fail
-        let result = decrypt_for_user(&multi_ciphertext, &user_key, 1);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("out of range"));
-    }
-
-    #[test]
-    fn test_multi_user_no_users() {
-        let user_keys: Vec<&Key> = vec![];
-        let result = encrypt_for_users("test", &user_keys);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No users provided"));
-    }
 }

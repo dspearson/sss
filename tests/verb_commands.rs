@@ -298,8 +298,10 @@ fn test_large_secret() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
 
-    // Create a large secret (10KB)
-    let large_secret = "A".repeat(10240);
+    // Create a large secret (1MB)
+    // MAX_MARKER_CONTENT_SIZE is now 100MB, so 1MB is well within limits
+    // This tests that large secrets are handled correctly
+    let large_secret = "A".repeat(1024 * 1024);
     let input = format!("data=⊕{{{}}}", large_secret);
 
     let sealed = processor.process_content(&input).expect("Failed to seal");

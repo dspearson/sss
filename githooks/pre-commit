@@ -1,0 +1,125 @@
+#!/usr/bin/env perl
+# sss pre-commit hook
+# 1. First seals all files with plaintext markers (in-place)
+# 2. Then verifies no security violations (encrypted -> rendered with no markers)
+
+use strict;
+use warnings;
+use Cwd qw(getcwd);
+
+# Check if sss is available
+my $sss_available = system('which sss > /dev/null 2>&1') == 0;
+unless ($sss_available) {
+    print STDERR "Warning: sss command not found. Skipping file sealing.\n";
+    exit 0;
+}
+
+# Check if we're in an sss repository
+my $in_sss_repo = system('sss status > /dev/null 2>&1') == 0;
+unless ($in_sss_repo) {
+    # Not in an sss repository, skip hook entirely
+    exit 0;
+}
+
+# STEP 1: Seal all files with plaintext markers FIRST
+print STDERR "Sealing files with plaintext markers...\n";
+
+my @all_files = `git ls-files`;
+chomp(@all_files);
+
+my $sealed_count = 0;
+my $failed_count = 0;
+
+foreach my $file (@all_files) {
+    chomp $file;
+    next unless -f $file;
+
+    # Skip binary files
+    next if -B $file;
+
+    # Read file content to check for plaintext markers
+    open(my $fh, '<', $file) or do {
+        print STDERR "Warning: Cannot read $file: $!\n";
+        next;
+    };
+    my $content = do { local $/; <$fh> };
+    close($fh);
+
+    # Check if file has plaintext markers: ⊕{...} or o+{...}
+    if ($content =~ /(?:⊕|o\+)\{/) {
+        # File has plaintext markers, seal it
+        my $result = system("sss seal '$file' -x 2>&1");
+        if ($result == 0) {
+            $sealed_count++;
+            # Re-add the file to staging since it was modified
+            system("git add '$file'");
+        } else {
+            print STDERR "Error: Failed to seal $file\n";
+            $failed_count++;
+        }
+    }
+}
+
+if ($sealed_count > 0) {
+    print STDERR "Sealed $sealed_count file(s) with plaintext markers\n";
+}
+
+if ($failed_count > 0) {
+    print STDERR "Error: Failed to seal $failed_count file(s)\n";
+    exit 1;
+}
+
+# STEP 2: Now check for security violations on the sealed versions
+print STDERR "Checking for security violations...\n";
+
+my @staged_files = `git diff --cached --name-only --diff-filter=AM`;
+chomp(@staged_files);
+
+my @security_violations;
+
+foreach my $file (@staged_files) {
+    chomp $file;
+    next unless -f $file;
+    next if -B $file;  # Skip binary files
+
+    # Get the HEAD version (what's currently committed)
+    my $head_content = `git show HEAD:'$file' 2>/dev/null`;
+    next if $?;  # File doesn't exist in HEAD (new file)
+
+    # Get the current version (after sealing)
+    open(my $fh, '<', $file) or next;
+    my $current_content = do { local $/; <$fh> };
+    close($fh);
+
+    # Check if HEAD had encrypted markers
+    my $head_has_encrypted = ($head_content =~ /⊠\{/);
+
+    # Check if current version has ANY markers
+    my $current_has_markers = ($current_content =~ /(?:⊠|⊕|o\+|⊲|<)\{/);
+
+    # SECURITY VIOLATION: encrypted markers disappeared completely
+    if ($head_has_encrypted && !$current_has_markers) {
+        push @security_violations, $file;
+    }
+}
+
+if (@security_violations) {
+    print STDERR "ERROR: Security violation detected!\n";
+    print STDERR "The following files had encrypted content but are now fully rendered (no markers):\n";
+    foreach my $file (@security_violations) {
+        print STDERR "  - $file\n";
+    }
+    print STDERR "\nThis likely means you ran 'sss render -x' and forgot to re-encrypt.\n";
+    print STDERR "Please run 'sss seal -x <file>' or 'sss open -x <file>' to restore markers.\n";
+
+    # Check for force commit override
+    if ($ENV{FORCE_COMMIT} && lc($ENV{FORCE_COMMIT}) eq 'true') {
+        print STDERR "\nWARNING: FORCE_COMMIT=true detected. Allowing commit despite security violations.\n";
+    } else {
+        print STDERR "\nTo bypass this check, use: FORCE_COMMIT=true git commit ...\n";
+        exit 1;
+    }
+}
+
+print STDERR "Pre-commit checks passed\n";
+exit 0;

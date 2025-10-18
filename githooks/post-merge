@@ -1,0 +1,33 @@
+#!/bin/bash
+# SSS post-merge hook
+# Automatically processes encrypted files after git pull/merge
+# Priority: render (if enabled) > open (if enabled) > skip
+
+# Check if sss is available
+if ! command -v sss &> /dev/null; then
+    exit 0
+fi
+
+# Check if we're in an sss repository
+if ! sss status &> /dev/null; then
+    exit 0
+fi
+
+# Try to render first (auto-render takes precedence)
+output=$(sss render --project 2>&1)
+exit_code=$?
+
+if [ $exit_code -eq 0 ]; then
+    # Render succeeded
+    exit 0
+fi
+
+# If render failed due to not being enabled, try open instead
+if echo "$output" | grep -q "Automatic rendering not enabled"; then
+    # Try auto-open instead
+    sss open --project 2>&1 | grep -v "Automatic opening not enabled" || true
+    exit 0
+fi
+
+# For other errors, fail silently to allow merge to complete
+exit 0

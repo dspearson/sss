@@ -1,70 +1,50 @@
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
-use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::process;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
+#[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
+
 use crate::{
-    config::load_project_config_with_repository_key, constants::EDITOR_FALLBACKS,
+    commands::utils, config::load_project_config_with_repository_key, editor::launch_editor,
     validation::validate_file_path, Processor,
 };
 
-/// Get the default username with precedence: SSS_USER > USER > USERNAME
-fn get_default_username() -> Result<String> {
-    // Check SSS_USER first
-    if let Ok(sss_user) = env::var("SSS_USER") {
-        return Ok(sss_user);
-    }
+/// Check if a file is on a FUSE filesystem
+#[cfg(target_os = "linux")]
+fn is_fuse_mount(file_path: &Path) -> Result<bool> {
+    use std::mem;
 
-    // Fall back to system username
-    if let Ok(system_user) = env::var("USER") {
-        Ok(system_user)
-    } else if let Ok(system_user) = env::var("USERNAME") {
-        Ok(system_user)
-    } else {
-        Err(anyhow!(
-            "Could not determine username. Please specify with --user or set SSS_USER"
-        ))
+    const FUSE_SUPER_MAGIC: i64 = 0x65735546;
+
+    let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
+
+    unsafe {
+        let mut stat: libc::statfs = mem::zeroed();
+        let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
+
+        if result != 0 {
+            return Err(anyhow!("Failed to stat filesystem"));
+        }
+
+        Ok(stat.f_type == FUSE_SUPER_MAGIC)
     }
 }
 
-/// Launch editor for file editing
-fn launch_editor(file_path: &Path) -> Result<()> {
-    let editor = env::var("EDITOR")
-        .or_else(|_| env::var("VISUAL"))
-        .unwrap_or_else(|_| {
-            // Try to find a suitable editor
-            for fallback in EDITOR_FALLBACKS {
-                if which::which(fallback).is_ok() {
-                    return fallback.to_string();
-                }
-            }
-            "nano".to_string()
-        });
-
-    let status = process::Command::new(&editor)
-        .arg(file_path)
-        .status()
-        .map_err(|e| anyhow!("Failed to launch editor '{}': {}", editor, e))?;
-
-    if !status.success() {
-        return Err(anyhow!("Editor exited with non-zero status"));
-    }
-
-    Ok(())
+#[cfg(not(target_os = "linux"))]
+fn is_fuse_mount(_file_path: &Path) -> Result<bool> {
+    Ok(false)
 }
+
 
 fn handle_stdin_process(matches: &ArgMatches) -> Result<()> {
-    let username = if let Some(user) = matches.get_one::<String>("user") {
-        user.to_string()
-    } else {
-        get_default_username()?
-    };
     let render = matches.get_flag("render");
 
     // in-place and edit don't make sense for stdin
@@ -75,9 +55,7 @@ fn handle_stdin_process(matches: &ArgMatches) -> Result<()> {
         return Err(anyhow!("Cannot use --edit with stdin"));
     }
 
-    let (_config, repository_key) =
-        load_project_config_with_repository_key(".sss.toml", &username)?;
-    let processor = Processor::new(repository_key)?;
+    let (_config, processor, _project_root) = utils::create_processor_from_project_config()?;
 
     // Read from stdin
     let mut input = String::new();
@@ -105,21 +83,14 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         }
 
         let file_path = validate_file_path(file_path_str)?;
-        let username = if let Some(user) = matches.get_one::<String>("user") {
-            user.to_string()
-        } else {
-            get_default_username()?
-        };
         let in_place = matches.get_flag("in-place");
         let render = matches.get_flag("render");
         let edit = matches.get_flag("edit");
 
-        let (_config, repository_key) =
-            load_project_config_with_repository_key(".sss.toml", &username)?;
+        let (_config, processor, _project_root) = utils::create_processor_from_project_config()?;
 
         if render {
-            // Create processor
-            let processor = Processor::new(repository_key)?;
+            // Processor already created above
 
             if !file_path.exists() {
                 return Err(anyhow!("File does not exist: {:?}", file_path));
@@ -127,7 +98,7 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 
             // Read and process the file content to raw text
             let content = fs::read_to_string(&file_path)?;
-            let raw_content = processor.decrypt_to_raw(&content)?;
+            let raw_content = processor.decrypt_to_raw_with_path(&content, &file_path)?;
 
             if in_place {
                 // In-place render: replace file with rendered content
@@ -139,7 +110,8 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             }
             return Ok(());
         }
-        let processor = Processor::new(repository_key)?;
+
+        // Processor already created above, continue with edit or regular processing
 
         if edit {
             // Edit mode: decrypt -> edit -> encrypt
@@ -168,6 +140,13 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             // Read back and finalize
             let edited_content = fs::read_to_string(&temp_path)?;
             let final_content = processor.finalise_after_editing(&edited_content)?;
+
+            // Check if content actually changed
+            if final_content == content {
+                fs::remove_file(temp_path)?;
+                println!("No changes made");
+                return Ok(());
+            }
 
             // Write final content
             fs::write(&file_path, final_content)?;
@@ -200,23 +179,12 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 }
 
 /// Process a file or stdin with a specific operation
-fn process_file_or_stdin(
-    _main_matches: &ArgMatches,
-    sub_matches: &ArgMatches,
-    operation: &str,
-) -> Result<()> {
+fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()> {
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
-    let username = if let Some(user) = sub_matches.get_one::<String>("user") {
-        user.to_string()
-    } else {
-        get_default_username()?
-    };
     let in_place = sub_matches.get_flag("in-place");
 
     // Load project config and repository key
-    let (_config, repository_key) =
-        load_project_config_with_repository_key(".sss.toml", &username)?;
-    let processor = Processor::new(repository_key)?;
+    let (_config, processor, _project_root) = utils::create_processor_from_project_config()?;
 
     // Handle stdin
     if file_path_str == "-" {
@@ -250,7 +218,7 @@ fn process_file_or_stdin(
     let output = match operation {
         "seal" => processor.encrypt_content(&content)?,
         "open" => processor.decrypt_content(&content)?,
-        "render" => processor.decrypt_to_raw(&content)?,
+        "render" => processor.decrypt_to_raw_with_path(&content, &file_path)?,
         _ => unreachable!(),
     };
 
@@ -266,30 +234,205 @@ fn process_file_or_stdin(
 }
 
 /// Handle 'seal' command - encrypt plaintext markers
-pub fn handle_seal(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    process_file_or_stdin(main_matches, sub_matches, "seal")
+pub fn handle_seal(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(sub_matches, "seal")
 }
 
 /// Handle 'open' command - decrypt ciphertext to plaintext markers
-pub fn handle_open(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    process_file_or_stdin(main_matches, sub_matches, "open")
+pub fn handle_open(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(sub_matches, "open")
 }
 
 /// Handle 'render' command - decrypt to raw text (remove all markers)
-pub fn handle_render(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    process_file_or_stdin(main_matches, sub_matches, "render")
+pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    process_file_or_stdin(sub_matches, "render")
 }
 
 /// Handle 'edit' command - edit file with automatic encrypt/decrypt
-pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    let file_path_str = sub_matches.get_one::<String>("file").unwrap();
-    let username = if let Some(user) = sub_matches.get_one::<String>("user") {
-        user.to_string()
-    } else {
-        get_default_username()?
+/// Edit file on FUSE mount using sealed mode protocol
+#[cfg(target_os = "linux")]
+fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
+    use std::os::unix::io::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::ffi::CString;
+    use std::io::{Write, Seek, SeekFrom};
+
+    // Open file with O_NONBLOCK + O_RDWR for sealed mode protocol
+    let mut fuse_file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(file_path)?;
+
+    let fuse_fd = fuse_file.as_raw_fd();
+
+    // Signal to FUSE that we want sealed content
+    let xattr_name = CString::new("user.sss.sealed").unwrap();
+    let xattr_value = b"1";
+
+    let setxattr_result = unsafe {
+        libc::fsetxattr(
+            fuse_fd,
+            xattr_name.as_ptr(),
+            xattr_value.as_ptr() as *const libc::c_void,
+            xattr_value.len(),
+            0,
+        )
     };
 
-    // Cannot edit stdin
+    if setxattr_result != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(anyhow!("Failed to confirm sealed mode with fsetxattr: {}", err));
+    }
+
+    // Read sealed content (with retry for EAGAIN)
+    let sealed_content = read_sealed_content_with_retry(&mut fuse_file)?;
+
+    // Decrypt sealed content
+    let edit_content = processor.decrypt_content(&sealed_content)?;
+
+    // Create secure temp file in /dev/shm (or /tmp as fallback)
+    let temp_path = create_secure_temp_path(file_path)?;
+
+    // Write decrypted content to temp file
+    write_temp_file_secure(&temp_path, &edit_content)?;
+
+    // Launch editor
+    launch_editor(Path::new(&temp_path))?;
+
+    // Read edited content
+    let edited_content = std::fs::read_to_string(&temp_path)?;
+
+    // Securely remove temp file
+    std::fs::remove_file(&temp_path)?;
+
+    // Encrypt edited content
+    let final_sealed_content = processor.encrypt_content(&edited_content)?;
+
+    // Check if content actually changed
+    if final_sealed_content == sealed_content {
+        eprintln!("No changes made");
+        return Ok(());
+    }
+
+    // Write sealed content back to FUSE file descriptor
+    fuse_file.seek(SeekFrom::Start(0))?;
+    fuse_file.set_len(0)?;
+    fuse_file.write_all(final_sealed_content.as_bytes())?;
+    fuse_file.flush()?;
+
+    eprintln!("File edited and encrypted via FUSE: {:?}", file_path);
+    Ok(())
+}
+
+/// Read sealed content from FUSE with EAGAIN retry logic
+#[cfg(target_os = "linux")]
+fn read_sealed_content_with_retry(fuse_file: &mut std::fs::File) -> Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut sealed_content = String::new();
+    let mut retries = 0;
+    const MAX_RETRIES: u32 = 10;
+
+    loop {
+        sealed_content.clear();
+        match fuse_file.read_to_string(&mut sealed_content) {
+            Ok(_) => return Ok(sealed_content),
+            Err(e) if e.raw_os_error() == Some(libc::EAGAIN) && retries < MAX_RETRIES => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                retries += 1;
+                fuse_file.seek(SeekFrom::Start(0))?;
+            }
+            Err(e) => return Err(anyhow!("Failed to read sealed content: {}", e)),
+        }
+    }
+}
+
+/// Create secure temp file path in /dev/shm or /tmp
+#[cfg(target_os = "linux")]
+fn create_secure_temp_path(file_path: &Path) -> Result<String> {
+    let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+
+    if Path::new("/dev/shm").exists() {
+        Ok(format!("/dev/shm/.sss-edit-{}-{}", file_name, pid))
+    } else {
+        eprintln!("[WARN] /dev/shm not available, using /tmp (insecure!)");
+        Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
+    }
+}
+
+/// Write content to temp file with secure permissions
+#[cfg(unix)]
+fn write_temp_file_secure(temp_path: &str, content: &str) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::io::Write;
+
+    let mut temp_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(temp_path)?;
+    temp_file.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+/// Edit regular file (not on FUSE mount)
+fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
+    let content = fs::read_to_string(file_path)?;
+    let edit_content = processor.prepare_for_editing(&content)?;
+
+    // Create secure temp file
+    let temp_file_name = format!(
+        "sss-edit-{}-{}.tmp",
+        file_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file"),
+        std::process::id()
+    );
+    let temp_path = std::env::temp_dir().join(temp_file_name);
+
+    // Write with restrictive permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp_path)?
+            .write_all(edit_content.as_bytes())?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(&temp_path, edit_content)?;
+    }
+
+    // Launch editor
+    launch_editor(&temp_path)?;
+
+    // Read edited content and finalize
+    let edited_content = fs::read_to_string(&temp_path)?;
+    let final_content = processor.finalise_after_editing(&edited_content)?;
+
+    // Write back to original file
+    fs::write(file_path, final_content)?;
+
+    // Securely remove temp file
+    fs::remove_file(&temp_path)?;
+
+    eprintln!("File edited and encrypted: {:?}", file_path);
+    Ok(())
+}
+
+/// Main edit handler - dispatches to FUSE or regular file handler
+pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let file_path_str = sub_matches.get_one::<String>("file").unwrap();
+
     if file_path_str == "-" {
         return Err(anyhow!("Cannot use edit mode with stdin"));
     }
@@ -300,38 +443,81 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
         return Err(anyhow!("File does not exist: {:?}", file_path));
     }
 
-    let (_config, repository_key) =
-        load_project_config_with_repository_key(".sss.toml", &username)?;
-    let processor = Processor::new(repository_key)?;
+    // Find project config and load repository key
+    let file_dir = file_path.parent().ok_or_else(|| anyhow!("File has no parent directory"))?;
+    let config_path = crate::config::get_project_config_path_from(file_dir)?;
+    let (config, repository_key, project_root) = load_project_config_with_repository_key(config_path)?;
+    let processor = Processor::new_with_context(repository_key, project_root, config.created.clone())?;
 
-    // Read and prepare content for editing
-    let content = fs::read_to_string(&file_path)?;
-    let edit_content = processor.prepare_for_editing(&content)?;
+    // Dispatch to appropriate handler based on mount type
+    if is_fuse_mount(&file_path).unwrap_or(false) {
+        #[cfg(target_os = "linux")]
+        {
+            handle_edit_fuse(&file_path, &processor)
+        }
 
-    // Write to temporary file
-    let temp_path = format!("{}.tmp", file_path.to_string_lossy());
-    fs::write(&temp_path, edit_content)?;
+        #[cfg(not(target_os = "linux"))]
+        {
+            Err(anyhow!("FUSE editing is only available on Linux"))
+        }
+    } else {
+        handle_edit_regular(&file_path, &processor)
+    }
+}
 
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&temp_path)?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&temp_path, perms)?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_is_fuse_mount_non_fuse_path() {
+        // Test with a regular non-FUSE path
+        let path = PathBuf::from("/tmp");
+        let result = is_fuse_mount(&path);
+
+        // Should succeed and return false for non-FUSE mounts
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
     }
 
-    // Launch editor
-    launch_editor(Path::new(&temp_path))?;
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_is_fuse_mount_non_linux() {
+        // On non-Linux, always returns false
+        let path = PathBuf::from("/tmp/test");
+        let result = is_fuse_mount(&path);
 
-    // Read edited content and process it
-    let edited_content = fs::read_to_string(&temp_path)?;
-    let final_content = processor.finalise_after_editing(&edited_content)?;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
+    }
 
-    // Write back to original file
-    fs::write(&file_path, final_content)?;
+    #[test]
+    fn test_create_secure_temp_path() {
+        // Test that secure temp path generation works
+        let file_path = PathBuf::from("/tmp/test_file.txt");
+        let result = create_secure_temp_path(&file_path);
 
-    // Remove temp file
-    fs::remove_file(&temp_path)?;
+        assert!(result.is_ok());
+        let temp_path = result.unwrap();
 
-    eprintln!("File edited and encrypted: {:?}", file_path);
-    Ok(())
+        // Should use /dev/shm if available, otherwise /tmp
+        assert!(temp_path.starts_with("/dev/shm/.sss-edit-") || temp_path.starts_with("/tmp/.sss-edit-"));
+        assert!(temp_path.contains("test_file.txt"));
+        // Should include process ID
+        assert!(temp_path.contains(&std::process::id().to_string()));
+    }
+
+    // Note: Most of process.rs involves complex file processing:
+    // - Reading/writing encrypted files
+    // - FUSE mount detection and special handling
+    // - Smart merge algorithm for git integration
+    // - Editor integration
+    // - Project-wide file scanning
+    // These are tested through:
+    // - processor module (encryption/decryption logic)
+    // - merge module (smart reconstruction)
+    // - scanner module (file discovery)
+    // - Integration tests (full command workflows)
 }

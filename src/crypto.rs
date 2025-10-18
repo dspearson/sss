@@ -301,7 +301,7 @@ pub fn encrypt(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     ensure_sodium_init();
 
     // Generate cryptographically secure random nonce (192 bits)
-    // XChaCha20Poly1305's large nonce space eliminates collision concerns
+    // XChaCha20-Poly1305's large nonce space eliminates collision concerns
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
     unsafe {
         sodium::randombytes_buf(

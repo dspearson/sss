@@ -23,3 +23,13 @@ Thumbs.db
 
 # SSS specific
 .sss.toml
+
+# RPM build artifacts
+/rpm-build/*.rpm
+/rpm-build/*.tar.gz
+/rpm-build/Dockerfile.*
+/rpm-build/rpmbuild/
+/dist/
+
+# Container build artifacts
+*.tar.gz.asc

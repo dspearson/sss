@@ -1,11 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   build:
@@ -64,10 +60,18 @@ jobs:
           sudo apt-get install -y musl-dev
         fi
 
-    - name: Install system dependencies (macOS)
+    - name: Install system dependencies (macOS - build static libsodium)
       if: matrix.os == 'macos-latest'
       run: |
-        brew install libsodium pkg-config
+        # Build libsodium as static library from source
+        curl -L https://download.libsodium.org/libsodium/releases/libsodium-1.0.20.tar.gz -o libsodium.tar.gz
+        tar xzf libsodium.tar.gz
+        cd libsodium-stable
+        ./configure --prefix=$HOME/libsodium --disable-shared --enable-static
+        make -j$(sysctl -n hw.ncpu)
+        make install
+        echo "SODIUM_LIB_DIR=$HOME/libsodium/lib" >> $GITHUB_ENV
+        echo "SODIUM_STATIC=1" >> $GITHUB_ENV
 
     - name: Install system dependencies (Windows)
       if: matrix.os == 'windows-latest'
@@ -84,7 +88,6 @@ jobs:
       uses: houseabsolute/actions-rust-cross@v1
       env:
         # Force static linking for libsodium-sys
-        SODIUM_LIB_DIR: ""
         SODIUM_STATIC: "1"
         # For musl targets, ensure static linking
         RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
@@ -93,6 +96,20 @@ jobs:
         target: ${{ matrix.target }}
         args: "--locked --release"
         strip: true
+
+    - name: Verify static linking (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        echo "Checking dynamic library dependencies:"
+        otool -L target/${{ matrix.target }}/release/sss
+        echo ""
+        echo "Verifying no libsodium dynamic dependency:"
+        if otool -L target/${{ matrix.target }}/release/sss | grep -i libsodium; then
+          echo "ERROR: Binary has dynamic libsodium dependency!"
+          exit 1
+        else
+          echo "SUCCESS: Binary is statically linked with libsodium"
+        fi
 
     - name: Rename binary (Unix)
       if: matrix.os != 'windows-latest'

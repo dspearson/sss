@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,10 +25,27 @@ pub struct UserSettings {
     pub default_username: Option<String>,
     /// Default editor preference
     pub editor: Option<String>,
+    /// Per-project settings and permissions
+    #[serde(default)]
+    pub projects: HashMap<String, ProjectSettings>,
     /// Keystore configuration
     pub keystore: KeystoreSettings,
     /// UI preferences
     pub ui: UiSettings,
+}
+
+/// Per-project settings and permissions
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectSettings {
+    /// Allow automatic rendering for this project (used by git hooks)
+    #[serde(default)]
+    pub allow_auto_render: bool,
+    /// Allow automatic opening for this project (used by git hooks)
+    #[serde(default)]
+    pub allow_auto_open: bool,
+    /// Glob patterns to ignore in project-wide operations
+    #[serde(default)]
+    pub ignore_patterns: Vec<String>,
 }
 
 /// Keystore configuration settings
@@ -44,8 +62,8 @@ pub struct KeystoreSettings {
 /// UI and output preferences
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct UiSettings {
-    /// Use colored output
-    pub colored_output: Option<bool>,
+    /// Use coloured output
+    pub coloured_output: Option<bool>,
     /// Show progress bars
     pub show_progress: Option<bool>,
     /// Verbosity level (0-3)
@@ -164,13 +182,13 @@ impl ConfigManager {
     }
 
     /// Get UI preferences
-    pub fn use_colored_output(&self) -> bool {
-        // Check if output supports color
+    pub fn use_coloured_output(&self) -> bool {
+        // Check if output supports colour
         if !atty::is(atty::Stream::Stdout) {
             return false;
         }
 
-        self.user_settings.ui.colored_output.unwrap_or(true)
+        self.user_settings.ui.coloured_output.unwrap_or(true)
     }
 
     pub fn show_progress(&self) -> bool {
@@ -223,8 +241,8 @@ impl ConfigManager {
         self.user_settings.editor = editor;
     }
 
-    pub fn set_colored_output(&mut self, enabled: bool) {
-        self.user_settings.ui.colored_output = Some(enabled);
+    pub fn set_coloured_output(&mut self, enabled: bool) {
+        self.user_settings.ui.coloured_output = Some(enabled);
     }
 
     /// Get the current project path
@@ -238,6 +256,119 @@ impl ConfigManager {
             .as_ref()
             .map(|c| c.hooks.clone())
             .unwrap_or_default()
+    }
+
+    // Project-specific settings methods
+
+    /// Get all configured projects
+    pub fn get_all_projects(&self) -> &HashMap<String, ProjectSettings> {
+        &self.user_settings.projects
+    }
+
+    /// Enable automatic rendering for a project
+    pub fn enable_project_render(&mut self, project_path: &Path) -> Result<()> {
+        let path_str = project_path.to_string_lossy().to_string();
+        self.user_settings
+            .projects
+            .entry(path_str)
+            .or_default()
+            .allow_auto_render = true;
+        Ok(())
+    }
+
+    /// Disable automatic rendering for a project
+    pub fn disable_project_render(&mut self, project_path: &Path) -> Result<()> {
+        let path_str = project_path.to_string_lossy().to_string();
+        if let Some(settings) = self.user_settings.projects.get_mut(&path_str) {
+            settings.allow_auto_render = false;
+        }
+        Ok(())
+    }
+
+    /// Enable automatic opening for a project
+    pub fn enable_project_open(&mut self, project_path: &Path) -> Result<()> {
+        let path_str = project_path.to_string_lossy().to_string();
+        self.user_settings
+            .projects
+            .entry(path_str)
+            .or_default()
+            .allow_auto_open = true;
+        Ok(())
+    }
+
+    /// Disable automatic opening for a project
+    pub fn disable_project_open(&mut self, project_path: &Path) -> Result<()> {
+        let path_str = project_path.to_string_lossy().to_string();
+        if let Some(settings) = self.user_settings.projects.get_mut(&path_str) {
+            settings.allow_auto_open = false;
+        }
+        Ok(())
+    }
+
+    /// Check if automatic rendering is enabled for a project
+    pub fn is_project_render_enabled(&self, project_path: &Path) -> Result<bool> {
+        let path_str = project_path.to_string_lossy().to_string();
+        Ok(self
+            .user_settings
+            .projects
+            .get(&path_str)
+            .map(|s| s.allow_auto_render)
+            .unwrap_or(false))
+    }
+
+    /// Check if automatic opening is enabled for a project
+    pub fn is_project_open_enabled(&self, project_path: &Path) -> Result<bool> {
+        let path_str = project_path.to_string_lossy().to_string();
+        Ok(self
+            .user_settings
+            .projects
+            .get(&path_str)
+            .map(|s| s.allow_auto_open)
+            .unwrap_or(false))
+    }
+
+    /// Remove a project from settings
+    pub fn remove_project(&mut self, project_path: &Path) -> Result<bool> {
+        let path_str = project_path.to_string_lossy().to_string();
+        Ok(self.user_settings.projects.remove(&path_str).is_some())
+    }
+
+    /// Add an ignore pattern for a project
+    pub fn add_ignore_pattern(&mut self, project_path: &Path, pattern: String) -> Result<()> {
+        let path_str = project_path.to_string_lossy().to_string();
+        let settings = self
+            .user_settings
+            .projects
+            .entry(path_str)
+            .or_default();
+
+        if !settings.ignore_patterns.contains(&pattern) {
+            settings.ignore_patterns.push(pattern);
+        }
+        Ok(())
+    }
+
+    /// Remove an ignore pattern from a project
+    pub fn remove_ignore_pattern(&mut self, project_path: &Path, pattern: &str) -> Result<bool> {
+        let path_str = project_path.to_string_lossy().to_string();
+        if let Some(settings) = self.user_settings.projects.get_mut(&path_str) {
+            if let Some(pos) = settings.ignore_patterns.iter().position(|p| p == pattern) {
+                settings.ignore_patterns.remove(pos);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Get ignore patterns for a project
+    pub fn get_ignore_patterns(&self, project_path: &Path) -> Result<Vec<String>> {
+        let path_str = project_path.to_string_lossy().to_string();
+        Ok(self
+            .user_settings
+            .projects
+            .get(&path_str)
+            .map(|s| s.ignore_patterns.clone())
+            .unwrap_or_default())
     }
 }
 

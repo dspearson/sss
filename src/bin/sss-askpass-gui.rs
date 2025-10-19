@@ -229,3 +229,97 @@ fn format_host_info(context: &RequestContext) -> String {
         (None, None) => "local".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_host_info_with_hostname_and_user() {
+        let context = RequestContext {
+            hostname: Some("example.com".to_string()),
+            remote_user: Some("alice".to_string()),
+            project_path: None,
+            sss_username: "alice".to_string(),
+        };
+
+        assert_eq!(format_host_info(&context), "alice@example.com");
+    }
+
+    #[test]
+    fn test_format_host_info_with_hostname_only() {
+        let context = RequestContext {
+            hostname: Some("example.com".to_string()),
+            remote_user: None,
+            project_path: None,
+            sss_username: "alice".to_string(),
+        };
+
+        assert_eq!(format_host_info(&context), "example.com");
+    }
+
+    #[test]
+    fn test_format_host_info_with_user_only() {
+        let context = RequestContext {
+            hostname: None,
+            remote_user: Some("alice".to_string()),
+            project_path: None,
+            sss_username: "alice".to_string(),
+        };
+
+        assert_eq!(format_host_info(&context), "alice@local");
+    }
+
+    #[test]
+    fn test_format_host_info_local() {
+        let context = RequestContext {
+            hostname: None,
+            remote_user: None,
+            project_path: None,
+            sss_username: "alice".to_string(),
+        };
+
+        assert_eq!(format_host_info(&context), "local");
+    }
+
+    #[test]
+    fn test_request_context_deserialization() {
+        // Test that RequestContext can deserialize from valid JSON
+        let json = r#"{
+            "hostname": "server.example.com",
+            "remote_user": "bob",
+            "project_path": "/var/projects/test",
+            "sss_username": "bob"
+        }"#;
+
+        let context: Result<RequestContext, _> = serde_json::from_str(json);
+        assert!(context.is_ok());
+
+        let context = context.unwrap();
+        assert_eq!(context.hostname, Some("server.example.com".to_string()));
+        assert_eq!(context.remote_user, Some("bob".to_string()));
+        assert_eq!(context.project_path, Some("/var/projects/test".to_string()));
+        assert_eq!(context.sss_username, "bob");
+    }
+
+    #[test]
+    fn test_request_context_minimal() {
+        // Test that RequestContext can deserialize with only required fields
+        let json = r#"{
+            "sss_username": "charlie"
+        }"#;
+
+        let context: Result<RequestContext, _> = serde_json::from_str(json);
+        assert!(context.is_ok());
+
+        let context = context.unwrap();
+        assert_eq!(context.hostname, None);
+        assert_eq!(context.remote_user, None);
+        assert_eq!(context.project_path, None);
+        assert_eq!(context.sss_username, "charlie");
+    }
+
+    // Note: Dialog functions (show_zenity_dialog, show_kdialog_dialog, etc.)
+    // are not easily unit testable as they invoke external GUI tools.
+    // These are better tested manually or via integration tests.
+}

@@ -4,8 +4,8 @@ use tempfile::TempDir;
 
 use sss::crypto::{KeyPair, RepositoryKey};
 use sss::keystore::Keystore;
-use sss::project::ProjectConfig;
 use sss::processor::Processor;
+use sss::project::ProjectConfig;
 
 /// Test helper for multi-user project setup
 struct MultiUserProject {
@@ -18,6 +18,7 @@ struct MultiUserProject {
 struct UserContext {
     username: String,
     keypair: KeyPair,
+    #[allow(dead_code)]
     keystore: Keystore,
 }
 
@@ -177,7 +178,11 @@ fn test_add_user_to_existing_project() -> anyhow::Result<()> {
     let mut config = ProjectConfig::load_from_file(&project.config_path)?;
     let charlie_keypair = KeyPair::generate()?;
 
-    config.add_user("charlie", &charlie_keypair.public_key, &project.repository_key)?;
+    config.add_user(
+        "charlie",
+        &charlie_keypair.public_key,
+        &project.repository_key,
+    )?;
     config.save_to_file(&project.config_path)?;
 
     // Reload and verify
@@ -247,7 +252,11 @@ fn test_encrypted_content_persists_across_user_changes() -> anyhow::Result<()> {
     // Add a new user
     let mut config = ProjectConfig::load_from_file(&project.config_path)?;
     let charlie_keypair = KeyPair::generate()?;
-    config.add_user("charlie", &charlie_keypair.public_key, &project.repository_key)?;
+    config.add_user(
+        "charlie",
+        &charlie_keypair.public_key,
+        &project.repository_key,
+    )?;
     config.save_to_file(&project.config_path)?;
 
     // The encrypted content should still be decryptable
@@ -302,8 +311,7 @@ fn test_user_cannot_decrypt_with_wrong_keypair() -> anyhow::Result<()> {
 fn test_large_team_collaboration() -> anyhow::Result<()> {
     // Test with a larger team
     let usernames = vec![
-        "user1", "user2", "user3", "user4", "user5",
-        "user6", "user7", "user8", "user9", "user10"
+        "user1", "user2", "user3", "user4", "user5", "user6", "user7", "user8", "user9", "user10",
     ];
 
     let project = MultiUserProject::new(&usernames)?;

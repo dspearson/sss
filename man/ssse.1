@@ -1,0 +1,187 @@
+.TH SSSE 1 "2025-10-16" "sss" "User Commands"
+.SH NAME
+ssse \- sss editor integration: edit files with automatic encryption/decryption
+.SH SYNOPSIS
+.B ssse
+.I file
+.SH DESCRIPTION
+.B ssse
+is a convenience command (typically created as a symlink to
+.BR sss )
+that provides seamless editor integration for sss-encrypted files. It opens the specified file in a text editor with automatic decryption and encryption.
+.PP
+When invoked,
+.B ssse
+performs the following operations:
+.IP 1. 3
+Decrypts all ciphertext markers (⊠{...}) to plaintext markers (⊕{...}) in the file
+.IP 2. 3
+Opens the file in the configured text editor
+.IP 3. 3
+After editing, automatically encrypts all plaintext markers back to ciphertext markers
+.IP 4. 3
+Saves the file in-place with encrypted content
+.PP
+This command is equivalent to
+.B sss edit
+but uses the system username ($USER or $USERNAME environment variables) for compatibility with editor configurations and external tool integrations.
+.SH USAGE
+Edit an encrypted configuration file:
+.PP
+.nf
+.RS
+$ ssse config.yaml
+.RE
+.fi
+.PP
+This opens
+.I config.yaml
+in your configured editor, automatically decrypting secrets for editing. When you save and exit, secrets are automatically encrypted again.
+.SH EDITOR SELECTION
+.B ssse
+selects the editor in the following priority order:
+.IP 1. 3
+Editor configured via
+.B sss settings set --editor
+.IP 2. 3
+.B $EDITOR
+environment variable
+.IP 3. 3
+.B $VISUAL
+environment variable
+.IP 4. 3
+System default editor (typically
+.BR vi )
+.SH CONFIGURATION
+Configure the preferred editor:
+.PP
+.nf
+.RS
+$ sss settings set --editor vim
+$ ssse secret.conf
+.RE
+.fi
+.PP
+Or use environment variables:
+.PP
+.nf
+.RS
+$ export EDITOR=emacs
+$ ssse secret.conf
+.RE
+.fi
+.SH USERNAME HANDLING
+Unlike
+.BR "sss edit" ,
+which uses the configured sss username or prompts for one,
+.B ssse
+automatically uses the system username from the $USER (Unix/Linux) or $USERNAME (Windows) environment variable. This makes it suitable for use in editor configurations and external tools where interactive username prompts would be problematic.
+.PP
+To use a specific sss username instead, use
+.B sss edit --user username file
+directly.
+.SH EXAMPLES
+.SS Basic Editing
+Edit a secrets file:
+.PP
+.nf
+.RS
+$ ssse .env.secrets
+# Editor opens with decrypted content:
+# API_KEY=⊕{sk_live_abc123}
+# DB_PASSWORD=⊕{super_secret_password}
+#
+# Make changes and save
+# File is automatically encrypted on exit
+.RE
+.fi
+.SS Git Integration
+Configure git to use
+.B ssse
+for encrypted files:
+.PP
+.nf
+.RS
+$ cat .gitattributes
+*.secrets diff=sss
+
+$ git config diff.sss.textconv "sss render"
+$ git config core.editor "ssse"
+.RE
+.fi
+.SS Editor Integration (Vim)
+Add to
+.IR ~/.vimrc :
+.PP
+.nf
+.RS
+" Automatically use ssse for .secrets files
+autocmd BufReadPre,FileReadPre *.secrets set viminfo=
+autocmd BufReadPre,FileReadPre *.secrets setlocal noswapfile noundofile nobackup
+
+" Use ssse as external filter
+autocmd BufReadPost *.secrets :%!ssse %
+.RE
+.fi
+.SH FILES
+.TP
+.I .sss.toml
+Project configuration file (must be present in the project directory).
+.TP
+.I ~/.config/sss/settings.toml
+User settings including editor preferences.
+.TP
+.I ~/.config/sss/keys/
+Encrypted private keys used for decryption.
+.SH ENVIRONMENT
+.TP
+.B USER
+Unix/Linux username used for sss operations.
+.TP
+.B USERNAME
+Windows username used for sss operations.
+.TP
+.B EDITOR
+Text editor to use if not configured via sss settings.
+.TP
+.B VISUAL
+Secondary fallback for text editor selection.
+.SH SECURITY CONSIDERATIONS
+.B ssse
+creates temporary files with decrypted content during editing. These files:
+.IP \(bu 2
+Are created with restrictive permissions (0600 on Unix systems)
+.IP \(bu 2
+Are automatically deleted after editing
+.IP \(bu 2
+May be cached by the editor (swap files, undo files, backups)
+.PP
+For sensitive secrets, consider:
+.IP \(bu 2
+Disabling editor swap files for encrypted files
+.IP \(bu 2
+Disabling persistent undo for encrypted files
+.IP \(bu 2
+Using editors with secure file handling (e.g., vim's noswapfile)
+.IP \(bu 2
+Encrypting your home directory or using full disk encryption
+.SH EXIT STATUS
+.TP
+.B 0
+Success (file edited and encrypted successfully)
+.TP
+.B 1
+Error (invalid file, missing keys, editor failure, etc.)
+.SH SEE ALSO
+.BR sss (1),
+.BR git-config (1),
+.BR vim (1),
+.BR emacs (1)
+.PP
+Full documentation: https://github.com/dspearson/sss
+.SH AUTHORS
+Written and maintained by Dominic Pearson.
+.SH COPYRIGHT
+Copyright \(co 2025 sss Dominic Pearson. Licence: ISC
+.PP
+This is free software; see the source for copying conditions.

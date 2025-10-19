@@ -31,7 +31,7 @@ pub struct ProjectConfig {
     pub created: String,
 
     /// Users who can decrypt/encrypt in this project
-    /// Flattened to appear as [username] sections in TOML
+    /// Flattened to appear as `[username]` sections in TOML
     #[serde(flatten)]
     pub users: HashMap<String, UserConfig>,
 
@@ -218,6 +218,17 @@ impl ProjectConfig {
         let mut users: Vec<String> = self.users.keys().cloned().collect();
         users.sort();
         users
+    }
+
+    /// Find username by matching public key
+    pub fn find_user_by_public_key(&self, public_key: &PublicKey) -> Option<String> {
+        let public_key_str = public_key.to_base64();
+        for (username, user_config) in &self.users {
+            if user_config.public == public_key_str {
+                return Some(username.clone());
+            }
+        }
+        None
     }
 
     /// Check if this is an old-format config with a raw key

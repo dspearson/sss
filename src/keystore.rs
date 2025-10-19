@@ -90,11 +90,9 @@ impl Keystore {
             let salt = Salt::new();
             let derived_key = DerivedKey::derive(password, &salt)?;
 
-            let secret_key_bytes = keypair.secret_key.to_base64().into_bytes();
-            let encrypted_data =
-                crate::crypto::encrypt(&secret_key_bytes, &derived_key.to_encryption_key())?;
-
-            let encrypted_secret_key = base64::prelude::BASE64_STANDARD.encode(encrypted_data);
+            let secret_key_str = keypair.secret_key.to_base64();
+            let encrypted_secret_key =
+                crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
             (encrypted_secret_key, Some(salt.to_base64()), true)
         } else {
             // Store secret key as plaintext (base64 encoded)

@@ -62,10 +62,10 @@ pub fn validate_username(username: &str) -> Result<()> {
     }
 
     // Prevent leading/trailing dots or hyphens
-    if username.starts_with('.')
-        || username.starts_with('-')
-        || username.ends_with('.')
-        || username.ends_with('-')
+    const FORBIDDEN_BOUNDARY_CHARS: &[char] = &['.', '-'];
+    if FORBIDDEN_BOUNDARY_CHARS
+        .iter()
+        .any(|&c| username.starts_with(c) || username.ends_with(c))
     {
         return Err(validation_error!(
             "Username cannot start or end with dots or hyphens"
@@ -162,6 +162,25 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // RAII guard to ensure current directory is restored after test
+    struct DirGuard {
+        original: std::path::PathBuf,
+    }
+
+    impl DirGuard {
+        fn new() -> std::io::Result<Self> {
+            Ok(Self {
+                original: std::env::current_dir()?,
+            })
+        }
+    }
+
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
     #[test]
     fn test_validate_username() {
         // Valid usernames
@@ -222,8 +241,11 @@ mod tests {
         let subdir_file = subdir.join("test.txt");
         std::fs::write(&subdir_file, "test content").unwrap();
 
+        // Save original directory (create guard early, before any test may have changed it)
+        // Use a fallback to temp_path if current_dir fails (handles tests run in deleted directories)
+        let original_dir = std::env::current_dir().unwrap_or_else(|_| temp_path.to_path_buf());
+
         // Change to temp directory for testing
-        let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_path).unwrap();
 
         // All valid paths should work (no restrictions)
@@ -238,7 +260,7 @@ mod tests {
         // Invalid: null bytes (filesystem limitation)
         assert!(validate_file_path("test\0file.txt").is_err());
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Restore original directory before temp_dir cleanup
+        let _ = std::env::set_current_dir(&original_dir);
     }
 }

@@ -119,17 +119,29 @@ impl RotationManager {
             None
         };
 
-        // Step 3: Generate new repository key
+        // Step 3: Load project config for timestamp
+        let project_config = ProjectConfig::load_from_file(config_path)?;
+        let project_root = config_path.parent()
+            .ok_or_else(|| anyhow!("Config path has no parent"))?
+            .to_path_buf();
+
+        // Step 4: Generate new repository key
         let (old_key, new_key) = current_repository_key.rotate();
         let new_key_id = new_key.to_base64();
 
         println!("🔑 Generated new repository key");
 
-        // Step 4: Re-encrypt all files
+        // Step 5: Re-encrypt all files
         let (files_processed, files_failed) =
-            self.reencrypt_files(&scan_result.files_with_patterns, &old_key, &new_key)?;
+            self.reencrypt_files(
+                &scan_result.files_with_patterns,
+                &old_key,
+                &new_key,
+                &project_config.created,
+                &project_root,
+            )?;
 
-        // Step 5: Update project configuration with new sealed keys
+        // Step 6: Update project configuration with new sealed keys
         self.update_project_config(config_path, &new_key, &reason)?;
 
         let duration = start_time.elapsed();
@@ -249,12 +261,22 @@ impl RotationManager {
         files: &[PathBuf],
         old_key: &RepositoryKey,
         new_key: &RepositoryKey,
+        project_timestamp: &str,
+        project_root: &Path,
     ) -> Result<(usize, usize)> {
         let mut files_processed = 0;
         let mut files_failed = 0;
 
-        let old_processor = Processor::new((*old_key).clone())?;
-        let new_processor = Processor::new((*new_key).clone())?;
+        let old_processor = Processor::new_with_context(
+            (*old_key).clone(),
+            project_root.to_path_buf(),
+            project_timestamp.to_string(),
+        )?;
+        let new_processor = Processor::new_with_context(
+            (*new_key).clone(),
+            project_root.to_path_buf(),
+            project_timestamp.to_string(),
+        )?;
 
         if self.options.show_progress {
             println!("🔄 Re-encrypting {} files...", files.len());

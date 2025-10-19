@@ -86,7 +86,15 @@ fn handle_stop() -> Result<()> {
             println!("Agent stopped");
             Ok(())
         } else {
-            Err(anyhow!("Failed to stop agent. Is it running?"))
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.is_empty() {
+                Err(anyhow!("Failed to stop agent. Is it running?"))
+            } else {
+                Err(anyhow!(
+                    "Failed to stop agent. Is it running?\nError: {}",
+                    stderr.trim()
+                ))
+            }
         }
     }
 
@@ -259,4 +267,49 @@ fn get_policy_path() -> Result<PathBuf> {
         .join("sss");
 
     Ok(config_dir.join("agent-policy.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_policy_path_requires_home() {
+        // Save original HOME
+        let original_home = std::env::var("HOME").ok();
+
+        // Remove HOME temporarily
+        std::env::remove_var("HOME");
+
+        let result = get_policy_path();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("HOME"));
+
+        // Restore HOME
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        }
+    }
+
+    #[test]
+    fn test_get_policy_path_with_home() {
+        // This should succeed when HOME is set (which it normally is)
+        if std::env::var("HOME").is_ok() {
+            let result = get_policy_path();
+            assert!(result.is_ok());
+
+            let path = result.unwrap();
+            assert!(path.to_string_lossy().contains("sss"));
+            assert!(path.to_string_lossy().ends_with("agent-policy.toml"));
+        }
+    }
+
+    // Note: Agent commands are experimental (requires SSS_DEVEL_MODE=1)
+    // The agent daemon provides password caching functionality
+    // Most functionality involves:
+    // - Unix socket communication
+    // - Password prompt interception
+    // - Policy management for auto-approval
+    // - Background daemon management
+    // Integration tests verify the full agent workflow
 }

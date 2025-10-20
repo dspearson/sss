@@ -89,6 +89,7 @@ create_tarball() {
     mkdir -p "$source_dir"
     cp -r "$PROJECT_ROOT/src" "$source_dir/"
     cp -r "$PROJECT_ROOT/githooks" "$source_dir/"
+    cp -r "$PROJECT_ROOT/vendor" "$source_dir/"
     cp "$PROJECT_ROOT/Cargo.toml" "$source_dir/"
     cp "$PROJECT_ROOT/Cargo.lock" "$source_dir/"
     cp "$PROJECT_ROOT/LICENCE" "$source_dir/"

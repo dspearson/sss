@@ -83,6 +83,9 @@ pub struct SssFS {
     source_path: PathBuf,
     /// File descriptor to source directory (kept open to access files even if mounted over)
     source_fd: std::os::unix::io::RawFd,
+    /// File descriptor to mount point directory (held open before mount for /proc access)
+    /// Allows accessing the underlying directory via /proc/self/fd/<mount_fd> even after FUSE mount
+    mount_fd: Option<std::os::unix::io::RawFd>,
     /// Processor for encryption/decryption operations
     processor: Processor,
     /// Inode table: maps inode number to path information
@@ -106,6 +109,9 @@ impl SssFS {
     ///
     /// * `source_path` - Path to the directory containing files to be transparently processed
     /// * `processor` - Configured [`Processor`] instance for encryption/decryption operations
+    /// * `mount_path` - Optional path to the mount point directory. If provided, a file descriptor
+    ///                  will be held open to this directory, allowing access via /proc/self/fd/<fd>
+    ///                  even after the FUSE filesystem is mounted over it.
     ///
     /// # Returns
     ///
@@ -113,6 +119,7 @@ impl SssFS {
     /// - The source path doesn't exist
     /// - The source path is not a directory
     /// - The source directory cannot be opened (permission denied, etc.)
+    /// - The mount path (if provided) cannot be opened
     ///
     /// # Examples
     ///
@@ -122,13 +129,15 @@ impl SssFS {
     /// # use std::path::PathBuf;
     /// # fn example() -> anyhow::Result<()> {
     /// let source = PathBuf::from("/path/to/project");
+    /// let mount = PathBuf::from("/mnt/project");
     /// let key = RepositoryKey::new();
     /// let processor = Processor::new(key)?;
-    /// let fs = SssFS::new(source, processor)?;
+    /// // Hold fd to mount point for /proc access
+    /// let fs = SssFS::new(source, processor, Some(mount))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(source_path: PathBuf, processor: Processor) -> Result<Self> {
+    pub fn new(source_path: PathBuf, processor: Processor, mount_path: Option<PathBuf>) -> Result<Self> {
         if !source_path.exists() {
             return Err(anyhow!("Source path does not exist: {:?}", source_path));
         }
@@ -151,6 +160,29 @@ impl SssFS {
             ));
         }
 
+        // Open a file descriptor to the mount point directory if provided
+        // This allows accessing the underlying directory via /proc/self/fd/<mount_fd>
+        // even after the FUSE filesystem is mounted over it
+        let mount_fd = if let Some(ref mount_path) = mount_path {
+            let fd = unsafe {
+                let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
+                libc::open(path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
+            };
+
+            if fd < 0 {
+                // Clean up source_fd before returning error
+                unsafe { libc::close(source_fd); }
+                return Err(anyhow!(
+                    "Failed to open mount point directory: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            Some(fd)
+        } else {
+            None
+        };
+
         let mut inode_table = HashMap::new();
         let mut path_to_ino = HashMap::new();
 
@@ -166,6 +198,7 @@ impl SssFS {
         Ok(Self {
             source_path,
             source_fd,
+            mount_fd,
             processor,
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
@@ -174,6 +207,34 @@ impl SssFS {
             next_fh: RwLock::new(1),
             render_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Get the mount point file descriptor (if available)
+    ///
+    /// Returns the raw file descriptor to the mount point directory.
+    /// This can be used to access the underlying directory via /proc/self/fd/<fd>
+    /// even after the FUSE filesystem is mounted over it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use sss::fuse_fs::SssFS;
+    /// # use sss::{Processor, RepositoryKey};
+    /// # use std::path::PathBuf;
+    /// # fn example() -> anyhow::Result<()> {
+    /// # let source = PathBuf::from("/path/to/project");
+    /// # let mount = PathBuf::from("/mnt/project");
+    /// # let key = RepositoryKey::new();
+    /// # let processor = Processor::new(key)?;
+    /// let fs = SssFS::new(source, processor, Some(mount))?;
+    /// if let Some(fd) = fs.get_mount_fd() {
+    ///     println!("Access underlying directory: /proc/self/fd/{}", fd);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_mount_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.mount_fd
     }
 
     /// Get the real path for a given virtual path
@@ -1628,6 +1689,12 @@ impl Drop for SssFS {
         // Close the source directory file descriptor
         unsafe {
             libc::close(self.source_fd);
+        }
+        // Close the mount point directory file descriptor if present
+        if let Some(mount_fd) = self.mount_fd {
+            unsafe {
+                libc::close(mount_fd);
+            }
         }
     }
 }

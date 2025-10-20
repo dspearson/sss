@@ -1423,12 +1423,13 @@ impl Filesystem for SssFS {
         };
 
         // Create file via fd with O_CREAT | O_EXCL
+        // Use 0o600 for security - files may contain rendered secrets
         let fd = unsafe {
             libc::openat(
                 self.source_fd,
                 path_cstr.as_ptr(),
                 libc::O_CREAT | libc::O_WRONLY | libc::O_EXCL | flags,
-                0o644,
+                0o600,
             )
         };
 

@@ -163,10 +163,16 @@ impl SssFS {
         // Open a file descriptor to the mount point directory if provided
         // This allows accessing the underlying directory via /proc/self/fd/<mount_fd>
         // even after the FUSE filesystem is mounted over it
+        //
+        // We use O_PATH which is perfect for this purpose:
+        // - Obtains a fd that can be used with /proc/PID/fd/N access
+        // - Allows full read/write operations through the /proc path
+        // - The actual permissions are determined by the directory's mode and user's access
         let mount_fd = if let Some(ref mount_path) = mount_path {
             let fd = unsafe {
                 let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
-                libc::open(path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
+                // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
+                libc::open(path_cstr.as_ptr(), libc::O_PATH | libc::O_DIRECTORY)
             };
 
             if fd < 0 {

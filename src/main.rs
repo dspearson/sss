@@ -8,7 +8,7 @@ use sss::commands::{
     handle_users,
 };
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
-use sss::commands::handle_mount;
+use sss::commands::{handle_git, handle_mount};
 #[cfg(feature = "ninep")]
 use sss::commands::handle_serve9p;
 
@@ -44,6 +44,29 @@ fn add_fuse_commands(app: Command) -> Command {
                     .long("read-only")
                     .help("Mount read-only")
                     .action(clap::ArgAction::SetTrue),
+            ),
+    )
+    .subcommand(
+        Command::new("git")
+            .about("Run git commands in underlying directory (when in FUSE mount)")
+            .trailing_var_arg(true)
+            .allow_hyphen_values(true)
+            .arg(
+                Arg::new("args")
+                    .num_args(1..)
+                    .help("Git command and arguments")
+                    .required(false),
+            )
+            .after_help(
+                "EXAMPLES:\n    \
+                sss git status\n    \
+                sss git add file.txt\n    \
+                sss git commit -m \"Update secrets\"\n    \
+                sss git push\n\n\
+                When run from within a FUSE-mounted directory, git commands will\n\
+                automatically operate on the underlying (sealed) files instead of\n\
+                the rendered view. This ensures git sees the actual encrypted markers.\n\n\
+                When run outside a FUSE mount, this command passes through to git normally."
             ),
     )
 }
@@ -593,6 +616,15 @@ fn main() -> Result<()> {
         Some(("edit", sub_matches)) => handle_edit(&matches, sub_matches),
         #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
         Some(("mount", sub_matches)) => handle_mount(&matches, sub_matches),
+        #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
+        Some(("git", sub_matches)) => {
+            // Extract git arguments
+            let git_args: Vec<String> = sub_matches
+                .get_many::<String>("args")
+                .map(|vals| vals.map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            handle_git(&git_args)
+        },
         #[cfg(feature = "ninep")]
         Some(("serve9p", sub_matches)) => handle_serve9p(sub_matches),
         None => {

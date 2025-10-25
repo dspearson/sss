@@ -17,6 +17,10 @@ use crate::Processor;
 const TTL: Duration = Duration::from_secs(1);
 const ROOT_INO: u64 = 1;
 
+// Synthetic inodes for virtual files
+const SYNTHETIC_GIT_DIR_INO: u64 = u64::MAX - 2;
+const SYNTHETIC_GIT_FD_INO: u64 = u64::MAX - 1;
+
 // Custom ioctl command for ssse edit to request opened mode (with ⊕{} markers)
 const SSS_IOC_OPENED_MODE: u32 = 0x5353_0001; // 'SS' magic + command 1
 const SSS_IOC_SEALED_MODE: u32 = 0x5353_0002; // 'SS' magic + command 2 - request sealed content (requires O_NONBLOCK)
@@ -83,6 +87,9 @@ pub struct SssFS {
     source_path: PathBuf,
     /// File descriptor to source directory (kept open to access files even if mounted over)
     source_fd: std::os::unix::io::RawFd,
+    /// File descriptor to mount point directory (held open before mount for /proc access)
+    /// Allows accessing the underlying directory via /proc/self/fd/<mount_fd> even after FUSE mount
+    mount_fd: Option<std::os::unix::io::RawFd>,
     /// Processor for encryption/decryption operations
     processor: Processor,
     /// Inode table: maps inode number to path information
@@ -106,6 +113,9 @@ impl SssFS {
     ///
     /// * `source_path` - Path to the directory containing files to be transparently processed
     /// * `processor` - Configured [`Processor`] instance for encryption/decryption operations
+    /// * `mount_path` - Optional path to the mount point directory. If provided, a file descriptor
+    ///                  will be held open to this directory, allowing access via /proc/self/fd/<fd>
+    ///                  even after the FUSE filesystem is mounted over it.
     ///
     /// # Returns
     ///
@@ -113,6 +123,7 @@ impl SssFS {
     /// - The source path doesn't exist
     /// - The source path is not a directory
     /// - The source directory cannot be opened (permission denied, etc.)
+    /// - The mount path (if provided) cannot be opened
     ///
     /// # Examples
     ///
@@ -122,13 +133,15 @@ impl SssFS {
     /// # use std::path::PathBuf;
     /// # fn example() -> anyhow::Result<()> {
     /// let source = PathBuf::from("/path/to/project");
+    /// let mount = PathBuf::from("/mnt/project");
     /// let key = RepositoryKey::new();
     /// let processor = Processor::new(key)?;
-    /// let fs = SssFS::new(source, processor)?;
+    /// // Hold fd to mount point for /proc access
+    /// let fs = SssFS::new(source, processor, Some(mount))?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(source_path: PathBuf, processor: Processor) -> Result<Self> {
+    pub fn new(source_path: PathBuf, processor: Processor, mount_path: Option<PathBuf>) -> Result<Self> {
         if !source_path.exists() {
             return Err(anyhow!("Source path does not exist: {:?}", source_path));
         }
@@ -151,6 +164,35 @@ impl SssFS {
             ));
         }
 
+        // Open a file descriptor to the mount point directory if provided
+        // This allows accessing the underlying directory via /proc/self/fd/<mount_fd>
+        // even after the FUSE filesystem is mounted over it
+        //
+        // We use O_PATH which is perfect for this purpose:
+        // - Obtains a fd that can be used with /proc/PID/fd/N access
+        // - Allows full read/write operations through the /proc path
+        // - The actual permissions are determined by the directory's mode and user's access
+        let mount_fd = if let Some(ref mount_path) = mount_path {
+            let fd = unsafe {
+                let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
+                // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
+                libc::open(path_cstr.as_ptr(), libc::O_PATH | libc::O_DIRECTORY)
+            };
+
+            if fd < 0 {
+                // Clean up source_fd before returning error
+                unsafe { libc::close(source_fd); }
+                return Err(anyhow!(
+                    "Failed to open mount point directory: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            Some(fd)
+        } else {
+            None
+        };
+
         let mut inode_table = HashMap::new();
         let mut path_to_ino = HashMap::new();
 
@@ -166,6 +208,7 @@ impl SssFS {
         Ok(Self {
             source_path,
             source_fd,
+            mount_fd,
             processor,
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
@@ -174,6 +217,34 @@ impl SssFS {
             next_fh: RwLock::new(1),
             render_cache: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Get the mount point file descriptor (if available)
+    ///
+    /// Returns the raw file descriptor to the mount point directory.
+    /// This can be used to access the underlying directory via /proc/self/fd/<fd>
+    /// even after the FUSE filesystem is mounted over it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use sss::fuse_fs::SssFS;
+    /// # use sss::{Processor, RepositoryKey};
+    /// # use std::path::PathBuf;
+    /// # fn example() -> anyhow::Result<()> {
+    /// # let source = PathBuf::from("/path/to/project");
+    /// # let mount = PathBuf::from("/mnt/project");
+    /// # let key = RepositoryKey::new();
+    /// # let processor = Processor::new(key)?;
+    /// let fs = SssFS::new(source, processor, Some(mount))?;
+    /// if let Some(fd) = fs.get_mount_fd() {
+    ///     println!("Access underlying directory: /proc/self/fd/{}", fd);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn get_mount_fd(&self) -> Option<std::os::unix::io::RawFd> {
+        self.mount_fd
     }
 
     /// Get the real path for a given virtual path
@@ -827,6 +898,55 @@ impl SssFS {
 impl Filesystem for SssFS {
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+        // Special case: .git/fd synthetic file
+        if ino == SYNTHETIC_GIT_FD_INO {
+            if let Some(mount_fd) = self.mount_fd {
+                let fd_string = format!("{}\n", mount_fd);
+                let attr = FileAttr {
+                    ino: SYNTHETIC_GIT_FD_INO,
+                    size: fd_string.len() as u64,
+                    blocks: 1,
+                    atime: UNIX_EPOCH,
+                    mtime: UNIX_EPOCH,
+                    ctime: UNIX_EPOCH,
+                    crtime: UNIX_EPOCH,
+                    kind: FileType::RegularFile,
+                    perm: 0o400,
+                    nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+                reply.attr(&TTL, &attr);
+                return;
+            }
+        }
+
+        // Special case: .git synthetic directory
+        if ino == SYNTHETIC_GIT_DIR_INO {
+            let attr = FileAttr {
+                ino: SYNTHETIC_GIT_DIR_INO,
+                size: 4096,
+                blocks: 8,
+                atime: UNIX_EPOCH,
+                mtime: UNIX_EPOCH,
+                ctime: UNIX_EPOCH,
+                crtime: UNIX_EPOCH,
+                kind: FileType::Directory,
+                perm: 0o500,
+                nlink: 2,
+                uid: unsafe { libc::getuid() },
+                gid: unsafe { libc::getgid() },
+                rdev: 0,
+                blksize: 512,
+                flags: 0,
+            };
+            reply.attr(&TTL, &attr);
+            return;
+        }
+
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
@@ -854,11 +974,60 @@ impl Filesystem for SssFS {
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
 
+        // Special case: .git/fd synthetic file
+        if name == "fd" && parent == SYNTHETIC_GIT_DIR_INO {
+            if let Some(mount_fd) = self.mount_fd {
+                let fd_string = format!("{}\n", mount_fd);
+                let attr = FileAttr {
+                    ino: SYNTHETIC_GIT_FD_INO,
+                    size: fd_string.len() as u64,
+                    blocks: 1,
+                    atime: UNIX_EPOCH,
+                    mtime: UNIX_EPOCH,
+                    ctime: UNIX_EPOCH,
+                    crtime: UNIX_EPOCH,
+                    kind: FileType::RegularFile,
+                    perm: 0o400, // Read-only for owner
+                    nlink: 1,
+                    uid: unsafe { libc::getuid() },
+                    gid: unsafe { libc::getgid() },
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+                reply.entry(&TTL, &attr, 0);
+                return;
+            }
+        }
+
+        // Special case: .git directory (allow lookup but keep hidden from readdir)
+        if name == ".git" {
+            let attr = FileAttr {
+                ino: SYNTHETIC_GIT_DIR_INO,
+                size: 4096,
+                blocks: 8,
+                atime: UNIX_EPOCH,
+                mtime: UNIX_EPOCH,
+                ctime: UNIX_EPOCH,
+                crtime: UNIX_EPOCH,
+                kind: FileType::Directory,
+                perm: 0o500, // Read+execute for owner only
+                nlink: 2,
+                uid: unsafe { libc::getuid() },
+                gid: unsafe { libc::getgid() },
+                rdev: 0,
+                blksize: 512,
+                flags: 0,
+            };
+            reply.entry(&TTL, &attr, 0);
+            return;
+        }
+
         // Parse virtual file mode (.sss-sealed, .sss-opened, or normal)
         let (actual_name, file_mode) = Self::parse_virtual_file_mode(name);
         let is_opened_mode = matches!(file_mode, FileMode::Opened);
 
-        // Hide git-related files from FUSE view
+        // Hide git-related files from FUSE view (except .git itself, handled above)
         if let Some(name_str) = actual_name.to_str() {
             if Self::should_hide(name_str) {
                 reply.error(libc::ENOENT);
@@ -918,6 +1087,23 @@ impl Filesystem for SssFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        // Special case: .git synthetic directory (contains only "fd" file)
+        if ino == SYNTHETIC_GIT_DIR_INO {
+            let items = vec![
+                (ino, FileType::Directory, ".".to_string()),
+                (ROOT_INO, FileType::Directory, "..".to_string()),
+                (SYNTHETIC_GIT_FD_INO, FileType::RegularFile, "fd".to_string()),
+            ];
+
+            for (i, item) in items.iter().enumerate().skip(offset as usize) {
+                if reply.add(item.0, (i + 1) as i64, item.1, &item.2) {
+                    break;
+                }
+            }
+
+            reply.ok();
+            return;
+        }
 
         let entry = match self.get_inode(ino) {
             Some(e) => e,
@@ -1024,6 +1210,25 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
+        // Special case: .git/fd synthetic file
+        if ino == SYNTHETIC_GIT_FD_INO {
+            if let Some(mount_fd) = self.mount_fd {
+                let content = format!("{}\n", mount_fd);
+                let bytes = content.as_bytes();
+                let start = offset as usize;
+                let end = std::cmp::min(start + size as usize, bytes.len());
+
+                if start < bytes.len() {
+                    reply.data(&bytes[start..end]);
+                } else {
+                    reply.data(&[]);
+                }
+                return;
+            } else {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        }
 
         // Get content from handle or fall back to direct read
         let handles = self.file_handles.read();
@@ -1081,7 +1286,7 @@ impl Filesystem for SssFS {
     fn write(
         &mut self,
         _req: &Request,
-        _ino: u64,
+        ino: u64,
         fh: u64,
         offset: i64,
         data: &[u8],
@@ -1090,6 +1295,12 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
+        // Block writes to synthetic files
+        if ino == SYNTHETIC_GIT_FD_INO || ino == SYNTHETIC_GIT_DIR_INO {
+            reply.error(libc::EPERM);
+            return;
+        }
+
         let mut handles = self.file_handles.write();
         let handle = match handles.get_mut(&fh) {
             Some(h) => h,
@@ -1101,6 +1312,12 @@ impl Filesystem for SssFS {
 
         if !handle.writable {
             reply.error(libc::EBADF);
+            return;
+        }
+
+        // Block writes to .git/* (check path)
+        if handle.path.starts_with(".git/") || handle.path.starts_with(".git") {
+            reply.error(libc::EPERM);
             return;
         }
 
@@ -1400,6 +1617,12 @@ impl Filesystem for SssFS {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
+        // Block creation in synthetic .git directory
+        if parent == SYNTHETIC_GIT_DIR_INO {
+            reply.error(libc::EPERM);
+            return;
+        }
+
         // Get parent directory path
         let parent_entry = match self.get_inode(parent) {
             Some(e) => e,
@@ -1408,6 +1631,12 @@ impl Filesystem for SssFS {
                 return;
             }
         };
+
+        // Block creation under .git/
+        if parent_entry.path.starts_with(".git") || parent_entry.path == Path::new(".git") {
+            reply.error(libc::EPERM);
+            return;
+        }
 
         let parent_path = self.real_path(&parent_entry.path);
         let file_path = parent_path.join(name);
@@ -1423,12 +1652,13 @@ impl Filesystem for SssFS {
         };
 
         // Create file via fd with O_CREAT | O_EXCL
+        // Use 0o600 for security - files may contain rendered secrets
         let fd = unsafe {
             libc::openat(
                 self.source_fd,
                 path_cstr.as_ptr(),
                 libc::O_CREAT | libc::O_WRONLY | libc::O_EXCL | flags,
-                0o644,
+                0o600,
             )
         };
 
@@ -1467,6 +1697,12 @@ impl Filesystem for SssFS {
 
     /// Remove a file
     fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        // Block deletion from synthetic .git directory
+        if parent == SYNTHETIC_GIT_DIR_INO {
+            reply.error(libc::EPERM);
+            return;
+        }
+
         let parent_entry = match self.get_inode(parent) {
             Some(e) => e,
             None => {
@@ -1474,6 +1710,12 @@ impl Filesystem for SssFS {
                 return;
             }
         };
+
+        // Block deletion under .git/
+        if parent_entry.path.starts_with(".git") || parent_entry.path == Path::new(".git") {
+            reply.error(libc::EPERM);
+            return;
+        }
 
         let parent_path = self.real_path(&parent_entry.path);
         let file_path = parent_path.join(name);
@@ -1510,6 +1752,12 @@ impl Filesystem for SssFS {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
+        // Block rename involving synthetic .git directory
+        if parent == SYNTHETIC_GIT_DIR_INO || newparent == SYNTHETIC_GIT_DIR_INO {
+            reply.error(libc::EPERM);
+            return;
+        }
+
         let old_parent_entry = match self.get_inode(parent) {
             Some(e) => e,
             None => {
@@ -1525,6 +1773,14 @@ impl Filesystem for SssFS {
                 return;
             }
         };
+
+        // Block rename involving .git/
+        let old_is_git = old_parent_entry.path.starts_with(".git") || old_parent_entry.path == Path::new(".git");
+        let new_is_git = new_parent_entry.path.starts_with(".git") || new_parent_entry.path == Path::new(".git");
+        if old_is_git || new_is_git {
+            reply.error(libc::EPERM);
+            return;
+        }
 
         let old_parent_path = self.real_path(&old_parent_entry.path);
         let new_parent_path = self.real_path(&new_parent_entry.path);
@@ -1627,6 +1883,12 @@ impl Drop for SssFS {
         // Close the source directory file descriptor
         unsafe {
             libc::close(self.source_fd);
+        }
+        // Close the mount point directory file descriptor if present
+        if let Some(mount_fd) = self.mount_fd {
+            unsafe {
+                libc::close(mount_fd);
+            }
         }
     }
 }

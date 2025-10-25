@@ -13,8 +13,9 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 
 use crate::{
-    commands::utils, config::load_project_config_with_repository_key, editor::launch_editor,
-    validation::validate_file_path, Processor,
+    commands::utils, config::load_project_config_with_repository_key,
+    constants::{ERR_STDIN_EDIT, ERR_STDIN_IN_PLACE},
+    editor::launch_editor, validation::validate_file_path, Processor,
 };
 
 /// Check if a file is on a FUSE filesystem
@@ -49,7 +50,7 @@ fn handle_stdin_process(matches: &ArgMatches) -> Result<()> {
 
     // in-place and edit don't make sense for stdin
     if matches.get_flag("in-place") {
-        return Err(anyhow!("Cannot use --in-place with stdin"));
+        return Err(anyhow!(ERR_STDIN_IN_PLACE));
     }
     if matches.get_flag("edit") {
         return Err(anyhow!("Cannot use --edit with stdin"));
@@ -189,7 +190,7 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
     // Handle stdin
     if file_path_str == "-" {
         if in_place {
-            return Err(anyhow!("Cannot use --in-place with stdin"));
+            return Err(anyhow!(ERR_STDIN_IN_PLACE));
         }
 
         let mut input = String::new();
@@ -434,7 +435,7 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
 
     if file_path_str == "-" {
-        return Err(anyhow!("Cannot use edit mode with stdin"));
+        return Err(anyhow!(ERR_STDIN_EDIT));
     }
 
     let file_path = validate_file_path(file_path_str)?;

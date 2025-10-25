@@ -35,7 +35,6 @@ sss-master/
 
 # Packaging and build infrastructure
 /debian/
-/rpm-build/
 /dist/
 
 # Examples and demos

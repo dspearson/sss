@@ -1,4 +1,6 @@
 pub mod agent;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
+pub mod git;
 pub mod hooks;
 pub mod init;
 pub mod keys;
@@ -14,6 +16,8 @@ pub mod users;
 pub mod utils;
 
 pub use agent::handle_agent;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
+pub use git::handle_git;
 pub use hooks::handle_hooks;
 pub use init::handle_init;
 pub use keys::{handle_keygen_deprecated, handle_keys};

@@ -242,8 +242,12 @@ impl SssNinepFS {
     }
 
     /// Write content directly (no processing)
+    /// Uses secure permissions (0o600) as files may contain rendered secrets
     async fn write_raw(&self, path: &Path, content: &[u8]) -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         fs::write(path, content).await?;
+        // Set restrictive permissions after write
+        fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
         Ok(())
     }
 
@@ -256,9 +260,11 @@ impl SssNinepFS {
         let processor = self.processor.read().await;
         let sealed_content = processor.encrypt_content(&opened_str)?;
 
-        // Write atomically via temp file
+        // Write atomically via temp file with secure permissions
+        use std::os::unix::fs::PermissionsExt;
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, sealed_content.as_bytes()).await?;
+        fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600)).await?;
         fs::rename(&temp_path, path).await?;
 
         Ok(())
@@ -298,9 +304,11 @@ impl SssNinepFS {
         // 4. Seal the reconstructed content
         let sealed_new = processor.encrypt_content(&reconstructed)?;
 
-        // 5. Write atomically
+        // 5. Write atomically with secure permissions
+        use std::os::unix::fs::PermissionsExt;
         let temp_path = path.with_extension("tmp");
         fs::write(&temp_path, sealed_new.as_bytes()).await?;
+        fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o600)).await?;
         fs::rename(&temp_path, path).await?;
 
         Ok(())

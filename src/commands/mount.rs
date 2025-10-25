@@ -74,8 +74,11 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
     // Load project config and create processor
     let (_config, processor) = load_processor_for_source(&source_path)?;
 
-    // Create FUSE filesystem
-    let fs = SssFS::new(source_path.clone(), processor)?;
+    // Canonicalize mountpoint for fd holding
+    let mountpoint_canonical = std::fs::canonicalize(&mountpoint_path)?;
+
+    // Create FUSE filesystem with mount point fd
+    let fs = SssFS::new(source_path.clone(), processor, Some(mountpoint_canonical))?;
 
     if in_place {
         eprintln!("Mounting in-place (overlay): {}", source_path.display());
@@ -84,6 +87,14 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
         eprintln!("Mounting {} at {}", source, mountpoint);
         eprintln!("Source: {}", source_path.display());
         eprintln!("Mountpoint: {}", mountpoint_path.display());
+    }
+
+    // Print mount fd information for /proc access
+    if let Some(mount_fd) = fs.get_mount_fd() {
+        eprintln!();
+        eprintln!("Mount point file descriptor: {}", mount_fd);
+        eprintln!("Access underlying directory: /proc/$$/fd/{}", mount_fd);
+        eprintln!("  (where $$ is the FUSE server process PID)");
     }
 
     if foreground {
@@ -114,6 +125,14 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
                     eprintln!("Mounted in-place (overlay): {}", source);
                 } else {
                     eprintln!("Mounted {} at {}", source, mountpoint);
+                }
+                // Print /proc access information with actual PID
+                if let Some(mount_fd) = fs.get_mount_fd() {
+                    eprintln!();
+                    eprintln!("Access underlying directory:");
+                    eprintln!("  /proc/{}/fd/{}", pid, mount_fd);
+                    eprintln!("Or from any process:");
+                    eprintln!("  ls -la /proc/{}/fd/{}", pid, mount_fd);
                 }
                 std::process::exit(0);
             }

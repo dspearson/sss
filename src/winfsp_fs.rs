@@ -290,6 +290,8 @@ impl SssWinFsp {
     }
 
     /// Write raw content directly to backing store (no sss processing)
+    /// Note: Windows doesn't support Unix-style chmod permissions.
+    /// Files inherit ACLs from parent directory. Consider setting Windows ACLs for enhanced security.
     fn write_raw_to_backing(&self, path: &Path, content: &[u8]) -> Result<()> {
         fs::write(path, content)?;
         Ok(())

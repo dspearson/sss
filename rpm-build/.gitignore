@@ -1,0 +1,9 @@
+# RPM build artifacts
+rpmbuild/
+*.rpm
+*.tar.gz
+Dockerfile.*
+
+# Temporary files
+*.tmp
+*.log

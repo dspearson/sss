@@ -40,3 +40,8 @@ pub const ERR_STDIN_EDIT: &str = "Cannot use edit mode with stdin";
 pub const ERR_FILE_NOT_FOUND: &str = "File does not exist";
 pub const ERR_KEYPAIR_EXISTS: &str = "A keypair already exists. Use --force to overwrite.";
 pub const ERR_EDITOR_FAILED: &str = "Editor exited with non-zero status";
+
+// Helper function for user not found error
+pub fn err_user_not_found(username: &str) -> String {
+    format!("User '{}' not found in project", username)
+}

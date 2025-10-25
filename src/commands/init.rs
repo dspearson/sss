@@ -2,10 +2,9 @@ use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 
 use crate::{
-    commands::utils::{create_keystore, get_system_username},
+    commands::utils::{create_keystore, get_keypair_with_optional_password, get_system_username},
     config::init_project_config,
     constants::CONFIG_FILE_NAME,
-    secure_memory::password,
     validation::validate_username,
 };
 
@@ -26,42 +25,20 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
 
     // Check if user has a current keypair (MUST exist, no generation)
     let keystore = create_keystore(main_matches)?;
-    let keypair = match keystore.get_current_keypair(None) {
+    let keypair = match get_keypair_with_optional_password(
+        &keystore,
+        "Enter passphrase for existing keypair (or press Enter if none): ",
+    ) {
         Ok(keypair) => {
             println!("Using existing keypair for project initialization");
             keypair
         }
         Err(_) => {
-            // Key exists but is password protected - ask for password
-            let password = password::read_password(
-                "Enter passphrase for existing keypair (or press Enter if none): ",
-            )?;
-
-            if password.is_empty() {
-                // User pressed Enter, try again without password
-                match keystore.get_current_keypair(None) {
-                    Ok(keypair) => keypair,
-                    Err(_) => {
-                        return Err(anyhow!(
-                            "No keypair found.\n\
-                            Generate a keypair first with: sss keys generate\n\
-                            Or for passwordless keys: sss keys generate --no-password"
-                        ));
-                    }
-                }
-            } else {
-                // User provided a password
-                match keystore.get_current_keypair(Some(password.as_str()?)) {
-                    Ok(keypair) => keypair,
-                    Err(_) => {
-                        return Err(anyhow!(
-                            "Incorrect passphrase or no keypair found.\n\
-                            Generate a keypair first with: sss keys generate\n\
-                            Or for passwordless keys: sss keys generate --no-password"
-                        ));
-                    }
-                }
-            }
+            return Err(anyhow!(
+                "No keypair found.\n\
+                Generate a keypair first with: sss keys generate\n\
+                Or for passwordless keys: sss keys generate --no-password"
+            ));
         }
     };
 

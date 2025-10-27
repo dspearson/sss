@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.1.0
+Version:        1.1.4
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -12,13 +12,12 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  libsodium-devel >= 1.0.18
 BuildRequires:  gcc
-BuildRequires:  fuse-devel
-BuildRequires:  fuse
+BuildRequires:  fuse3-devel
+BuildRequires:  fuse3
 # Note: rust and cargo installed via rustup in container builds
 
 Requires:       libsodium >= 1.0.18
-Requires:       fuse-devel
-Requires:       fuse
+Requires:       fuse3
 
 %description
 SSS (Secret String Substitution) is a command-line tool for transparent

@@ -1,6 +1,9 @@
 #!/usr/bin/env perl
 # sss pre-commit hook
-# 1. First seals all files with plaintext markers (in-place)
+# 1. First seals all files with plaintext/secrets markers (in-place)
+#    - Handles ⊕{...}, o+{...}, <{...}, and ⊲{...} markers
+#    - Automatically seals .secrets files and files named "secrets"
+#    - Supports nested braces in JSON/YAML
 # 2. Then verifies no security violations (encrypted -> rendered with no markers)
 
 use strict;
@@ -21,47 +24,48 @@ unless ($in_sss_repo) {
     exit 0;
 }
 
-# STEP 1: Seal all files with plaintext markers FIRST
-print STDERR "Sealing files with plaintext markers...\n";
+# STEP 1: Seal all staged files
+print STDERR "Normalizing staged files...\n";
 
-my @all_files = `git ls-files`;
-chomp(@all_files);
+my @staged_files = `git diff --cached --name-only --diff-filter=AM`;
+chomp(@staged_files);
 
 my $sealed_count = 0;
 my $failed_count = 0;
+my @sealed_files = ();
 
-foreach my $file (@all_files) {
+foreach my $file (@staged_files) {
     chomp $file;
     next unless -f $file;
 
     # Skip binary files
     next if -B $file;
 
-    # Read file content to check for plaintext markers
-    open(my $fh, '<', $file) or do {
-        print STDERR "Warning: Cannot read $file: $!\n";
-        next;
-    };
-    my $content = do { local $/; <$fh> };
-    close($fh);
+    # Skip the hook file itself
+    next if $file =~ /githooks\/pre-commit$/;
 
-    # Check if file has plaintext markers: ⊕{...} or o+{...}
-    if ($content =~ /(?:⊕|o\+)\{/) {
-        # File has plaintext markers, seal it
-        my $result = system("sss seal '$file' -x 2>&1");
-        if ($result == 0) {
+    # Run sss seal on the file (normalizes markers and seals plaintext)
+    my $result = system("sss seal '$file' -x 2>&1");
+    if ($result == 0) {
+        # Check if file was actually modified
+        my $changed = `git diff '$file'`;
+        if ($changed) {
             $sealed_count++;
+            push @sealed_files, $file;
             # Re-add the file to staging since it was modified
             system("git add '$file'");
-        } else {
-            print STDERR "Error: Failed to seal $file\n";
-            $failed_count++;
         }
+    } else {
+        print STDERR "Error: Failed to seal $file\n";
+        $failed_count++;
     }
 }
 
 if ($sealed_count > 0) {
-    print STDERR "Sealed $sealed_count file(s) with plaintext markers\n";
+    print STDERR "Auto-sealed $sealed_count staged file(s):\n";
+    foreach my $file (@sealed_files) {
+        print STDERR "  ✓ $file\n";
+    }
 }
 
 if ($failed_count > 0) {

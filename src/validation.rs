@@ -162,25 +162,6 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // RAII guard to ensure current directory is restored after test
-    struct DirGuard {
-        original: std::path::PathBuf,
-    }
-
-    impl DirGuard {
-        fn new() -> std::io::Result<Self> {
-            Ok(Self {
-                original: std::env::current_dir()?,
-            })
-        }
-    }
-
-    impl Drop for DirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.original);
-        }
-    }
-
     #[test]
     fn test_validate_username() {
         // Valid usernames

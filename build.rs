@@ -46,9 +46,8 @@ fn main() {
 
                 println!("cargo:warning=Successfully patched rust-9p");
             }
-        } else {
-            println!("cargo:warning=pfpacket/rust-9p already exists at vendor/rust-9p");
         }
+        // Note: vendor/rust-9p already exists (no action needed)
 
     // Tell cargo to rerun if the vendor directory changes
     println!("cargo:rerun-if-changed=vendor/rust-9p");

@@ -12,6 +12,14 @@ linker = "armv7l-linux-musleabihf-gcc"
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 
+[target.aarch64-apple-darwin]
+linker = "aarch64-apple-darwin23.5-clang"
+ar = "aarch64-apple-darwin23.5-ar"
+
+[target.x86_64-apple-darwin]
+linker = "x86_64-apple-darwin23.5-clang"
+ar = "x86_64-apple-darwin23.5-ar"
+
 # Environment variables for cross-compilation
 [env]
 CC_x86_64_unknown_linux_musl = "x86_64-linux-musl-gcc"
@@ -25,3 +33,11 @@ AR_aarch64_unknown_linux_musl = "aarch64-linux-musl-ar"
 CC_armv7_unknown_linux_musleabihf = "armv7l-linux-musleabihf-gcc"
 CXX_armv7_unknown_linux_musleabihf = "armv7l-linux-musleabihf-g++"
 AR_armv7_unknown_linux_musleabihf = "armv7l-linux-musleabihf-ar"
+
+CC_aarch64_apple_darwin = "aarch64-apple-darwin23.5-clang"
+CXX_aarch64_apple_darwin = "aarch64-apple-darwin23.5-clang++"
+AR_aarch64_apple_darwin = "aarch64-apple-darwin23.5-ar"
+
+CC_x86_64_apple_darwin = "x86_64-apple-darwin23.5-clang"
+CXX_x86_64_apple_darwin = "x86_64-apple-darwin23.5-clang++"
+AR_x86_64_apple_darwin = "x86_64-apple-darwin23.5-ar"

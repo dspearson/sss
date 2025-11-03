@@ -18,7 +18,7 @@ use crate::{
     editor::launch_editor, validation::validate_file_path, Processor,
 };
 
-/// Check if a file is on a FUSE filesystem
+/// Check if a file is on a FUSE filesystem (Linux)
 #[cfg(target_os = "linux")]
 fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     use std::mem;
@@ -39,7 +39,32 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Check if a file is on a FUSE filesystem (macOS)
+#[cfg(target_os = "macos")]
+fn is_fuse_mount(file_path: &Path) -> Result<bool> {
+    use std::ffi::CString;
+    use std::mem;
+
+    let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
+
+    unsafe {
+        let mut stat: libc::statfs = mem::zeroed();
+        let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
+
+        if result != 0 {
+            return Err(anyhow!("Failed to stat filesystem"));
+        }
+
+        // On macOS, check if the filesystem type name contains "fuse" or "osxfuse" or "macfuse"
+        let fs_typename = std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr())
+            .to_string_lossy()
+            .to_lowercase();
+
+        Ok(fs_typename.contains("fuse") || fs_typename.contains("osxfuse") || fs_typename.contains("macfuse"))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn is_fuse_mount(_file_path: &Path) -> Result<bool> {
     Ok(false)
 }
@@ -251,7 +276,7 @@ pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 
 /// Handle 'edit' command - edit file with automatic encrypt/decrypt
 /// Edit file on FUSE mount using opened mode protocol
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
     use std::os::unix::fs::OpenOptionsExt;
     use std::io::{Read, Write, Seek, SeekFrom};
@@ -305,7 +330,7 @@ fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
     Ok(())
 }
 
-/// Create secure temp file path in /dev/shm or /tmp
+/// Create secure temp file path in /dev/shm (Linux) or /tmp (macOS)
 #[cfg(target_os = "linux")]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -317,6 +342,15 @@ fn create_secure_temp_path(file_path: &Path) -> Result<String> {
         eprintln!("[WARN] /dev/shm not available, using /tmp (insecure!)");
         Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
     }
+}
+
+/// Create secure temp file path in /tmp (macOS)
+#[cfg(target_os = "macos")]
+fn create_secure_temp_path(file_path: &Path) -> Result<String> {
+    let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+    // On macOS, /tmp is more secure than on Linux (cleared on reboot, per-user isolation)
+    Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
 }
 
 /// Write content to temp file with secure permissions
@@ -406,14 +440,14 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // Dispatch to appropriate handler based on mount type
     if is_fuse_mount(&file_path).unwrap_or(false) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             handle_edit_fuse(&file_path, &processor)
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            Err(anyhow!("FUSE editing is only available on Linux"))
+            Err(anyhow!("FUSE editing is only available on Linux and macOS"))
         }
     } else {
         handle_edit_regular(&file_path, &processor)
@@ -426,7 +460,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_is_fuse_mount_non_fuse_path() {
         // Test with a regular non-FUSE path
         let path = PathBuf::from("/tmp");
@@ -438,9 +472,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn test_is_fuse_mount_non_linux() {
-        // On non-Linux, always returns false
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn test_is_fuse_mount_non_unix() {
+        // On non-Linux/macOS, always returns false
         let path = PathBuf::from("/tmp/test");
         let result = is_fuse_mount(&path);
 
@@ -449,6 +483,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_create_secure_temp_path() {
         // Test that secure temp path generation works
         let file_path = PathBuf::from("/tmp/test_file.txt");
@@ -457,7 +492,8 @@ mod tests {
         assert!(result.is_ok());
         let temp_path = result.unwrap();
 
-        // Should use /dev/shm if available, otherwise /tmp
+        // Linux: should use /dev/shm if available, otherwise /tmp
+        // macOS: always uses /tmp
         assert!(temp_path.starts_with("/dev/shm/.sss-edit-") || temp_path.starts_with("/tmp/.sss-edit-"));
         assert!(temp_path.contains("test_file.txt"));
         // Should include process ID

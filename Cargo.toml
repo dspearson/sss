@@ -8,6 +8,7 @@ authors = ["Dominic Pearson <dsp@technoanimal.net"]
 [features]
 default = []
 fuse = ["dep:fuser", "dep:parking_lot"]
+macfuse = ["fuse"]  # macFUSE support on macOS (uses same dependencies as Linux FUSE)
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
 ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
 

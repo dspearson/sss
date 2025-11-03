@@ -155,6 +155,10 @@ pub struct SssFS {
     /// File descriptor to mount point directory (held open before mount for /proc access)
     /// Allows accessing the underlying directory via /proc/self/fd/<mount_fd> even after FUSE mount
     mount_fd: Option<std::os::unix::io::RawFd>,
+    /// UID of the process running FUSE (for synthetic directories)
+    uid: u32,
+    /// GID of the process running FUSE (for synthetic directories)
+    gid: u32,
     /// Processor for encryption/decryption operations
     processor: Processor,
     /// Inode table: maps inode number to path information
@@ -288,10 +292,16 @@ impl SssFS {
             },
         ];
 
+        // Get current process uid/gid for synthetic directories
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+
         Ok(Self {
             source_path,
             source_fd,
             mount_fd,
+            uid,
+            gid,
             processor,
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
@@ -333,13 +343,9 @@ impl SssFS {
 
     /// Find the pinned path that matches the given virtual path (longest prefix match)
     fn find_pinned_path(&self, virtual_path: &Path) -> &PinnedPath {
-        eprintln!("[DEBUG] find_pinned_path: looking for {:?}", virtual_path);
-
         // Longest prefix match - more specific paths come first in the vec
         for pinned in &self.pinned_paths {
             if virtual_path.starts_with(&pinned.virtual_prefix) {
-                eprintln!("[DEBUG] find_pinned_path: matched {:?} -> {:?}",
-                    virtual_path, pinned.virtual_prefix);
                 return pinned;
             }
         }
@@ -373,19 +379,7 @@ impl SssFS {
             source_path.strip_prefix("/").unwrap_or(&source_path).to_path_buf()
         };
 
-        eprintln!("[DEBUG] translate_virtual_to_source: {:?} -> {:?} (pinned: {:?})",
-            virtual_path, source_rel, pinned.virtual_prefix);
-
         (source_rel, pinned)
-    }
-
-    /// Get the real path for a given virtual path
-    fn real_path(&self, virtual_path: &Path) -> PathBuf {
-        if virtual_path == Path::new("/") {
-            self.source_path.clone()
-        } else {
-            self.source_path.join(virtual_path.strip_prefix("/").unwrap())
-        }
     }
 
     /// Get or create an inode for a path
@@ -393,7 +387,6 @@ impl SssFS {
         // Check if we already have this path
         let path_map = self.path_to_ino.read();
         if let Some(&ino) = path_map.get(virtual_path) {
-            eprintln!("[DEBUG] get_or_create_inode: existing ino={} for path={:?}", ino, virtual_path);
             return ino;
         }
         drop(path_map);
@@ -409,8 +402,6 @@ impl SssFS {
             path: virtual_path.to_path_buf(),
             parent: parent_ino,
         };
-
-        eprintln!("[DEBUG] get_or_create_inode: created ino={} for path={:?} parent={}", ino, virtual_path, parent_ino);
 
         self.inode_table.write().insert(ino, entry);
         self.path_to_ino.write().insert(virtual_path.to_path_buf(), ino);
@@ -568,8 +559,6 @@ impl SssFS {
         let path_bytes = rel_path.as_os_str().as_bytes();
         let path_cstr = std::ffi::CString::new(path_bytes)?;
 
-        eprintln!("[DEBUG] metadata_via_fd: rel_path={:?}", rel_path);
-
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
 
         let result = unsafe {
@@ -578,13 +567,11 @@ impl SssFS {
 
         if result < 0 {
             let err = std::io::Error::last_os_error();
-            eprintln!("[DEBUG] metadata_via_fd: fstatat failed for {:?}: {}", rel_path, err);
             return Err(anyhow!("Failed to stat file: {}", err));
         }
 
         // Determine if this is a directory from the stat result
         let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
-        eprintln!("[DEBUG] metadata_via_fd: is_dir={} for {:?}", is_dir, rel_path);
 
         // Open with appropriate flags based on file type
         // Directories need O_DIRECTORY, files need O_RDONLY
@@ -601,13 +588,11 @@ impl SssFS {
 
         if fd < 0 {
             let err = std::io::Error::last_os_error();
-            eprintln!("[DEBUG] metadata_via_fd: openat failed for {:?}: {}", rel_path, err);
             return Err(anyhow!("Failed to open file for metadata: {}", err));
         }
 
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
         let metadata = file.metadata()?;
-        eprintln!("[DEBUG] metadata_via_fd: success for {:?}", rel_path);
         Ok(metadata)
     }
 
@@ -1093,18 +1078,14 @@ impl SssFS {
     /// Resolve entry path to relative path suitable for fd operations
     /// Handles prefix stripping and empty path conversion to "."
     fn resolve_rel_path(&self, entry_path: &Path) -> std::borrow::Cow<'static, Path> {
-        eprintln!("[DEBUG] resolve_rel_path: entry_path={:?}", entry_path);
-
         // Use translate_virtual_to_source to properly handle .overlay/ paths
         let (source_rel_path, _pinned) = self.translate_virtual_to_source(entry_path);
-        eprintln!("[DEBUG] resolve_rel_path: source_rel_path={:?}", source_rel_path);
 
         let result = if source_rel_path.as_os_str().is_empty() {
             std::borrow::Cow::Borrowed(Path::new("."))
         } else {
             std::borrow::Cow::Owned(source_rel_path)
         };
-        eprintln!("[DEBUG] resolve_rel_path: final result={:?}", result);
         result
     }
 }
@@ -1112,8 +1093,6 @@ impl SssFS {
 impl Filesystem for SssFS {
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        eprintln!("[DEBUG] getattr: CALLED with ino={}", ino);
-
         // Handle synthetic .overlay directory
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             // Get attributes from the actual source directory
@@ -1130,8 +1109,8 @@ impl Filesystem for SssFS {
                         kind: FileType::Directory,
                         perm: 0o755,  // rwxr-xr-x
                         nlink: 2,
-                        uid: Self::get_uid(&metadata),
-                        gid: Self::get_gid(&metadata),
+                        uid: self.uid,
+                        gid: self.gid,
                         rdev: 0,
                         blksize: 512,
                         flags: 0,
@@ -1148,18 +1127,15 @@ impl Filesystem for SssFS {
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
-                eprintln!("[DEBUG] getattr: inode {} not found", ino);
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
-        eprintln!("[DEBUG] getattr: ino={} path={:?}", ino, entry.path);
 
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
 
-        eprintln!("[DEBUG] getattr: source_rel_path={:?}", source_rel_path);
 
         match self.metadata_via_fd(&source_rel_path) {
             Ok(metadata) => {
@@ -1213,8 +1189,7 @@ impl Filesystem for SssFS {
 
                 reply.attr(&TTL, &attr);
             }
-            Err(e) => {
-                eprintln!("[DEBUG] getattr: metadata_via_fd failed: {}", e);
+            Err(_) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1222,11 +1197,9 @@ impl Filesystem for SssFS {
 
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        eprintln!("[DEBUG] lookup: CALLED parent={} name={:?}", parent, name);
 
         // Special case: looking up ".overlay" from root
         if parent == ROOT_INO && name == ".overlay" {
-            eprintln!("[DEBUG] lookup: Handling synthetic .overlay directory");
             let attr = FileAttr {
                 ino: SYNTHETIC_OVERLAY_DIR_INO,
                 size: 0,
@@ -1238,8 +1211,8 @@ impl Filesystem for SssFS {
                 kind: FileType::Directory,
                 perm: 0o755,
                 nlink: 2,
-                uid: 1000,
-                gid: 1000,
+                uid: self.uid,
+                gid: self.gid,
                 rdev: 0,
                 blksize: 512,
                 flags: 0,
@@ -1261,14 +1234,12 @@ impl Filesystem for SssFS {
             match self.get_inode(parent) {
                 Some(e) => e,
                 None => {
-                    eprintln!("[DEBUG] lookup: parent inode {} not found", parent);
                     reply.error(libc::ENOENT);
                     return;
                 }
             }
         };
 
-        eprintln!("[DEBUG] lookup: parent path={:?}", parent_entry.path);
 
         // Parse virtual file mode (.sss-sealed, .sss-opened, or normal)
         let (actual_name, file_mode) = Self::parse_virtual_file_mode(name);
@@ -1281,12 +1252,10 @@ impl Filesystem for SssFS {
             parent_entry.path.join(&actual_name)
         };
 
-        eprintln!("[DEBUG] lookup: virtual_path={:?}", virtual_path);
 
         // Translate to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
 
-        eprintln!("[DEBUG] lookup: source_rel_path={:?}", source_rel_path);
 
         // Check if should hide (only for normal SSS paths, not passthrough)
         if pinned.virtual_prefix != Path::new("/.overlay") {
@@ -1350,8 +1319,7 @@ impl Filesystem for SssFS {
                 let ttl = if is_passthrough { &TTL_ZERO } else { &TTL };
                 reply.entry(ttl, &attr, 0);
             }
-            Err(e) => {
-                eprintln!("[DEBUG] lookup: metadata_via_fd failed: {}", e);
+            Err(_) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1366,7 +1334,6 @@ impl Filesystem for SssFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        eprintln!("[DEBUG] readdir: CALLED ino={}", ino);
 
         // Handle .overlay/ - parent is synthetic, build entry manually
         let entry = if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1380,27 +1347,23 @@ impl Filesystem for SssFS {
             match self.get_inode(ino) {
                 Some(e) => e,
                 None => {
-                    eprintln!("[DEBUG] readdir: inode {} not found", ino);
                     reply.error(libc::ENOENT);
                     return;
                 }
             }
         };
 
-        eprintln!("[DEBUG] readdir: path={:?}", entry.path);
 
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
         // Clone the operations Arc to avoid holding a borrow on self
         let operations = pinned.operations.clone();
 
-        eprintln!("[DEBUG] readdir: source_rel_path={:?}", source_rel_path);
 
         // Open directory via FD
         let dir_ptr = match self.open_dir_fd(&source_rel_path) {
             Ok(p) => p,
-            Err(e) => {
-                eprintln!("[DEBUG] readdir: open_dir_fd failed: {}", e);
+            Err(_e) => {
                 reply.error(libc::EIO);
                 return;
             }
@@ -1436,7 +1399,6 @@ impl Filesystem for SssFS {
 
     /// Open a file
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        eprintln!("[DEBUG] open: CALLED ino={}", ino);
 
         // Block operations on .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1452,13 +1414,11 @@ impl Filesystem for SssFS {
             }
         };
 
-        eprintln!("[DEBUG] open: path={:?}", entry.path);
 
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
         let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
 
-        eprintln!("[DEBUG] open: source_rel_path={:?} is_passthrough={}", source_rel_path, is_passthrough);
 
         // Determine file modes (not applicable for passthrough files)
         // Opened mode: detected by nonsense flag combination O_DIRECTORY|O_CREAT
@@ -1554,13 +1514,9 @@ impl Filesystem for SssFS {
 
             if fd < 0 {
                 let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                eprintln!("[ERROR] open: Failed to open fd for passthrough file: {}", std::io::Error::last_os_error());
                 reply.error(errno);
                 return;
             }
-
-            eprintln!("[DEBUG] open: Opened passthrough fd={} for path={:?} flags={:#x}",
-                     fd, file_path, open_flags);
 
             Some(fd)
         } else {
@@ -1589,14 +1545,13 @@ impl Filesystem for SssFS {
                               !is_sealed_mode;
 
         if should_truncate {
-            eprintln!("[DEBUG] open: Truncating file due to O_TRUNC flag");
             // Truncate the file on disk immediately
-            if let Err(e) = std::fs::OpenOptions::new()
+            if std::fs::OpenOptions::new()
                 .write(true)
                 .truncate(true)
                 .open(&file_path)
+                .is_err()
             {
-                eprintln!("[ERROR] open: Failed to truncate file: {}", e);
                 reply.error(libc::EIO);
                 return;
             }
@@ -1748,14 +1703,10 @@ impl Filesystem for SssFS {
             let fd = match handle.passthrough_fd {
                 Some(fd) => fd,
                 None => {
-                    eprintln!("[ERROR] write: Passthrough file has no fd! path={:?}", handle.path);
                     reply.error(libc::EIO);
                     return;
                 }
             };
-
-            eprintln!("[DEBUG] write: Passthrough write fd={} offset={} len={} path={:?}",
-                     fd, offset, data.len(), handle.path);
 
             // Use pwrite() for atomic seek+write operation
             // Note: pwrite() may do partial writes, but FUSE handles retries,
@@ -1771,18 +1722,15 @@ impl Filesystem for SssFS {
 
             if bytes_written < 0 {
                 let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                eprintln!("[ERROR] write: pwrite failed: {}", std::io::Error::last_os_error());
                 reply.error(errno);
                 return;
             }
 
             if bytes_written == 0 && !data.is_empty() {
-                eprintln!("[ERROR] write: pwrite returned 0 bytes for non-empty write");
                 reply.error(libc::EIO);
                 return;
             }
 
-            eprintln!("[DEBUG] write: Passthrough write succeeded, wrote {} bytes", bytes_written);
             reply.written(bytes_written as u32);
             return;
         }
@@ -1959,8 +1907,8 @@ impl Filesystem for SssFS {
                         kind: FileType::Directory,
                         perm: 0o755,
                         nlink: 2,
-                        uid: Self::get_uid(&metadata),
-                        gid: Self::get_gid(&metadata),
+                        uid: self.uid,
+                        gid: self.gid,
                         rdev: 0,
                         blksize: 512,
                         flags: 0,
@@ -2084,16 +2032,11 @@ impl Filesystem for SssFS {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        eprintln!("[DEBUG] fsync: CALLED fh={} datasync={}", fh, datasync);
 
         // For passthrough files with an fd, sync to flush mmap writes
         let handles = self.file_handles.read();
         if let Some(handle) = handles.get(&fh) {
-            eprintln!("[DEBUG] fsync: Found handle, origin_mode={} passthrough_fd={:?} path={:?}",
-                     handle.origin_mode, handle.passthrough_fd, handle.path);
-
             if let Some(fd) = handle.passthrough_fd {
-                eprintln!("[DEBUG] fsync: Syncing passthrough fd={}", fd);
                 let result = if datasync {
                     unsafe { libc::fdatasync(fd) }
                 } else {
@@ -2102,11 +2045,9 @@ impl Filesystem for SssFS {
 
                 if result < 0 {
                     let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                    eprintln!("[ERROR] fsync: failed for passthrough fd={}: {}", fd, std::io::Error::last_os_error());
                     reply.error(errno);
                     return;
                 }
-                eprintln!("[DEBUG] fsync: Successfully synced fd={}", fd);
             }
         }
 
@@ -2115,11 +2056,9 @@ impl Filesystem for SssFS {
 
     /// Check file access permissions
     fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
-        eprintln!("[DEBUG] access: CALLED ino={} mask={}", ino, mask);
 
         // Handle synthetic directories
         if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
-            eprintln!("[DEBUG] access: Allowing access to synthetic directory");
             reply.ok();
             return;
         }
@@ -2127,7 +2066,6 @@ impl Filesystem for SssFS {
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
-                eprintln!("[DEBUG] access: inode {} not found", ino);
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -2156,11 +2094,8 @@ impl Filesystem for SssFS {
         };
 
         if result == 0 {
-            eprintln!("[DEBUG] access: OK for path={:?} mask={}", source_rel_path, mask);
             reply.ok();
         } else {
-            let err = std::io::Error::last_os_error();
-            eprintln!("[DEBUG] access: DENIED for path={:?} mask={}: {}", source_rel_path, mask, err);
             reply.error(libc::EACCES);
         }
     }
@@ -2174,26 +2109,19 @@ impl Filesystem for SssFS {
         _lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
-        eprintln!("[DEBUG] flush: CALLED fh={}", fh);
 
         // For passthrough files, sync to flush any mmap'd writes
         let handles = self.file_handles.read();
         if let Some(handle) = handles.get(&fh) {
-            eprintln!("[DEBUG] flush: Found handle, origin_mode={} passthrough_fd={:?} path={:?}",
-                     handle.origin_mode, handle.passthrough_fd, handle.path);
-
             if let Some(fd) = handle.passthrough_fd {
-                eprintln!("[DEBUG] flush: Syncing passthrough fd={}", fd);
                 // Use fdatasync for better performance (only data, not metadata)
                 let result = unsafe { libc::fdatasync(fd) };
 
                 if result < 0 {
                     let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                    eprintln!("[ERROR] flush: fdatasync failed for passthrough fd={}: {}", fd, std::io::Error::last_os_error());
                     reply.error(errno);
                     return;
                 }
-                eprintln!("[DEBUG] flush: Successfully synced fd={}", fd);
             }
             reply.ok();
         } else {
@@ -2212,7 +2140,6 @@ impl Filesystem for SssFS {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        eprintln!("[DEBUG] create: CALLED parent={} name={:?} flags={:#x}", parent, name, flags);
 
         // Handle .overlay synthetic directory
         let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
@@ -2504,13 +2431,11 @@ impl Filesystem for SssFS {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        eprintln!("[DEBUG] link: CALLED ino={} newparent={} newname={:?}", ino, newparent, newname);
 
         // Get the existing file's path
         let existing_entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
-                eprintln!("[ERROR] link: existing inode {} not found", ino);
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -2527,14 +2452,12 @@ impl Filesystem for SssFS {
             match self.get_inode(newparent) {
                 Some(e) => e,
                 None => {
-                    eprintln!("[ERROR] link: new parent inode {} not found", newparent);
                     reply.error(libc::ENOENT);
                     return;
                 }
             }
         };
 
-        eprintln!("[DEBUG] link: existing_path={:?} new_parent={:?}", existing_entry.path, new_parent_entry.path);
 
         // Build paths and translate to source
         let (old_rel, old_pinned) = self.translate_virtual_to_source(&existing_entry.path);
@@ -2547,12 +2470,10 @@ impl Filesystem for SssFS {
             && new_pinned.virtual_prefix == Path::new("/.overlay");
 
         if !is_passthrough {
-            eprintln!("[ERROR] link: hard links only supported for passthrough files in .overlay");
             reply.error(libc::EPERM);
             return;
         }
 
-        eprintln!("[DEBUG] link: old_rel={:?} new_rel={:?}", old_rel, new_rel);
 
         // Convert paths to CStrings
         let old_cstr = match CString::new(old_rel.as_os_str().as_bytes()) {
@@ -2583,7 +2504,6 @@ impl Filesystem for SssFS {
         };
 
         if result == 0 {
-            eprintln!("[DEBUG] link: SUCCESS old={:?} -> new={:?}", old_rel, new_rel);
 
             // Invalidate cache for new path
             let mut path_map = self.path_to_ino.write();
@@ -2592,20 +2512,16 @@ impl Filesystem for SssFS {
 
             // Look up the newly created link and return its attributes
             match self.lookup_impl(newparent, newname) {
-                Ok((new_ino, attr)) => {
-                    eprintln!("[DEBUG] link: Created with ino={}", new_ino);
+                Ok((_, attr)) => {
                     let ttl = &TTL_ZERO;  // Use zero TTL for passthrough files
                     reply.entry(ttl, &attr, 0);
                 }
-                Err(e) => {
-                    eprintln!("[ERROR] link: lookup after link failed: {}", e);
+                Err(_) => {
                     reply.error(libc::EIO);
                 }
             }
         } else {
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-            eprintln!("[ERROR] link: FAILED old={:?} -> new={:?}: {}",
-                     old_rel, new_rel, std::io::Error::last_os_error());
             reply.error(errno);
         }
     }
@@ -2621,9 +2537,6 @@ impl Filesystem for SssFS {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        eprintln!("[DEBUG] rename: CALLED parent={} name={:?} newparent={} newname={:?}",
-                 parent, name, newparent, newname);
-
         // Handle .overlay synthetic directory for old parent
         let old_parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
             InodeEntry {
@@ -2681,7 +2594,6 @@ impl Filesystem for SssFS {
             }
         };
 
-        eprintln!("[DEBUG] rename: old_rel={:?} new_rel={:?}", old_rel, new_rel);
 
         let result = unsafe {
             libc::renameat(
@@ -2693,7 +2605,6 @@ impl Filesystem for SssFS {
         };
 
         if result == 0 {
-            eprintln!("[DEBUG] rename: SUCCESS old={:?} -> new={:?}", old_rel, new_rel);
 
             // Update inode cache - remove both old and new paths to force fresh lookups
             // This prevents stale cache entries from causing ENOENT errors
@@ -2706,13 +2617,10 @@ impl Filesystem for SssFS {
             path_map.remove(&old_virtual_path);
             path_map.remove(&new_virtual_path);
 
-            eprintln!("[DEBUG] rename: Invalidated cache entries for old and new paths");
 
             reply.ok();
         } else {
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-            eprintln!("[ERROR] rename: FAILED old={:?} -> new={:?}: {}",
-                     old_rel, new_rel, std::io::Error::last_os_error());
             reply.error(errno);
         }
     }
@@ -2885,7 +2793,6 @@ impl Filesystem for SssFS {
 
     /// Get filesystem statistics
     fn statfs(&mut self, _req: &Request, _ino: u64, reply: fuser::ReplyStatfs) {
-        eprintln!("[DEBUG] statfs: CALLED");
 
         // Get statfs from the underlying filesystem
         let mut stat: libc::statfs = unsafe { std::mem::zeroed() };

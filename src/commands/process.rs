@@ -305,29 +305,6 @@ fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
     Ok(())
 }
 
-/// Read sealed content from FUSE with EAGAIN retry logic
-#[cfg(target_os = "linux")]
-fn read_sealed_content_with_retry(fuse_file: &mut std::fs::File) -> Result<String> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let mut sealed_content = String::new();
-    let mut retries = 0;
-    const MAX_RETRIES: u32 = 10;
-
-    loop {
-        sealed_content.clear();
-        match fuse_file.read_to_string(&mut sealed_content) {
-            Ok(_) => return Ok(sealed_content),
-            Err(e) if e.raw_os_error() == Some(libc::EAGAIN) && retries < MAX_RETRIES => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                retries += 1;
-                fuse_file.seek(SeekFrom::Start(0))?;
-            }
-            Err(e) => return Err(anyhow!("Failed to read sealed content: {}", e)),
-        }
-    }
-}
-
 /// Create secure temp file path in /dev/shm or /tmp
 #[cfg(target_os = "linux")]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {

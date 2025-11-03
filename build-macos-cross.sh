@@ -36,10 +36,10 @@ export SODIUM_LIB_DIR="$SCRIPT_DIR/cross/libsodium-install/lib"
 export SODIUM_SHARED=1
 export PKG_CONFIG_PATH="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig"
 
-echo "==> Building sss for aarch64-apple-darwin..."
+echo "==> Building sss for aarch64-apple-darwin with macFUSE support..."
 echo "Using pre-built libsodium from cross/libsodium-install/"
 
-cargo build --target aarch64-apple-darwin --release
+cargo build --target aarch64-apple-darwin --release --features macfuse
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -51,7 +51,7 @@ if [ $? -eq 0 ]; then
     echo "==> Updating libsodium path to use system library..."
     "$OSXCROSS_DIR/target/bin/aarch64-apple-darwin23.5-install_name_tool" \
         -change "$SCRIPT_DIR/cross/libsodium-install/lib/libsodium.26.dylib" \
-        "/usr/local/lib/libsodium.26.dylib" \
+        "/opt/homebrew/opt/libsodium/libsodium.26.dylib" \
         target/aarch64-apple-darwin/release/sss 2>/dev/null || true
 
     echo ""
@@ -61,7 +61,9 @@ if [ $? -eq 0 ]; then
     echo "Library dependencies:"
     "$OSXCROSS_DIR/target/bin/aarch64-apple-darwin23.5-otool" -L target/aarch64-apple-darwin/release/sss | grep libsodium
     echo ""
-    echo "Note: On macOS, install libsodium with: brew install libsodium"
+    echo "Note: On macOS, install required dependencies:"
+    echo "  brew install libsodium"
+    echo "  brew install --cask macfuse"
 else
     echo ""
     echo "==> Build failed"

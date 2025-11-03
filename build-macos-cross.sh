@@ -34,10 +34,19 @@ export AR_aarch64_apple_darwin=aarch64-apple-darwin23.5-ar
 echo "==> Setting up environment for libsodium shared library..."
 export SODIUM_LIB_DIR="$SCRIPT_DIR/cross/libsodium-install/lib"
 export SODIUM_SHARED=1
-export PKG_CONFIG_PATH="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig"
+
+# Set up pkg-config for both libsodium and FUSE
+export PKG_CONFIG_PATH="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig:$SCRIPT_DIR/cross/pkgconfig"
+export PKG_CONFIG_ALLOW_CROSS=1
+export PKG_CONFIG_ALLOW_CROSS_aarch64_apple_darwin=1
+export PKG_CONFIG_SYSROOT_DIR="$SCRIPT_DIR/cross/osxcross/target/SDK/MacOSX14.5.sdk"
+
+# Add SDK library path for macFUSE libfuse3
+export RUSTFLAGS="-L $SCRIPT_DIR/cross/osxcross/target/SDK/MacOSX14.5.sdk/usr/local/lib"
 
 echo "==> Building sss for aarch64-apple-darwin with macFUSE support..."
 echo "Using pre-built libsodium from cross/libsodium-install/"
+echo "Using libfuse3 from macFUSE in SDK"
 
 cargo build --target aarch64-apple-darwin --release --features macfuse
 

@@ -9,8 +9,6 @@ use std::os::unix::fs::PermissionsExt;
 
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
-#[cfg(target_os = "linux")]
-use std::os::unix::ffi::OsStrExt;
 
 use crate::{
     commands::utils, config::load_project_config_with_repository_key,
@@ -22,6 +20,7 @@ use crate::{
 #[cfg(target_os = "linux")]
 fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     use std::mem;
+    use std::os::unix::ffi::OsStrExt;
 
     const FUSE_SUPER_MAGIC: i64 = 0x65735546;
 
@@ -43,6 +42,7 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
 #[cfg(target_os = "macos")]
 fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
     use std::mem;
 
     let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;

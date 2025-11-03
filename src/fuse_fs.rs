@@ -247,7 +247,12 @@ impl SssFS {
             let fd = unsafe {
                 let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
                 // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
-                libc::open(path_cstr.as_ptr(), libc::O_PATH | libc::O_DIRECTORY)
+                // macOS doesn't have O_PATH, use O_RDONLY | O_DIRECTORY instead
+                #[cfg(target_os = "linux")]
+                let flags = libc::O_PATH | libc::O_DIRECTORY;
+                #[cfg(target_os = "macos")]
+                let flags = libc::O_RDONLY | libc::O_DIRECTORY;
+                libc::open(path_cstr.as_ptr(), flags)
             };
 
             if fd < 0 {
@@ -1014,7 +1019,12 @@ impl SssFS {
 
         unsafe {
             loop {
-                *libc::__errno_location() = 0;
+                // Reset errno before readdir
+                #[cfg(target_os = "linux")]
+                { *libc::__errno_location() = 0; }
+                #[cfg(target_os = "macos")]
+                { *libc::__error() = 0; }
+
                 let entry_ptr = libc::readdir(dir_ptr);
 
                 if entry_ptr.is_null() {
@@ -1997,7 +2007,7 @@ impl Filesystem for SssFS {
                 libc::fchmodat(
                     self.source_fd,
                     path_cstr.as_ptr(),
-                    new_mode,
+                    new_mode as libc::mode_t,
                     0,
                 )
             };
@@ -2038,7 +2048,11 @@ impl Filesystem for SssFS {
         if let Some(handle) = handles.get(&fh) {
             if let Some(fd) = handle.passthrough_fd {
                 let result = if datasync {
+                    // macOS doesn't have fdatasync, use fsync or F_FULLFSYNC
+                    #[cfg(target_os = "linux")]
                     unsafe { libc::fdatasync(fd) }
+                    #[cfg(target_os = "macos")]
+                    unsafe { libc::fsync(fd) }
                 } else {
                     unsafe { libc::fsync(fd) }
                 };
@@ -2115,7 +2129,11 @@ impl Filesystem for SssFS {
         if let Some(handle) = handles.get(&fh) {
             if let Some(fd) = handle.passthrough_fd {
                 // Use fdatasync for better performance (only data, not metadata)
+                // macOS doesn't have fdatasync, use fsync instead
+                #[cfg(target_os = "linux")]
                 let result = unsafe { libc::fdatasync(fd) };
+                #[cfg(target_os = "macos")]
+                let result = unsafe { libc::fsync(fd) };
 
                 if result < 0 {
                     let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
@@ -2304,7 +2322,7 @@ impl Filesystem for SssFS {
         };
 
         let result = unsafe {
-            libc::mkdirat(self.source_fd, path_cstr.as_ptr(), mode)
+            libc::mkdirat(self.source_fd, path_cstr.as_ptr(), mode as libc::mode_t)
         };
 
         if result != 0 {
@@ -2803,6 +2821,7 @@ impl Filesystem for SssFS {
         if result == 0 {
             // Return the underlying filesystem's stats
             // This ensures all directories appear to be on the same filesystem
+            #[cfg(target_os = "linux")]
             reply.statfs(
                 stat.f_blocks,           // Total blocks
                 stat.f_bfree,            // Free blocks
@@ -2812,6 +2831,17 @@ impl Filesystem for SssFS {
                 stat.f_bsize as u32,     // Block size
                 stat.f_namelen as u32,   // Max filename length
                 stat.f_frsize as u32,    // Fragment size
+            );
+            #[cfg(target_os = "macos")]
+            reply.statfs(
+                stat.f_blocks,           // Total blocks
+                stat.f_bfree,            // Free blocks
+                stat.f_bavail,           // Available blocks
+                stat.f_files,            // Total inodes
+                stat.f_ffree,            // Free inodes
+                stat.f_bsize as u32,     // Block size
+                255,                     // Max filename length (macOS typical)
+                stat.f_bsize as u32,     // Fragment size (use bsize)
             );
         } else {
             reply.error(libc::EIO);

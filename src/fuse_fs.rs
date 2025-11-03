@@ -870,9 +870,20 @@ impl SssFS {
         // 2. Render current version for comparison (strip all markers)
         let rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
 
-        // 3. Use similar diffing to reconstruct markers (from merge module)
+        // 3. Use intelligent marker inference to reconstruct markers
         //    This preserves marker placement even if content changed
-        let reconstructed = crate::merge::smart_reconstruct(&rendered_str, &opened_current, &rendered_current)?;
+        let inference_result = crate::marker_inference::infer_markers(&opened_current, &rendered_str)
+            .map_err(|e| anyhow!("Marker inference failed: {}", e))?;
+
+        // Log any warnings from marker inference
+        if !inference_result.warnings.is_empty() {
+            eprintln!("Marker inference warnings for {:?}:", path);
+            for warning in &inference_result.warnings {
+                eprintln!("  - {}", warning);
+            }
+        }
+
+        let reconstructed = inference_result.output;
 
         // 4. Seal the reconstructed content (⊕{} → ⊠{})
         let sealed_new = self.processor.encrypt_content(&reconstructed)?;

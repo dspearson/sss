@@ -19,150 +19,163 @@ pub fn apply_expansion_rules(
     user_markers: &[UserMarker],
     edited_text: &str,
 ) -> Vec<Marker> {
-    // Convert user markers to standard Marker format
-    let mut all_source_markers = original_markers.to_vec();
+    // Group changes by their overlapping markers (HashMap<marker_indices, changes>)
+    let grouped_changes = group_changes_by_markers(&changes);
 
-    // Add user markers as new markers
-    for um in user_markers {
-        all_source_markers.push(Marker {
-            source_start: um.start,
-            source_end: um.end,
-            rendered_start: um.start,
-            rendered_end: um.end,
-            content: um.content.clone(),
-        });
-    }
+    // Process each group according to the appropriate rule
+    let mut new_markers = process_grouped_changes(
+        grouped_changes,
+        original_markers,
+        edited_text,
+    );
 
-    // Group changes by their overlapping markers
+    // Add explicitly user-inserted markers
+    add_user_markers_to_list(&mut new_markers, user_markers);
+
+    // Merge any overlapping markers
+    merge_overlapping_markers(new_markers)
+}
+
+/// Group changes by which markers they overlap
+fn group_changes_by_markers(
+    changes: &[MappedChange],
+) -> std::collections::HashMap<Vec<usize>, Vec<&MappedChange>> {
     use std::collections::HashMap;
-    let mut marker_changes: HashMap<Vec<usize>, Vec<&MappedChange>> = HashMap::new();
+    let mut grouped: HashMap<Vec<usize>, Vec<&MappedChange>> = HashMap::new();
 
-    for change in &changes {
+    for change in changes {
         let key = change.overlapping_markers.clone();
-        marker_changes.entry(key).or_insert_with(Vec::new).push(change);
+        grouped.entry(key).or_insert_with(Vec::new).push(change);
     }
 
-    let mut new_markers = Vec::new();
+    grouped
+}
 
-    for (overlapping, grouped_changes) in marker_changes {
-        if overlapping.is_empty() {
-            // Rule 5: Unmarked content modification
-            // Will be handled by propagation pass
+/// Process all grouped changes according to expansion rules
+fn process_grouped_changes(
+    grouped: std::collections::HashMap<Vec<usize>, Vec<&MappedChange>>,
+    original_markers: &[Marker],
+    edited_text: &str,
+) -> Vec<Marker> {
+    let mut markers = Vec::new();
+
+    for (overlapping_indices, changes) in grouped {
+        if overlapping_indices.is_empty() {
+            // Rule 5: Unmarked content - handled by propagation pass
             continue;
-        } else if overlapping.len() == 1 && overlapping[0] < original_markers.len() {
-            // Rule 2 or 4: Changes affecting single marker
-            let marker = &original_markers[overlapping[0]];
-
-            // Sort changes by rendered_start to process them in order
-            let mut sorted_changes = grouped_changes.clone();
-            sorted_changes.sort_by_key(|c| c.rendered_start);
-
-            // Compute the new bounds by accounting for size changes
-            let new_start = marker.rendered_start.min(sorted_changes[0].rendered_start);
-
-            // Compute end position by tracking cumulative size delta
-            let mut cumulative_delta = 0;
-            for change in sorted_changes {
-                let old_len = change.rendered_end - change.rendered_start;
-                let size_change = change.new_content.len() as isize - old_len as isize;
-                cumulative_delta += size_change;
+        } else if overlapping_indices.len() == 1 && overlapping_indices[0] < original_markers.len() {
+            // Rules 2 & 4: Single marker affected
+            if let Some(marker) = apply_single_marker_rule(
+                &original_markers[overlapping_indices[0]],
+                changes,
+                edited_text,
+            ) {
+                markers.push(marker);
             }
-
-            // The new end is the old end plus the cumulative size delta
-            let new_end = (marker.rendered_end as isize + cumulative_delta) as usize;
-
-            // Extract content from edited text
-            let content = if new_start < edited_text.len() && new_end <= edited_text.len() {
-                edited_text[new_start..new_end].to_string()
-            } else {
-                // Fallback: use marker content if extraction fails
-                marker.content.clone()
-            };
-
-            new_markers.push(Marker {
-                source_start: new_start,
-                source_end: new_end,
-                rendered_start: new_start,
-                rendered_end: new_end,
-                content,
-            });
         } else {
-            // Rule 1: Multiple markers involved
-            // Use the first change to compute boundaries (they're all in the same group)
-            let change = grouped_changes[0];
-            let (start, end) = find_change_boundaries(change, edited_text, original_markers);
-
-            // Extract content from edited text
-            let content = if start < edited_text.len() && end <= edited_text.len() {
-                edited_text[start..end].to_string()
-            } else {
-                change.new_content.clone()
-            };
-
-            new_markers.push(Marker {
-                source_start: start,
-                source_end: end,
-                rendered_start: start,
-                rendered_end: end,
-                content,
-            });
+            // Rule 1: Multiple markers involved - merge them
+            if let Some(marker) = apply_multi_marker_rule(
+                changes[0],
+                &overlapping_indices,
+                original_markers,
+                edited_text,
+            ) {
+                markers.push(marker);
+            }
         }
     }
 
-    // Add user markers
-    for um in user_markers {
-        new_markers.push(Marker {
-            source_start: um.start,
-            source_end: um.end,
-            rendered_start: um.start,
-            rendered_end: um.end,
-            content: um.content.clone(),
-        });
-    }
-
-    // Merge overlapping markers
-    new_markers = merge_overlapping_markers(new_markers);
-
-    new_markers
+    markers
 }
 
-/// Expand a marker to cover a change
-fn expand_marker_for_change(
+/// Apply expansion rule for single marker (Rules 2 & 4)
+fn apply_single_marker_rule(
     marker: &Marker,
-    change: &MappedChange,
+    changes: Vec<&MappedChange>,
     edited_text: &str,
-) -> Marker {
-    // Determine the new bounds
-    let new_start = marker.rendered_start.min(change.rendered_start);
-    let new_end = marker.rendered_end.max(change.rendered_end);
+) -> Option<Marker> {
+    // Sort changes by position
+    let mut sorted = changes;
+    sorted.sort_by_key(|c| c.rendered_start);
 
-    // Extract content from edited text
-    let content = if new_start < edited_text.len() && new_end <= edited_text.len() {
-        edited_text[new_start..new_end].to_string()
-    } else {
-        change.new_content.clone()
-    };
+    // Compute new bounds
+    let new_start = marker.rendered_start.min(sorted[0].rendered_start);
 
-    Marker {
+    // Track cumulative size changes
+    let cumulative_delta: isize = sorted
+        .iter()
+        .map(|change| {
+            let old_len = change.rendered_end - change.rendered_start;
+            change.new_content.len() as isize - old_len as isize
+        })
+        .sum();
+
+    let new_end = (marker.rendered_end as isize + cumulative_delta).max(0) as usize;
+
+    // Extract content
+    let content = extract_content(edited_text, new_start, new_end, &marker.content);
+
+    Some(Marker {
         source_start: new_start,
         source_end: new_end,
         rendered_start: new_start,
         rendered_end: new_end,
         content,
+    })
+}
+
+/// Apply expansion rule for multiple overlapping markers (Rule 1)
+fn apply_multi_marker_rule(
+    change: &MappedChange,
+    overlapping_indices: &[usize],
+    original_markers: &[Marker],
+    edited_text: &str,
+) -> Option<Marker> {
+    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers);
+    let content = extract_content(edited_text, start, end, &change.new_content);
+
+    Some(Marker {
+        source_start: start,
+        source_end: end,
+        rendered_start: start,
+        rendered_end: end,
+        content,
+    })
+}
+
+/// Extract content from text with fallback
+fn extract_content(text: &str, start: usize, end: usize, fallback: &str) -> String {
+    if start < text.len() && end <= text.len() {
+        text[start..end].to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+/// Add user-inserted markers to the marker list
+fn add_user_markers_to_list(markers: &mut Vec<Marker>, user_markers: &[UserMarker]) {
+    for um in user_markers {
+        markers.push(Marker {
+            source_start: um.start,
+            source_end: um.end,
+            rendered_start: um.start,
+            rendered_end: um.end,
+            content: um.content.clone(),
+        });
     }
 }
 
 /// Find boundaries for a change that spans multiple markers
 fn find_change_boundaries(
     change: &MappedChange,
-    _edited_text: &str,
+    overlapping_indices: &[usize],
     markers: &[Marker],
 ) -> (usize, usize) {
     // Find the leftmost start and rightmost end of all overlapping markers
     let mut min_start = change.rendered_start;
     let mut max_end = change.rendered_end;
 
-    for &marker_idx in &change.overlapping_markers {
+    for &marker_idx in overlapping_indices {
         if marker_idx < markers.len() {
             let marker = &markers[marker_idx];
             min_start = min_start.min(marker.rendered_start);

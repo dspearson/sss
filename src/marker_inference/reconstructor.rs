@@ -13,7 +13,10 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
         return text.to_string();
     }
 
-    let mut output = String::new();
+    // Pre-allocate capacity: text length + overhead for marker syntax
+    // Each marker adds "⊕{" (4 bytes) + "}" (1 byte) = 5 bytes overhead
+    let estimated_capacity = text.len() + (markers.len() * 5);
+    let mut output = String::with_capacity(estimated_capacity);
     let mut pos = 0;
 
     // Sort markers by position

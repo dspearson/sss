@@ -98,6 +98,7 @@
 
 pub mod types;
 pub mod error;
+mod marker_syntax;
 mod parser;
 mod validator;
 mod diff;

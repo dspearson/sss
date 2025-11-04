@@ -8,12 +8,14 @@ use similar::{ChangeTag, TextDiff};
 
 /// Compute diff between rendered and edited text
 ///
+/// Uses the Myers diff algorithm to find the minimal set of changes.
+/// Consecutive insertions and deletions are merged into single ChangeHunk entries.
+///
 /// Returns a vector of ChangeHunk structs representing the modifications.
 pub fn compute_diff(rendered: &str, edited: &str) -> Result<Vec<ChangeHunk>> {
     let diff = TextDiff::from_chars(rendered, edited);
     let mut changes = Vec::new();
-    let mut current_change: Option<ChangeHunk> = None;
-
+    let mut pending_change: Option<ChangeHunk> = None;
     let mut rendered_pos = 0;
 
     for change in diff.iter_all_changes() {
@@ -21,51 +23,70 @@ pub fn compute_diff(rendered: &str, edited: &str) -> Result<Vec<ChangeHunk>> {
 
         match change.tag() {
             ChangeTag::Equal => {
-                // Flush any current change
-                if let Some(ch) = current_change.take() {
-                    changes.push(ch);
-                }
-                // Advance positions
+                // Equal sections mark change boundaries - flush any pending change
+                flush_pending_change(&mut pending_change, &mut changes);
                 rendered_pos += value.len();
             }
             ChangeTag::Delete => {
-                // Start or extend change
-                if let Some(ref mut ch) = current_change {
-                    ch.old_content.push_str(value);
-                    ch.rendered_end = rendered_pos + value.len();
-                } else {
-                    current_change = Some(ChangeHunk {
-                        rendered_start: rendered_pos,
-                        rendered_end: rendered_pos + value.len(),
-                        old_content: value.to_string(),
-                        new_content: String::new(),
-                    });
-                }
+                // Deletion: content removed from rendered text
+                handle_deletion(
+                    value,
+                    rendered_pos,
+                    &mut pending_change,
+                );
                 rendered_pos += value.len();
             }
             ChangeTag::Insert => {
-                // Start or extend change
-                if let Some(ref mut ch) = current_change {
-                    ch.new_content.push_str(value);
-                } else {
-                    current_change = Some(ChangeHunk {
-                        rendered_start: rendered_pos,
-                        rendered_end: rendered_pos,
-                        old_content: String::new(),
-                        new_content: value.to_string(),
-                    });
-                }
-                // Note: edited_pos tracking not needed for current algorithm
+                // Insertion: content added to edited text (no rendered position change)
+                handle_insertion(value, rendered_pos, &mut pending_change);
             }
         }
     }
 
-    // Flush any remaining change
-    if let Some(ch) = current_change {
-        changes.push(ch);
-    }
+    // Flush any remaining pending change
+    flush_pending_change(&mut pending_change, &mut changes);
 
     Ok(changes)
+}
+
+/// Flush a pending change to the changes list
+fn flush_pending_change(pending: &mut Option<ChangeHunk>, changes: &mut Vec<ChangeHunk>) {
+    if let Some(ch) = pending.take() {
+        changes.push(ch);
+    }
+}
+
+/// Handle a deletion in the diff
+fn handle_deletion(value: &str, rendered_pos: usize, pending: &mut Option<ChangeHunk>) {
+    if let Some(ch) = pending {
+        // Extend existing change with more deleted content
+        ch.old_content.push_str(value);
+        ch.rendered_end = rendered_pos + value.len();
+    } else {
+        // Start new change
+        *pending = Some(ChangeHunk {
+            rendered_start: rendered_pos,
+            rendered_end: rendered_pos + value.len(),
+            old_content: value.to_string(),
+            new_content: String::new(),
+        });
+    }
+}
+
+/// Handle an insertion in the diff
+fn handle_insertion(value: &str, rendered_pos: usize, pending: &mut Option<ChangeHunk>) {
+    if let Some(ch) = pending {
+        // Extend existing change with inserted content
+        ch.new_content.push_str(value);
+    } else {
+        // Start new change (pure insertion)
+        *pending = Some(ChangeHunk {
+            rendered_start: rendered_pos,
+            rendered_end: rendered_pos,
+            old_content: String::new(),
+            new_content: value.to_string(),
+        });
+    }
 }
 
 #[cfg(test)]

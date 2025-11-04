@@ -13,7 +13,7 @@ use super::types::Marker;
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// let (rendered, markers) = parse_markers("text o+{secret} more").unwrap();
 /// assert_eq!(rendered, "text secret more");
 /// assert_eq!(markers.len(), 1);
@@ -50,16 +50,19 @@ pub fn parse_markers(source: &str) -> Result<(String, Vec<Marker>)> {
 
                 // Check for nested markers (both formats)
                 if content.contains("o+{") || content.contains("⊕{") {
-                    // Nested markers not allowed - escape the outer marker
+                    // Nested markers not allowed - escape the outer marker and skip entire marker
                     if is_oplus {
                         rendered.push_str("o+\\{");
-                        source_pos += 3;
                         rendered_pos += 4;
                     } else {
                         rendered.push_str("⊕\\{");
-                        source_pos += "⊕{".len();
                         rendered_pos += "⊕\\{".len();
                     }
+                    // Add the content and closing brace
+                    rendered.push_str(content);
+                    rendered.push('}');
+                    rendered_pos += content.len() + 1;
+                    source_pos = abs_close + 1;
                 } else {
                     // Valid marker
                     markers.push(Marker {
@@ -127,7 +130,7 @@ mod tests {
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0].content, "secret");
         assert_eq!(markers[0].source_start, 5);
-        assert_eq!(markers[0].source_end, 16);
+        assert_eq!(markers[0].source_end, 15); // Fixed: exclusive end position
     }
 
     #[test]

@@ -43,19 +43,46 @@ pub fn validate_delimiters(text: &str, markers: &mut Vec<Marker>) -> Vec<String>
 /// Find all paired delimiters in text
 fn find_delimiter_pairs(text: &str, open: char, close: char) -> Vec<DelimiterPair> {
     let mut pairs = Vec::new();
-    let mut stack = Vec::new();
 
-    for (pos, ch) in text.char_indices() {
-        if ch == open {
-            stack.push(pos);
-        } else if ch == close {
-            if let Some(open_pos) = stack.pop() {
-                pairs.push(DelimiterPair {
-                    open_pos,
-                    close_pos: pos,
-                    open_char: open,
-                    close_char: close,
-                });
+    // Handle symmetric delimiters (like quotes) differently
+    if open == close {
+        let mut in_pair = false;
+        let mut pair_start = 0;
+
+        for (pos, ch) in text.char_indices() {
+            if ch == open {
+                if in_pair {
+                    // Closing delimiter
+                    pairs.push(DelimiterPair {
+                        open_pos: pair_start,
+                        close_pos: pos,
+                        open_char: open,
+                        close_char: close,
+                    });
+                    in_pair = false;
+                } else {
+                    // Opening delimiter
+                    pair_start = pos;
+                    in_pair = true;
+                }
+            }
+        }
+    } else {
+        // Asymmetric delimiters use stack-based matching
+        let mut stack = Vec::new();
+
+        for (pos, ch) in text.char_indices() {
+            if ch == open {
+                stack.push(pos);
+            } else if ch == close {
+                if let Some(open_pos) = stack.pop() {
+                    pairs.push(DelimiterPair {
+                        open_pos,
+                        close_pos: pos,
+                        open_char: open,
+                        close_char: close,
+                    });
+                }
             }
         }
     }

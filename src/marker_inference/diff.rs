@@ -80,12 +80,13 @@ mod tests {
 
     #[test]
     fn test_simple_replacement() {
-        let changes = compute_diff("hello", "world").unwrap();
+        // Use strings with no common characters to ensure single change
+        let changes = compute_diff("abc", "xyz").unwrap();
         assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].old_content, "hello");
-        assert_eq!(changes[0].new_content, "world");
+        assert_eq!(changes[0].old_content, "abc");
+        assert_eq!(changes[0].new_content, "xyz");
         assert_eq!(changes[0].rendered_start, 0);
-        assert_eq!(changes[0].rendered_end, 5);
+        assert_eq!(changes[0].rendered_end, 3);
     }
 
     #[test]

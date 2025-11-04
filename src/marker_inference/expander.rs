@@ -33,29 +33,64 @@ pub fn apply_expansion_rules(
         });
     }
 
+    // Group changes by their overlapping markers
+    use std::collections::HashMap;
+    let mut marker_changes: HashMap<Vec<usize>, Vec<&MappedChange>> = HashMap::new();
+
+    for change in &changes {
+        let key = change.overlapping_markers.clone();
+        marker_changes.entry(key).or_insert_with(Vec::new).push(change);
+    }
+
     let mut new_markers = Vec::new();
 
-    for change in changes {
-        if change.overlapping_markers.is_empty() {
+    for (overlapping, grouped_changes) in marker_changes {
+        if overlapping.is_empty() {
             // Rule 5: Unmarked content modification
             // Will be handled by propagation pass
             continue;
-        } else if change.overlapping_markers.len() == 1 {
-            // Rule 2 or 4: Adjacent to single marker
-            let marker_idx = change.overlapping_markers[0];
+        } else if overlapping.len() == 1 && overlapping[0] < original_markers.len() {
+            // Rule 2 or 4: Changes affecting single marker
+            let marker = &original_markers[overlapping[0]];
 
-            // Skip if marker index is out of bounds (user marker)
-            if marker_idx < original_markers.len() {
-                let marker = &original_markers[marker_idx];
+            // Sort changes by rendered_start to process them in order
+            let mut sorted_changes = grouped_changes.clone();
+            sorted_changes.sort_by_key(|c| c.rendered_start);
 
-                // Expand marker to cover the change
-                let expanded = expand_marker_for_change(marker, &change, edited_text);
-                new_markers.push(expanded);
+            // Compute the new bounds by accounting for size changes
+            let new_start = marker.rendered_start.min(sorted_changes[0].rendered_start);
+
+            // Compute end position by tracking cumulative size delta
+            let mut cumulative_delta = 0;
+            for change in sorted_changes {
+                let old_len = change.rendered_end - change.rendered_start;
+                let size_change = change.new_content.len() as isize - old_len as isize;
+                cumulative_delta += size_change;
             }
+
+            // The new end is the old end plus the cumulative size delta
+            let new_end = (marker.rendered_end as isize + cumulative_delta) as usize;
+
+            // Extract content from edited text
+            let content = if new_start < edited_text.len() && new_end <= edited_text.len() {
+                edited_text[new_start..new_end].to_string()
+            } else {
+                // Fallback: use marker content if extraction fails
+                marker.content.clone()
+            };
+
+            new_markers.push(Marker {
+                source_start: new_start,
+                source_end: new_end,
+                rendered_start: new_start,
+                rendered_end: new_end,
+                content,
+            });
         } else {
             // Rule 1: Multiple markers involved
-            // Mark the entire changed span with boundaries
-            let (start, end) = find_change_boundaries(&change, edited_text, original_markers);
+            // Use the first change to compute boundaries (they're all in the same group)
+            let change = grouped_changes[0];
+            let (start, end) = find_change_boundaries(change, edited_text, original_markers);
 
             // Extract content from edited text
             let content = if start < edited_text.len() && end <= edited_text.len() {
@@ -157,9 +192,22 @@ fn merge_overlapping_markers(mut markers: Vec<Marker>) -> Vec<Marker> {
     for marker in markers.into_iter().skip(1) {
         if marker.source_start <= current.source_end {
             // Overlapping or adjacent - merge
+            let old_end = current.source_end;
             current.source_end = current.source_end.max(marker.source_end);
             current.rendered_end = current.rendered_end.max(marker.rendered_end);
-            current.content.push_str(&marker.content);
+
+            // Only concatenate if markers don't fully overlap (avoid duplicates)
+            if marker.source_start >= old_end {
+                // Adjacent or partially overlapping - concatenate
+                current.content.push_str(&marker.content);
+            } else if marker.source_end > old_end {
+                // Overlapping - only add the non-overlapping part
+                let overlap = old_end - marker.source_start;
+                if overlap < marker.content.len() {
+                    current.content.push_str(&marker.content[overlap..]);
+                }
+            }
+            // If marker is fully contained, don't add anything
         } else {
             // Non-overlapping - push current and start new
             merged.push(current);

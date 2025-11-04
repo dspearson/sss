@@ -417,3 +417,172 @@ fn test_marker_spanning_lines() {
     let result = infer_markers(source, edited).unwrap();
     assert!(result.output.contains("⊕{modified1\nmodified2\nmodified3}"));
 }
+
+// ============================================================================
+// Section 9.7: Additional File-Level Edge Cases
+// ============================================================================
+
+#[test]
+fn test_binary_content_with_null_bytes() {
+    // Strings in Rust cannot contain null bytes in the middle easily
+    // But we can test the behavior if edited text has unusual characters
+    let source = "text o+{secret} more";
+    let edited = "text secret\x00 with nulls";
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should handle without crashing - null bytes in UTF-8 strings are technically valid
+    assert!(result.output.contains("⊕{secret"));
+}
+
+#[test]
+fn test_mixed_line_endings_crlf() {
+    let source = "line1\ro+{secret}\r\nline3\n";
+    let edited = "line1\rnewsecret\r\nline3\n";
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should handle mixed line endings gracefully
+    assert!(result.output.contains("⊕{newsecret}"));
+}
+
+#[test]
+fn test_mixed_line_endings_all_types() {
+    let source = "unix\no+{mac}\rwindows\r\nend";
+    let edited = "unix\nmodified\rwindows\r\nend";
+
+    let result = infer_markers(source, edited).unwrap();
+    assert!(result.output.contains("⊕{modified}"));
+}
+
+// ============================================================================
+// Performance & Stress Tests (Section 12)
+// ============================================================================
+
+#[test]
+fn test_large_file_with_many_markers() {
+    // Create a file with 100 markers
+    let mut source = String::new();
+    let mut edited = String::new();
+
+    for i in 0..100 {
+        source.push_str(&format!("key{}: o+{{secret{}}} ", i, i));
+        edited.push_str(&format!("key{}: newsecret{} ", i, i));
+    }
+
+    let start = std::time::Instant::now();
+    let result = infer_markers(&source, &edited).unwrap();
+    let elapsed = start.elapsed();
+
+    // Should complete in reasonable time (< 100ms for 100 markers)
+    assert!(elapsed < std::time::Duration::from_millis(100));
+    assert_eq!(result.output.matches("⊕{newsecret").count(), 100);
+}
+
+#[test]
+fn test_very_large_marker_content() {
+    // 1MB marker content
+    let large_content = "x".repeat(1_000_000);
+    let source = format!("o+{{{}}}", large_content);
+    let edited = large_content.clone();
+
+    let start = std::time::Instant::now();
+    let result = infer_markers(&source, &edited).unwrap();
+    let elapsed = start.elapsed();
+
+    // Should handle without excessive memory/time
+    assert!(elapsed < std::time::Duration::from_secs(1));
+    assert!(result.output.contains("⊕{"));
+}
+
+#[test]
+fn test_many_small_changes() {
+    // File with 50 small changes
+    let mut source = String::new();
+    let mut edited = String::new();
+
+    for i in 0..50 {
+        source.push_str(&format!("o+{{val{}}} ", i));
+        edited.push_str(&format!("new{} ", i));
+    }
+
+    let result = infer_markers(&source, &edited).unwrap();
+    assert!(result.output.matches("⊕{new").count() >= 40);
+}
+
+// ============================================================================
+// Security & Robustness Tests (Section 13)
+// ============================================================================
+
+#[test]
+fn test_extremely_long_line() {
+    // Single line with 100K characters
+    let long_line = "a".repeat(100_000);
+    let source = format!("o+{{{}}}", long_line);
+
+    let result = infer_markers(&source, &long_line).unwrap();
+    assert!(result.output.starts_with("⊕{"));
+}
+
+#[test]
+fn test_many_overlapping_changes() {
+    let source = "o+{aaaaa} o+{bbbbb} o+{ccccc}";
+    let edited = "xxxxx yyyyy zzzzz";
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should handle overlapping changes to multiple markers
+    assert!(result.output.contains("⊕{"));
+}
+
+#[test]
+fn test_empty_source_with_content_edit() {
+    let source = "";
+    let edited = "new content o+{secret}";
+
+    let result = infer_markers(source, edited).unwrap();
+    // User marker should be recognized
+    assert!(result.output.contains("⊕{secret}"));
+}
+
+#[test]
+fn test_pathological_propagation() {
+    // Same content appears many times
+    let source = "o+{x} text";
+    let edited = "x x x x x x x x x x x x x x x";
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should mark all instances
+    let x_count = result.output.matches("⊕{x}").count();
+    assert!(x_count >= 10);
+}
+
+#[test]
+fn test_marker_at_file_boundaries() {
+    let source1 = "o+{start}middle";
+    let edited1 = "newstart middle";
+    let result1 = infer_markers(source1, edited1).unwrap();
+    assert!(result1.output.starts_with("⊕{newstart}"));
+
+    let source2 = "middle o+{end}";
+    let edited2 = "middle newend";
+    let result2 = infer_markers(source2, edited2).unwrap();
+    assert!(result2.output.ends_with("⊕{newend}"));
+}
+
+#[test]
+fn test_all_delimiters_mixed() {
+    let source = r#"o+{text "with" 'various' [delimiters] {nested} (parens) <angles>}"#;
+    let edited = r#"text "with" 'various' [delimiters] {nested} (parens) <angles>"#;
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should handle all delimiter types
+    assert!(result.output.contains("⊕{"));
+}
+
+#[test]
+fn test_rapid_successive_markers() {
+    let source = "o+{a}o+{b}o+{c}o+{d}o+{e}";
+    let edited = "a1b2c3d4e5";
+
+    let result = infer_markers(source, edited).unwrap();
+    // Should handle markers with no spacing
+    assert!(result.output.matches("⊕{").count() >= 3);
+}

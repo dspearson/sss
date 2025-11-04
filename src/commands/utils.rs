@@ -222,7 +222,7 @@ mod tests {
         let original = env::var("USER").ok();
 
         // Set USER env variable
-        env::set_var("USER", "testuser");
+        unsafe { env::set_var("USER", "testuser"); }
 
         let result = get_system_username();
         assert!(result.is_ok());
@@ -230,9 +230,9 @@ mod tests {
 
         // Restore original value
         if let Some(val) = original {
-            env::set_var("USER", val);
+            unsafe { env::set_var("USER", val); }
         } else {
-            env::remove_var("USER");
+            unsafe { env::remove_var("USER"); }
         }
     }
 
@@ -243,8 +243,10 @@ mod tests {
         let original_username = env::var("USERNAME").ok();
 
         // Remove USER, set USERNAME (Windows fallback)
-        env::remove_var("USER");
-        env::set_var("USERNAME", "windowsuser");
+        unsafe {
+            env::remove_var("USER");
+            env::set_var("USERNAME", "windowsuser");
+        }
 
         let result = get_system_username();
         assert!(result.is_ok());
@@ -252,12 +254,12 @@ mod tests {
 
         // Restore original values
         if let Some(val) = original_user {
-            env::set_var("USER", val);
+            unsafe { env::set_var("USER", val); }
         }
         if let Some(val) = original_username {
-            env::set_var("USERNAME", val);
+            unsafe { env::set_var("USERNAME", val); }
         } else {
-            env::remove_var("USERNAME");
+            unsafe { env::remove_var("USERNAME"); }
         }
     }
 

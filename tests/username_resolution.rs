@@ -37,14 +37,14 @@ fn test_username_resolution_precedence_env_var() {
     let (manager, _temp_dir) = create_test_config_manager();
 
     // Set SSS_USER environment variable
-    env::set_var("SSS_USER", "env_user");
+    unsafe { env::set_var("SSS_USER", "env_user"); }
 
     // Should use SSS_USER when no CLI override
     let username = manager.get_username(None).unwrap();
     assert_eq!(username, "env_user");
 
     // Clean up
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn test_username_resolution_precedence_user_settings() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
     // Remove SSS_USER if set
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 
     // Set default username in user settings
     manager
@@ -69,7 +69,7 @@ fn test_username_resolution_precedence_system_fallback() {
     let (manager, _temp_dir) = create_test_config_manager();
 
     // Remove SSS_USER if set
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 
     // Don't set user settings (defaults to None)
     // Should fall back to system username ($USER or $USERNAME)
@@ -86,7 +86,7 @@ fn test_username_resolution_full_precedence_chain() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
     // Set up all layers
-    env::set_var("SSS_USER", "env_user");
+    unsafe { env::set_var("SSS_USER", "env_user"); }
     manager
         .set_default_username(Some("settings_user".to_string()))
         .expect("Failed to set default username");
@@ -101,12 +101,12 @@ fn test_username_resolution_full_precedence_chain() {
     assert_eq!(username, "env_user");
 
     // 3. Without env var, user settings win
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
     let username = manager.get_username(None).unwrap();
     assert_eq!(username, "settings_user");
 
     // Clean up
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn test_config_manager_persists_username() {
         ConfigManager::new_with_config_dir(config_dir).expect("Failed to create ConfigManager");
 
     // Should load persisted username
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
     let username = manager.get_username(None).unwrap();
     assert_eq!(username, "persistent_user");
 }
@@ -208,7 +208,7 @@ fn test_sss_user_env_var_precedence() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
     // Set both SSS_USER and default username
-    env::set_var("SSS_USER", "env_priority");
+    unsafe { env::set_var("SSS_USER", "env_priority"); }
     manager
         .set_default_username(Some("settings_priority".to_string()))
         .expect("Failed to set username");
@@ -218,7 +218,7 @@ fn test_sss_user_env_var_precedence() {
     assert_eq!(username, "env_priority");
 
     // Clean up
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 }
 
 #[test]
@@ -236,7 +236,7 @@ fn test_clear_default_username() {
         .expect("Failed to clear username");
 
     // Should fall back to system username (if available)
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
     let result = manager.get_username(None);
 
     // Should either succeed with system username or fail gracefully
@@ -250,7 +250,7 @@ fn test_username_resolution_empty_sss_user_env() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
     // Set empty SSS_USER (should be ignored)
-    env::set_var("SSS_USER", "");
+    unsafe { env::set_var("SSS_USER", ""); }
     manager
         .set_default_username(Some("settings_user".to_string()))
         .expect("Failed to set username");
@@ -266,7 +266,7 @@ fn test_username_resolution_empty_sss_user_env() {
     }
 
     // Clean up
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn test_multiple_config_managers_independent() {
         .expect("Failed to set username2");
 
     // Should be independent
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
     assert_eq!(manager1.get_username(None).unwrap(), "user1");
     assert_eq!(manager2.get_username(None).unwrap(), "user2");
 }
@@ -324,7 +324,7 @@ fn test_username_with_special_chars() {
             result.err()
         );
 
-        env::remove_var("SSS_USER");
+        unsafe { env::remove_var("SSS_USER"); }
         let resolved = manager.get_username(None).unwrap();
         assert_eq!(resolved, username);
     }
@@ -354,9 +354,11 @@ fn test_username_resolution_error_messages() {
     let (manager, _temp_dir) = create_test_config_manager();
 
     // Remove all sources of username
-    env::remove_var("SSS_USER");
-    env::remove_var("USER");
-    env::remove_var("USERNAME");
+    unsafe {
+        env::remove_var("SSS_USER");
+        env::remove_var("USER");
+        env::remove_var("USERNAME");
+    }
 
     // No CLI override, no env vars, no user settings, no system username
     let result = manager.get_username(None);

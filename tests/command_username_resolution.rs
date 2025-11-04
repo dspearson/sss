@@ -24,7 +24,7 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn new(key: &str, value: &str) -> Self {
         let old_value = env::var(key).ok();
-        env::set_var(key, value);
+        unsafe { env::set_var(key, value); }
         Self {
             key: key.to_string(),
             old_value,
@@ -35,8 +35,8 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.old_value {
-            Some(val) => env::set_var(&self.key, val),
-            None => env::remove_var(&self.key),
+            Some(val) => unsafe { env::set_var(&self.key, val); },
+            None => unsafe { env::remove_var(&self.key); },
         }
     }
 }
@@ -397,7 +397,7 @@ fn test_settings_persist_across_restarts() -> anyhow::Result<()> {
     // Second session: load username
     {
         let manager = ConfigManager::new_with_config_dir(config_dir)?;
-        env::remove_var("SSS_USER"); // Ensure we're not using env var
+        unsafe { env::remove_var("SSS_USER"); } // Ensure we're not using env var
         let resolved = manager.get_username(None)?;
         assert_eq!(
             resolved, username,
@@ -433,7 +433,7 @@ fn test_system_username_fallback_still_works() -> anyhow::Result<()> {
 
     // Don't set any username in settings
     // Don't set SSS_USER
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 
     // Should fall back to system username
     let result = env.get_username_from_config_manager();

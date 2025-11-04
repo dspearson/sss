@@ -279,7 +279,7 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
 
         // Remove HOME temporarily
-        std::env::remove_var("HOME");
+        unsafe { std::env::remove_var("HOME"); }
 
         let result = get_policy_path();
         assert!(result.is_err());
@@ -287,7 +287,7 @@ mod tests {
 
         // Restore HOME
         if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
+            unsafe { std::env::set_var("HOME", home); }
         }
     }
 

@@ -83,7 +83,6 @@ impl TestProject {
 
     /// Mount the FUSE filesystem
     fn mount(&mut self) -> anyhow::Result<()> {
-
         let mut child = Command::new(env!("CARGO_BIN_EXE_sss"))
             .arg("mount")
             .arg(self.source_path())
@@ -195,30 +194,39 @@ impl TestProject {
         Ok(fs::read_to_string(file_path)?)
     }
 
-    /// Edit a file noninteractively using ed
+    /// Edit a file noninteractively using perl (more precise than ed, no trailing newlines)
     fn edit_file_with_ed(&self, path: &str, commands: &str) -> anyhow::Result<()> {
         let file_path = self.mount_path().join(path);
 
-        let mut child = Command::new("ed")
-            .arg("-s")
-            .arg(&file_path)
+        // Read current content
+        let current = fs::read_to_string(&file_path)?;
+
+        // Apply perl substitution
+        let perl_code = format!("$_ = do {{ local $/; <STDIN> }}; {}; print;", commands);
+        let mut child = Command::new("perl")
+            .arg("-e")
+            .arg(&perl_code)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(commands.as_bytes())?;
-            stdin.write_all(b"w\nq\n")?;
+            use std::io::Write;
+            stdin.write_all(current.as_bytes())?;
         }
 
         let output = child.wait_with_output()?;
         if !output.status.success() {
             anyhow::bail!(
-                "ed failed: {}",
+                "perl edit failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
+
+        // Write modified content back
+        let modified = String::from_utf8(output.stdout)?;
+        fs::write(&file_path, modified)?;
 
         Ok(())
     }

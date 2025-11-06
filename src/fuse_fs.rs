@@ -857,10 +857,11 @@ impl SssFS {
             return self.write_raw_to_backing(path, rendered_content);
         }
 
-        // If current has no markers but new has plaintext markers, seal them directly
+        // If current has no markers but new has plaintext markers, normalize to canonical ⊕{} form
         if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
-            let sealed_new = self.processor.encrypt_content(&rendered_str)?;
-            return self.write_raw_to_backing(path, sealed_new.as_bytes());
+            // Convert o+{} to ⊕{} but keep in opened form (don't seal)
+            let normalized = rendered_str.replace("o+{", "⊕{");
+            return self.write_raw_to_backing(path, normalized.as_bytes());
         }
 
         // Perform smart reconstruction:
@@ -889,11 +890,10 @@ impl SssFS {
 
         let reconstructed = inference_result.output;
 
-        // 4. Seal the reconstructed content (⊕{} → ⊠{})
-        let sealed_new = self.processor.encrypt_content(&reconstructed)?;
-
-        // 5. Write to backing store (not through FUSE!)
-        self.write_raw_to_backing(path, sealed_new.as_bytes())
+        // 4. Write reconstructed content with opened markers (⊕{}) to backing store
+        //    Do NOT seal - keep markers in opened form for continued editing
+        //    Marker inference already produced the correct ⊕{} markers
+        self.write_raw_to_backing(path, reconstructed.as_bytes())
     }
 
 
@@ -1761,6 +1761,9 @@ impl Filesystem for SssFS {
         }
 
         // Non-passthrough files: use caching (for SSS processing)
+        eprintln!("DEBUG WRITE: File {:?}, offset={}, len={}, sealed_mode={}, opened_mode={}",
+            handle.path, offset, data.len(), handle.sealed_mode, handle.opened_mode);
+
         // Initialize or extend cached content
         let mut content = handle.cached_content.take().unwrap_or_else(Vec::new);
 
@@ -1775,6 +1778,7 @@ impl Filesystem for SssFS {
 
         handle.cached_content = Some(content);
         handle.dirty = true;
+        eprintln!("DEBUG WRITE: Set dirty=true for {:?}", handle.path);
 
         reply.written(data.len() as u32);
     }
@@ -1802,31 +1806,43 @@ impl Filesystem for SssFS {
             // If file was written to, seal and write back
             if handle.dirty && handle.writable {
                 if let Some(content) = handle.cached_content {
+                    eprintln!("DEBUG RELEASE: File {:?} was modified, sealed_mode={}, opened_mode={}",
+                        handle.path, handle.sealed_mode, handle.opened_mode);
+
                     // Check if this is an origin file (raw passthrough)
                     let write_result = if handle.origin_mode {
+                        eprintln!("DEBUG RELEASE: Writing in origin mode (raw passthrough)");
                         // Origin mode: write raw without any SSS processing
                         self.write_raw_to_backing(&handle.path, &content)
                     } else {
                         // Normal SSS processing
                         let content_str = String::from_utf8_lossy(&content);
+                        eprintln!("DEBUG RELEASE: Content (first 200 chars): {:?}", &content_str.chars().take(200).collect::<String>());
 
                         // Check if content already has encrypted markers (⊠{})
                         let is_already_sealed = Self::has_encrypted_markers(&content_str);
+                        eprintln!("DEBUG RELEASE: is_already_sealed={}", is_already_sealed);
 
                         // Check if this file should be processed by sss or written raw
                         if !Self::should_process_with_sss(&handle.path) {
+                            eprintln!("DEBUG RELEASE: Writing raw (should_process_with_sss=false)");
                             // Swap files and temp files: write raw (no sss processing)
                             self.write_raw_to_backing(&handle.path, &content)
                         } else if handle.sealed_mode {
+                            eprintln!("DEBUG RELEASE: Writing raw (sealed_mode)");
                             // Sealed mode: content is already sealed (⊠{}), write raw to backing store
                             self.write_raw_to_backing(&handle.path, &content)
                         } else if is_already_sealed {
+                            eprintln!("DEBUG RELEASE: Writing raw (is_already_sealed)");
                             // Content already has ⊠{} markers - write directly (no processing)
                             self.write_raw_to_backing(&handle.path, &content)
                         } else if handle.opened_mode {
+                            eprintln!("DEBUG RELEASE: Sealing (opened_mode)");
                             // Opened mode: content has ⊕{} markers, seal directly
                             self.write_sealed_to_backing(&handle.path, &content)
                         } else {
+                            eprintln!("DEBUG RELEASE: Calling write_and_seal, original_sealed={}",
+                                handle.original_sealed.is_some());
                             // Normal mode: content is rendered, do smart reconstruction
                             // Pass original_sealed if we have it (prevents marker loss when editor truncates)
                             self.write_and_seal(&handle.path, &content, handle.original_sealed.as_ref())

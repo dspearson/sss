@@ -21,6 +21,7 @@ use tempfile::TempDir;
 struct TestProject {
     source_dir: TempDir,
     mount_dir: TempDir,
+    home_dir: TempDir,  // Separate HOME for keys
     mount_process: Option<std::process::Child>,
 }
 
@@ -29,10 +30,29 @@ impl TestProject {
     fn new() -> anyhow::Result<Self> {
         let source_dir = TempDir::new()?;
         let mount_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Generate keypair in temp HOME (use --force in case of stale temp dirs)
+        let keygen_output = Command::new(env!("CARGO_BIN_EXE_sss"))
+            .arg("keys")
+            .arg("generate")
+            .arg("--no-password")
+            .arg("--force")
+            .env("HOME", home_dir.path())
+            .output()?;
+
+        if !keygen_output.status.success() {
+            anyhow::bail!(
+                "Failed to generate keypair: {}",
+                String::from_utf8_lossy(&keygen_output.stderr)
+            );
+        }
 
         // Initialize the SSS project
         let output = Command::new(env!("CARGO_BIN_EXE_sss"))
             .arg("init")
+            .arg("testuser")
+            .env("HOME", home_dir.path())
             .current_dir(source_dir.path())
             .output()?;
 
@@ -46,6 +66,7 @@ impl TestProject {
         Ok(Self {
             source_dir,
             mount_dir,
+            home_dir,
             mount_process: None,
         })
     }
@@ -62,30 +83,31 @@ impl TestProject {
 
     /// Mount the FUSE filesystem
     fn mount(&mut self) -> anyhow::Result<()> {
+
         let mut child = Command::new(env!("CARGO_BIN_EXE_sss"))
             .arg("mount")
             .arg(self.source_path())
             .arg(self.mount_path())
+            .arg("--foreground")  // Use foreground mode - daemon mode crashes immediately
+            .env("HOME", self.home_dir.path())
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
 
-        // Wait for mount to be ready (check if mount point is accessible)
+        // Give it time to fully initialize
+        thread::sleep(Duration::from_millis(200));
+
+        // Wait for mount to be ready - files must be visible
         let mount_path = self.mount_path().to_path_buf();
-        let mut retries = 20;
+        let mut retries = 50;  // More retries with shorter intervals
         let mounted = loop {
             if retries == 0 {
                 break false;
             }
             thread::sleep(Duration::from_millis(100));
 
-            // Check if we can list the directory
-            if fs::read_dir(&mount_path).is_ok() {
-                break true;
-            }
-
-            // Check if process died
+            // Check if process died (should NOT happen with --foreground)
             if let Ok(Some(status)) = child.try_wait() {
                 let stderr = child.stderr.take();
                 if let Some(mut stderr) = stderr {
@@ -94,7 +116,24 @@ impl TestProject {
                     let _ = stderr.read_to_string(&mut buf);
                     eprintln!("Mount process failed: {}", buf);
                 }
-                anyhow::bail!("Mount process exited with status: {}", status);
+                anyhow::bail!("Mount process exited unexpectedly with status: {}", status);
+            }
+
+            // Check if we can list the directory AND see files
+            match fs::read_dir(&mount_path) {
+                Ok(entries) => {
+                    let files: Vec<_> = entries.map(|e| e.unwrap().file_name()).collect();
+                    let count = files.len();
+
+                    if count > 0 {
+                        // Success - files are visible
+                        break true;
+                    }
+                    // Mount accessible but no files yet - keep waiting
+                }
+                Err(_e) => {
+                    // Mount not ready yet, keep waiting
+                }
             }
 
             retries -= 1;

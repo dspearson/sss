@@ -658,12 +658,13 @@ impl SssFS {
 
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
         self.read_and_process(path, |fs, content| {
-            // Only process if file has encrypted markers
-            if Self::has_encrypted_markers(&content) {
+            // Process if file has any markers (sealed or opened)
+            if Self::has_any_markers(&content) {
                 // Decrypt and render (remove all markers)
+                // decrypt_to_raw handles both sealed (⊠{}) and opened (⊕{}, o+{}) markers
                 fs.processor.decrypt_to_raw(&content)
             } else {
-                // Return as-is for non-encrypted files
+                // Return as-is for non-marked files
                 Ok(content)
             }
         })
@@ -872,8 +873,11 @@ impl SssFS {
 
         // 3. Use intelligent marker inference to reconstruct markers
         //    This preserves marker placement even if content changed
+        eprintln!("DEBUG FUSE: opened_current = {:?}", opened_current);
+        eprintln!("DEBUG FUSE: rendered_str = {:?}", rendered_str);
         let inference_result = crate::marker_inference::infer_markers(&opened_current, &rendered_str)
             .map_err(|e| anyhow!("Marker inference failed: {}", e))?;
+        eprintln!("DEBUG FUSE: inference result = {:?}", inference_result.output);
 
         // Log any warnings from marker inference
         if !inference_result.warnings.is_empty() {

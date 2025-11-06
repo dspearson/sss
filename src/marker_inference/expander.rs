@@ -58,8 +58,14 @@ fn process_grouped_changes(
     edited_text: &str,
 ) -> Vec<Marker> {
     let mut markers = Vec::new();
+    let mut affected_marker_indices = std::collections::HashSet::new();
 
     for (overlapping_indices, changes) in grouped {
+        // Track which markers were affected by changes
+        for &idx in &overlapping_indices {
+            affected_marker_indices.insert(idx);
+        }
+
         if overlapping_indices.is_empty() {
             // Rule 5: Unmarked content - handled by propagation pass
             continue;
@@ -82,6 +88,20 @@ fn process_grouped_changes(
             ) {
                 markers.push(marker);
             }
+        }
+    }
+
+    // Preserve original markers that weren't affected by any changes
+    // Use rendered positions since we're working with the edited text
+    for (idx, original_marker) in original_markers.iter().enumerate() {
+        if !affected_marker_indices.contains(&idx) {
+            markers.push(Marker {
+                source_start: original_marker.rendered_start,
+                source_end: original_marker.rendered_end,
+                rendered_start: original_marker.rendered_start,
+                rendered_end: original_marker.rendered_end,
+                content: original_marker.content.clone(),
+            });
         }
     }
 

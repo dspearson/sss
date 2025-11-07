@@ -63,6 +63,7 @@ fn show_gui_dialog(context: &RequestContext, timeout: u64) -> Result<String> {
         return show_console_dialog(context, timeout);
     }
 
+    #[cfg(target_os = "linux")]
     Err(anyhow!("No GUI dialog tool available on this platform"))
 }
 

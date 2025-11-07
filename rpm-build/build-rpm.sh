@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VERSION="1.1.0"
+VERSION="1.1.4"
 NAME="sss"
 
 # Colors for output
@@ -195,8 +195,8 @@ RUN dnf install -y \\
         rpmdevtools \\
         gcc \\
         libsodium-devel \\
-        fuse \\
-        fuse-devel \\
+        fuse3 \\
+        fuse3-devel \\
         make \\
         wget && \\
     dnf clean all

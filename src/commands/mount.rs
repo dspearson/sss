@@ -105,6 +105,7 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
     let options = vec![
         fuser::MountOption::FSName("sss".to_string()),
         // Don't use AutoUnmount or AllowOther - they require /etc/fuse.conf changes
+        // Note: TTL=0 is set in reply.entry() for passthrough files to disable positive caching
     ];
 
     if !foreground {
@@ -134,6 +135,9 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
                     eprintln!("Or from any process:");
                     eprintln!("  ls -la /proc/{}/fd/{}", pid, mount_fd);
                 }
+                // Flush stderr before exit to ensure all output is visible
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
                 std::process::exit(0);
             }
 

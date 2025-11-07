@@ -15,6 +15,32 @@ use sss::keystore::Keystore;
 use sss::project::ProjectConfig;
 use sss::Processor;
 
+/// RAII guard to set an environment variable and ensure it's cleaned up
+struct EnvVarGuard {
+    key: String,
+    old_value: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn new(key: &str, value: &str) -> Self {
+        let old_value = env::var(key).ok();
+        env::set_var(key, value);
+        Self {
+            key: key.to_string(),
+            old_value,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match &self.old_value {
+            Some(val) => env::set_var(&self.key, val),
+            None => env::remove_var(&self.key),
+        }
+    }
+}
+
 /// Test helper to set up a test environment with custom config directory
 struct TestEnv {
     _temp_dir: TempDir,
@@ -225,8 +251,8 @@ fn test_username_precedence_env_over_settings() -> anyhow::Result<()> {
     // Set default username in settings
     env.set_default_username("settings_user")?;
 
-    // Set SSS_USER environment variable
-    env::set_var("SSS_USER", "env_user");
+    // Set SSS_USER environment variable (guard ensures cleanup)
+    let _guard = EnvVarGuard::new("SSS_USER", "env_user");
 
     // Env var should take precedence
     let resolved = env.get_username_from_config_manager()?;
@@ -234,9 +260,6 @@ fn test_username_precedence_env_over_settings() -> anyhow::Result<()> {
         resolved, "env_user",
         "SSS_USER env var should take precedence over settings"
     );
-
-    // Clean up
-    env::remove_var("SSS_USER");
 
     Ok(())
 }

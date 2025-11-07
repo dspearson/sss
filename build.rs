@@ -1,7 +1,19 @@
+use std::env;
 use std::path::Path;
 use std::process::Command;
 
 fn main() {
+    // Handle macOS FUSE linking
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("apple-darwin") {
+        // During cross-compilation, add search path for libfuse3 in the SDK
+        if env::var("CROSS_COMPILE").is_ok() || env::var("CC_aarch64_apple_darwin").is_ok() {
+            let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+            let lib_path = format!("{}/cross/osxcross/target/SDK/MacOSX14.5.sdk/usr/local/lib", manifest_dir);
+            println!("cargo:rustc-link-search=native={}", lib_path);
+        }
+    }
+
     // Always check for rust-9p, even if ninep feature isn't enabled
     // This prevents chicken-and-egg problem with cargo dependency resolution
     let p9_dir = Path::new("vendor/rust-9p");
@@ -46,9 +58,8 @@ fn main() {
 
                 println!("cargo:warning=Successfully patched rust-9p");
             }
-        } else {
-            println!("cargo:warning=pfpacket/rust-9p already exists at vendor/rust-9p");
         }
+        // Note: vendor/rust-9p already exists (no action needed)
 
     // Tell cargo to rerun if the vendor directory changes
     println!("cargo:rerun-if-changed=vendor/rust-9p");

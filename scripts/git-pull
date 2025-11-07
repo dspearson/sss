@@ -382,9 +382,19 @@ sub pull_repository {
         return $result;
     }
 
+    # Check if this is an sss project - if so, use 'sss git' directly
+    # This handles both regular sss repos and FUSE-mounted ones
+    my $git_cmd_prefix = 'git';
+    my ($sss_check_exit, $sss_check_output) = run_command('sss status 2>&1');
+    if ($sss_check_exit == 0) {
+        # This is an sss project, use 'sss git' which handles FUSE mounts properly
+        $git_cmd_prefix = 'sss git';
+        print "Detected sss project, using 'sss git' command\n";
+    }
+
     # Ensure we're in a git repository
-    my ($exit_code, $output) = run_command('git rev-parse --git-dir');
-    log_command($dbh, $history_id, 'git rev-parse --git-dir', $output, $exit_code);
+    my ($exit_code, $output) = run_command("$git_cmd_prefix rev-parse --git-dir");
+    log_command($dbh, $history_id, "$git_cmd_prefix rev-parse --git-dir", $output, $exit_code);
 
     if ($exit_code != 0) {
         $result->{error_message} = "Not in a git repository";
@@ -394,8 +404,8 @@ sub pull_repository {
 
     # Attempt to pull
     print "Attempting to pull from upstream...\n";
-    ($exit_code, $output) = run_command('git pull');
-    log_command($dbh, $history_id, 'git pull', $output, $exit_code);
+    ($exit_code, $output) = run_command("$git_cmd_prefix pull");
+    log_command($dbh, $history_id, "$git_cmd_prefix pull", $output, $exit_code);
 
     if ($exit_code == 0) {
         print "Pull successful.\n";
@@ -403,15 +413,16 @@ sub pull_repository {
         $result->{had_changes} = ($output !~ /Already up to date/i);
 
         # Clean up any old conflict files
-        unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+        my $conflict_path = -d '.overlay/.git' ? '.overlay/.git/AUTOPULL_CONFLICT' : '.git/AUTOPULL_CONFLICT';
+        unlink $conflict_path if -e $conflict_path;
         update_history($dbh, $history_id, $result);
         return $result;
     }
 
     # Pull failed, attempt stash-pull-unstash sequence
     print "Pull failed, attempting to stash changes...\n";
-    ($exit_code, $output) = run_command('git stash push -u -m "autopull stash at ' . localtime() . '"');
-    log_command($dbh, $history_id, 'git stash push', $output, $exit_code);
+    ($exit_code, $output) = run_command("$git_cmd_prefix stash push -u -m \"autopull stash at " . localtime() . "\"");
+    log_command($dbh, $history_id, "$git_cmd_prefix stash push", $output, $exit_code);
 
     if ($exit_code != 0) {
         # Stash failed
@@ -427,8 +438,8 @@ sub pull_repository {
 
     # Attempt pull again
     print "Pulling after stash...\n";
-    ($exit_code, $output) = run_command('git pull');
-    log_command($dbh, $history_id, 'git pull (after stash)', $output, $exit_code);
+    ($exit_code, $output) = run_command("$git_cmd_prefix pull");
+    log_command($dbh, $history_id, "$git_cmd_prefix pull (after stash)", $output, $exit_code);
 
     if ($exit_code != 0) {
         my $msg = "Pull failed even after stashing changes";
@@ -445,15 +456,16 @@ sub pull_repository {
     if (!$stash_created) {
         print "No changes were stashed, operation complete.\n";
         $result->{success} = 1;
-        unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+        my $conflict_path = -d '.overlay/.git' ? '.overlay/.git/AUTOPULL_CONFLICT' : '.git/AUTOPULL_CONFLICT';
+        unlink $conflict_path if -e $conflict_path;
         update_history($dbh, $history_id, $result);
         return $result;
     }
 
     # Attempt to pop the stash
     print "Restoring stashed changes...\n";
-    ($exit_code, $output) = run_command('git stash pop');
-    log_command($dbh, $history_id, 'git stash pop', $output, $exit_code);
+    ($exit_code, $output) = run_command("$git_cmd_prefix stash pop");
+    log_command($dbh, $history_id, "$git_cmd_prefix stash pop", $output, $exit_code);
 
     if ($exit_code != 0) {
         # Unstash failed - likely conflicts
@@ -466,7 +478,8 @@ sub pull_repository {
 
     print "Successfully restored stashed changes.\n";
     $result->{success} = 1;
-    unlink '.git/AUTOPULL_CONFLICT' if -e '.git/AUTOPULL_CONFLICT';
+    my $conflict_path = -d '.overlay/.git' ? '.overlay/.git/AUTOPULL_CONFLICT' : '.git/AUTOPULL_CONFLICT';
+    unlink $conflict_path if -e $conflict_path;
     update_history($dbh, $history_id, $result);
 
     return $result;
@@ -512,7 +525,9 @@ sub run_command {
 
 sub write_conflict_file {
     my ($message, $details) = @_;
-    my $conflict_file = '.git/AUTOPULL_CONFLICT';
+    # For FUSE mounts, write to .overlay/.git (the real git dir)
+    # For regular repos, write to .git (which is writable)
+    my $conflict_file = -d '.overlay/.git' ? '.overlay/.git/AUTOPULL_CONFLICT' : '.git/AUTOPULL_CONFLICT';
 
     open my $fh, '>', $conflict_file or die "Cannot write to $conflict_file: $!\n";
     print $fh "=" x 70 . "\n";
@@ -523,7 +538,7 @@ sub write_conflict_file {
     print $fh "ACTION REQUIRED:\n";
     print $fh "1. Check the error output above\n";
     print $fh "2. Manually resolve the issue\n";
-    print $fh "3. Delete this file: rm .git/AUTOPULL_CONFLICT\n";
+    print $fh "3. Delete this file: rm $conflict_file\n";
     print $fh "\n" . "=" x 70 . "\n";
     close $fh;
 

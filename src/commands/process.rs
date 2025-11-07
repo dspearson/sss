@@ -9,8 +9,6 @@ use std::os::unix::fs::PermissionsExt;
 
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
-#[cfg(target_os = "linux")]
-use std::os::unix::ffi::OsStrExt;
 
 use crate::{
     commands::utils, config::load_project_config_with_repository_key,
@@ -18,10 +16,11 @@ use crate::{
     editor::launch_editor, validation::validate_file_path, Processor,
 };
 
-/// Check if a file is on a FUSE filesystem
+/// Check if a file is on a FUSE filesystem (Linux)
 #[cfg(target_os = "linux")]
 fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     use std::mem;
+    use std::os::unix::ffi::OsStrExt;
 
     const FUSE_SUPER_MAGIC: i64 = 0x65735546;
 
@@ -35,11 +34,37 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
             return Err(anyhow!("Failed to stat filesystem"));
         }
 
-        Ok(stat.f_type == FUSE_SUPER_MAGIC)
+        Ok(stat.f_type as i64 == FUSE_SUPER_MAGIC)
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Check if a file is on a FUSE filesystem (macOS)
+#[cfg(target_os = "macos")]
+fn is_fuse_mount(file_path: &Path) -> Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::mem;
+
+    let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
+
+    unsafe {
+        let mut stat: libc::statfs = mem::zeroed();
+        let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
+
+        if result != 0 {
+            return Err(anyhow!("Failed to stat filesystem"));
+        }
+
+        // On macOS, check if the filesystem type name contains "fuse" or "osxfuse" or "macfuse"
+        let fs_typename = std::ffi::CStr::from_ptr(stat.f_fstypename.as_ptr())
+            .to_string_lossy()
+            .to_lowercase();
+
+        Ok(fs_typename.contains("fuse") || fs_typename.contains("osxfuse") || fs_typename.contains("macfuse"))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn is_fuse_mount(_file_path: &Path) -> Result<bool> {
     Ok(false)
 }
@@ -217,8 +242,8 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
 
     let content = fs::read_to_string(&file_path)?;
     let output = match operation {
-        "seal" => processor.encrypt_content(&content)?,
-        "open" => processor.decrypt_content(&content)?,
+        "seal" => processor.seal_content_with_path(&content, &file_path)?,
+        "open" => processor.open_content_with_path(&content, &file_path)?,
         "render" => processor.decrypt_to_raw_with_path(&content, &file_path)?,
         _ => unreachable!(),
     };
@@ -250,44 +275,23 @@ pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 }
 
 /// Handle 'edit' command - edit file with automatic encrypt/decrypt
-/// Edit file on FUSE mount using sealed mode protocol
-#[cfg(target_os = "linux")]
+/// Edit file on FUSE mount using opened mode protocol
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
-    use std::os::unix::io::AsRawFd;
     use std::os::unix::fs::OpenOptionsExt;
-    use std::ffi::CString;
-    use std::io::{Write, Seek, SeekFrom};
+    use std::io::{Read, Write, Seek, SeekFrom};
 
-    // Open file with O_NONBLOCK + O_RDWR for sealed mode protocol
+    // Open file with O_DIRECTORY | O_CREAT for opened mode (semantically invalid combination)
+    // This signals FUSE to return content with ⊕{} markers for editing
     let mut fuse_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .custom_flags(libc::O_NONBLOCK)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CREAT)
         .open(file_path)?;
 
-    let fuse_fd = fuse_file.as_raw_fd();
-
-    // Signal to FUSE that we want sealed content
-    let xattr_name = CString::new("user.sss.sealed").unwrap();
-    let xattr_value = b"1";
-
-    let setxattr_result = unsafe {
-        libc::fsetxattr(
-            fuse_fd,
-            xattr_name.as_ptr(),
-            xattr_value.as_ptr() as *const libc::c_void,
-            xattr_value.len(),
-            0,
-        )
-    };
-
-    if setxattr_result != 0 {
-        let err = std::io::Error::last_os_error();
-        return Err(anyhow!("Failed to confirm sealed mode with fsetxattr: {}", err));
-    }
-
-    // Read sealed content (with retry for EAGAIN)
-    let sealed_content = read_sealed_content_with_retry(&mut fuse_file)?;
+    // Read opened content (with ⊕{} markers for editing)
+    let mut sealed_content = String::new();
+    fuse_file.read_to_string(&mut sealed_content)?;
 
     // Decrypt sealed content
     let edit_content = processor.decrypt_content(&sealed_content)?;
@@ -322,34 +326,11 @@ fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
     fuse_file.write_all(final_sealed_content.as_bytes())?;
     fuse_file.flush()?;
 
-    eprintln!("File edited and encrypted via FUSE: {:?}", file_path);
+    eprintln!("File edited and encrypted: {:?}", file_path);
     Ok(())
 }
 
-/// Read sealed content from FUSE with EAGAIN retry logic
-#[cfg(target_os = "linux")]
-fn read_sealed_content_with_retry(fuse_file: &mut std::fs::File) -> Result<String> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let mut sealed_content = String::new();
-    let mut retries = 0;
-    const MAX_RETRIES: u32 = 10;
-
-    loop {
-        sealed_content.clear();
-        match fuse_file.read_to_string(&mut sealed_content) {
-            Ok(_) => return Ok(sealed_content),
-            Err(e) if e.raw_os_error() == Some(libc::EAGAIN) && retries < MAX_RETRIES => {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                retries += 1;
-                fuse_file.seek(SeekFrom::Start(0))?;
-            }
-            Err(e) => return Err(anyhow!("Failed to read sealed content: {}", e)),
-        }
-    }
-}
-
-/// Create secure temp file path in /dev/shm or /tmp
+/// Create secure temp file path in /dev/shm (Linux) or /tmp (macOS)
 #[cfg(target_os = "linux")]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
@@ -361,6 +342,15 @@ fn create_secure_temp_path(file_path: &Path) -> Result<String> {
         eprintln!("[WARN] /dev/shm not available, using /tmp (insecure!)");
         Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
     }
+}
+
+/// Create secure temp file path in /tmp (macOS)
+#[cfg(target_os = "macos")]
+fn create_secure_temp_path(file_path: &Path) -> Result<String> {
+    let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+    let pid = std::process::id();
+    // On macOS, /tmp is more secure than on Linux (cleared on reboot, per-user isolation)
+    Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
 }
 
 /// Write content to temp file with secure permissions
@@ -397,15 +387,7 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
     // Write with restrictive permissions
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::io::Write;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&temp_path)?
-            .write_all(edit_content.as_bytes())?;
+        write_temp_file_secure(temp_path.to_str().unwrap(), &edit_content)?;
     }
 
     #[cfg(not(unix))]
@@ -420,11 +402,17 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
     let edited_content = fs::read_to_string(&temp_path)?;
     let final_content = processor.finalise_after_editing(&edited_content)?;
 
-    // Write back to original file
-    fs::write(file_path, final_content)?;
-
     // Securely remove temp file
     fs::remove_file(&temp_path)?;
+
+    // Check if content actually changed
+    if final_content == content {
+        eprintln!("No changes made");
+        return Ok(());
+    }
+
+    // Write back to original file
+    fs::write(file_path, final_content)?;
 
     eprintln!("File edited and encrypted: {:?}", file_path);
     Ok(())
@@ -452,14 +440,14 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // Dispatch to appropriate handler based on mount type
     if is_fuse_mount(&file_path).unwrap_or(false) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             handle_edit_fuse(&file_path, &processor)
         }
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
-            Err(anyhow!("FUSE editing is only available on Linux"))
+            Err(anyhow!("FUSE editing is only available on Linux and macOS"))
         }
     } else {
         handle_edit_regular(&file_path, &processor)
@@ -472,7 +460,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_is_fuse_mount_non_fuse_path() {
         // Test with a regular non-FUSE path
         let path = PathBuf::from("/tmp");
@@ -484,9 +472,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn test_is_fuse_mount_non_linux() {
-        // On non-Linux, always returns false
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn test_is_fuse_mount_non_unix() {
+        // On non-Linux/macOS, always returns false
         let path = PathBuf::from("/tmp/test");
         let result = is_fuse_mount(&path);
 
@@ -495,6 +483,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn test_create_secure_temp_path() {
         // Test that secure temp path generation works
         let file_path = PathBuf::from("/tmp/test_file.txt");
@@ -503,7 +492,8 @@ mod tests {
         assert!(result.is_ok());
         let temp_path = result.unwrap();
 
-        // Should use /dev/shm if available, otherwise /tmp
+        // Linux: should use /dev/shm if available, otherwise /tmp
+        // macOS: always uses /tmp
         assert!(temp_path.starts_with("/dev/shm/.sss-edit-") || temp_path.starts_with("/tmp/.sss-edit-"));
         assert!(temp_path.contains("test_file.txt"));
         // Should include process ID

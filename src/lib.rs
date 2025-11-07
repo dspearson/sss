@@ -19,6 +19,7 @@ pub mod ninep_fs;
 pub mod kdf;
 pub mod keyring_manager;
 pub mod keystore;
+pub mod marker_inference;
 pub mod merge;
 pub mod processor;
 pub mod project;

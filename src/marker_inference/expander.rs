@@ -134,7 +134,7 @@ fn apply_single_marker_rule(
     let new_end_rendered = marker.rendered_end;
 
     // Convert to EDITED coordinates
-    let mut new_start = rendered_to_edited(new_start_rendered, all_changes);
+    let new_start = rendered_to_edited(new_start_rendered, all_changes);
     let mut new_end = rendered_to_edited(new_end_rendered, all_changes);
 
     // Expand to cover all the changes affecting this marker
@@ -145,6 +145,10 @@ fn apply_single_marker_rule(
         let change_end_edited = change_start_edited + change.new_content.len();
         new_end = new_end.max(change_end_edited);
     }
+
+    // Apply boundary adjustments per spec sections 5 and 8
+    let (new_start, new_end) = shrink_to_exclude_delimiters(edited_text, new_start, new_end);
+    let (new_start, new_end) = shrink_to_exclude_trailing_whitespace(edited_text, new_start, new_end);
 
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
@@ -166,7 +170,7 @@ fn apply_multi_marker_rule(
     edited_text: &str,
     all_changes: &[&MappedChange],
 ) -> Option<Marker> {
-    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers, all_changes);
+    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers, all_changes, edited_text);
     let content = extract_content(edited_text, start, end, &change.new_content);
 
     Some(Marker {
@@ -185,6 +189,77 @@ fn extract_content(text: &str, start: usize, end: usize, fallback: &str) -> Stri
     } else {
         fallback.to_string()
     }
+}
+
+/// Adjust boundaries to exclude paired delimiters per spec section 8
+///
+/// If the marked region is surrounded by paired delimiters, shrink the boundaries
+/// to keep the delimiters outside the marker.
+///
+/// Paired delimiters: "...", '...', [...], {...}, (...), <...>
+fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) -> (usize, usize) {
+    if start >= end || end > text.len() {
+        return (start, end);
+    }
+
+    let bytes = text.as_bytes();
+
+    // Define delimiter pairs
+    let pairs = [
+        (b'"', b'"'),
+        (b'\'', b'\''),
+        (b'[', b']'),
+        (b'{', b'}'),
+        (b'(', b')'),
+        (b'<', b'>'),
+    ];
+
+    // Keep checking and shrinking as long as we find delimiter pairs
+    loop {
+        if start >= end {
+            break;
+        }
+
+        let mut found_pair = false;
+
+        // Check if current boundaries are delimiters
+        for &(open, close) in &pairs {
+            if start < bytes.len() && end > 0 && end <= bytes.len() {
+                if bytes[start] == open && bytes[end - 1] == close {
+                    // Found a pair - shrink boundaries
+                    start += 1;
+                    end -= 1;
+                    found_pair = true;
+                    break;
+                }
+            }
+        }
+
+        if !found_pair {
+            break;
+        }
+    }
+
+    (start, end)
+}
+
+/// Adjust boundaries to exclude trailing whitespace
+///
+/// Trailing whitespace should not be included in markers to avoid
+/// breaking word boundaries when rendering.
+fn shrink_to_exclude_trailing_whitespace(text: &str, start: usize, mut end: usize) -> (usize, usize) {
+    if start >= end || end > text.len() {
+        return (start, end);
+    }
+
+    let bytes = text.as_bytes();
+
+    // Shrink end to exclude trailing whitespace
+    while end > start && end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    (start, end)
 }
 
 /// Add user-inserted markers to the marker list
@@ -206,6 +281,7 @@ fn find_change_boundaries(
     overlapping_indices: &[usize],
     markers: &[Marker],
     all_changes: &[&MappedChange],
+    edited_text: &str,
 ) -> (usize, usize) {
     // Find the leftmost start and rightmost end of all overlapping markers in RENDERED coords
     let mut min_start_rendered = change.rendered_start;
@@ -225,6 +301,10 @@ fn find_change_boundaries(
     // Convert to EDITED coordinates
     let min_start = rendered_to_edited(min_start_rendered, all_changes);
     let max_end = rendered_to_edited(max_end_rendered, all_changes);
+
+    // Apply boundary adjustments per spec sections 5 and 8
+    let (min_start, max_end) = shrink_to_exclude_delimiters(edited_text, min_start, max_end);
+    let (min_start, max_end) = shrink_to_exclude_trailing_whitespace(edited_text, min_start, max_end);
 
     (min_start, max_end)
 }

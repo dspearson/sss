@@ -134,15 +134,31 @@ fn apply_single_marker_rule(
     let new_end_rendered = marker.rendered_end;
 
     // Convert to EDITED coordinates
-    let new_start = rendered_to_edited(new_start_rendered, all_changes);
+    let mut new_start = rendered_to_edited(new_start_rendered, all_changes);
     let mut new_end = rendered_to_edited(new_end_rendered, all_changes);
 
     // Expand to cover all the changes affecting this marker
     for change in &sorted {
         // Each change adds new content that should be covered by the marker
-        // Expand the end to include all new content
-        let change_start_edited = rendered_to_edited(change.rendered_start, all_changes);
+        let change_pos_edited = rendered_to_edited(change.rendered_start, all_changes);
+
+        // For pure insertions, the content appears BEFORE the converted position
+        // (since rendered_to_edited includes the delta from this insertion)
+        let change_start_edited = if change.rendered_start == change.rendered_end && !change.new_content.is_empty() {
+            // Pure insertion: content is inserted before the converted position
+            change_pos_edited.saturating_sub(change.new_content.len())
+        } else {
+            // Replacement: use converted position
+            change_pos_edited
+        };
         let change_end_edited = change_start_edited + change.new_content.len();
+
+        // If change is at or before the marker start, expand start to include it
+        if change.rendered_start <= marker.rendered_start {
+            new_start = new_start.min(change_start_edited);
+        }
+
+        // Expand the end to include all new content
         new_end = new_end.max(change_end_edited);
     }
 

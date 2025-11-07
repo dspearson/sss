@@ -55,6 +55,46 @@ fn group_changes_by_markers(
     grouped
 }
 
+/// Check if changes are only adjacent to markers, not overlapping interiors
+fn is_only_adjacent(
+    changes: &[&MappedChange],
+    marker_indices: &[usize],
+    markers: &[Marker],
+) -> bool {
+    // For each change, check if it only touches boundaries
+    for change in changes {
+        for &idx in marker_indices {
+            if idx >= markers.len() {
+                continue;
+            }
+            let marker = &markers[idx];
+
+            // Check if change overlaps marker interior
+            // A change overlaps interior if it extends into the marker's range
+            let change_end = change.rendered_end;
+            let change_start = change.rendered_start;
+
+            // If change_start is inside marker (not at boundary)
+            if change_start > marker.rendered_start && change_start < marker.rendered_end {
+                return false; // Overlaps interior
+            }
+
+            // If change_end is inside marker (not at boundary)
+            if change_end > marker.rendered_start && change_end < marker.rendered_end {
+                return false; // Overlaps interior
+            }
+
+            // If change completely contains marker
+            if change_start <= marker.rendered_start && change_end >= marker.rendered_end {
+                return false; // Overlaps interior
+            }
+        }
+    }
+
+    // All changes are only adjacent to boundaries
+    true
+}
+
 /// Process all grouped changes according to expansion rules
 fn process_grouped_changes(
     grouped: std::collections::HashMap<Vec<usize>, Vec<&MappedChange>>,
@@ -84,8 +124,43 @@ fn process_grouped_changes(
             ) {
                 markers.push(marker);
             }
+        } else if is_only_adjacent(&changes, &overlapping_indices, original_markers) {
+            // Rule 3: Adjacent to multiple markers - apply left-bias
+            // Merge with the leftmost marker only
+            let leftmost_idx = overlapping_indices[0];
+            if leftmost_idx < original_markers.len() {
+                let leftmost_marker = &original_markers[leftmost_idx];
+
+                if let Some(marker) = apply_left_bias_expansion(
+                    leftmost_marker,
+                    changes,
+                    edited_text,
+                    all_changes,
+                    &overlapping_indices,
+                    original_markers,
+                ) {
+                    markers.push(marker);
+                }
+
+                // Preserve other markers that weren't merged
+                for &idx in &overlapping_indices[1..] {
+                    if idx < original_markers.len() {
+                        let original_marker = &original_markers[idx];
+                        let edited_start = rendered_to_edited(original_marker.rendered_start, all_changes);
+                        let edited_end = rendered_to_edited(original_marker.rendered_end, all_changes);
+
+                        markers.push(Marker {
+                            source_start: edited_start,
+                            source_end: edited_end,
+                            rendered_start: edited_start,
+                            rendered_end: edited_end,
+                            content: original_marker.content.clone(),
+                        });
+                    }
+                }
+            }
         } else {
-            // Rule 1: Multiple markers involved - merge them
+            // Rule 1: Multiple markers with overlapping interiors - merge them
             if let Some(marker) = apply_multi_marker_rule(
                 changes[0],
                 &overlapping_indices,
@@ -116,6 +191,71 @@ fn process_grouped_changes(
     }
 
     markers
+}
+
+/// Apply left-bias expansion (Rule 3)
+///
+/// Expands the leftmost marker to include changes, but stops at the boundary
+/// of the next marker to avoid merging them together.
+fn apply_left_bias_expansion(
+    marker: &Marker,
+    changes: Vec<&MappedChange>,
+    edited_text: &str,
+    all_changes: &[&MappedChange],
+    all_marker_indices: &[usize],
+    all_markers: &[Marker],
+) -> Option<Marker> {
+    // Sort changes affecting this marker by position
+    let mut sorted = changes;
+    sorted.sort_by_key(|c| c.rendered_start);
+
+    // Find the boundary where we should stop (the start of the next marker)
+    let next_marker_boundary = if all_marker_indices.len() > 1 {
+        // Get the second marker (first one after leftmost)
+        let next_idx = all_marker_indices[1];
+        if next_idx < all_markers.len() {
+            Some(all_markers[next_idx].rendered_start)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Compute new bounds in RENDERED coordinates
+    let new_start_rendered = marker.rendered_start.min(sorted[0].rendered_start);
+    let mut new_end_rendered = marker.rendered_end;
+
+    // Expand to include changes, but stop at next marker boundary
+    for change in &sorted {
+        let change_end_rendered = change.rendered_start + change.new_content.len();
+
+        if let Some(boundary) = next_marker_boundary {
+            // Don't expand past the next marker's start
+            new_end_rendered = new_end_rendered.max(change_end_rendered.min(boundary));
+        } else {
+            new_end_rendered = new_end_rendered.max(change_end_rendered);
+        }
+    }
+
+    // Convert to EDITED coordinates
+    let new_start = rendered_to_edited(new_start_rendered, all_changes);
+    let new_end = rendered_to_edited(new_end_rendered, all_changes);
+
+    // Apply boundary adjustments per spec sections 5 and 8
+    let (new_start, new_end) = shrink_to_exclude_delimiters(edited_text, new_start, new_end);
+    let (new_start, new_end) = shrink_to_exclude_trailing_whitespace(edited_text, new_start, new_end);
+
+    // Extract content
+    let content = extract_content(edited_text, new_start, new_end, &marker.content);
+
+    Some(Marker {
+        source_start: new_start,
+        source_end: new_end,
+        rendered_start: new_start,
+        rendered_end: new_end,
+        content,
+    })
 }
 
 /// Apply expansion rule for single marker (Rules 2 & 4)
@@ -363,8 +503,8 @@ fn merge_overlapping_markers(mut markers: Vec<Marker>) -> Vec<Marker> {
     let mut current = markers[0].clone();
 
     for marker in markers.into_iter().skip(1) {
-        if marker.source_start <= current.source_end {
-            // Overlapping or adjacent - merge
+        if marker.source_start < current.source_end {
+            // Truly overlapping - merge
             let old_end = current.source_end;
             current.source_end = current.source_end.max(marker.source_end);
             current.rendered_end = current.rendered_end.max(marker.rendered_end);

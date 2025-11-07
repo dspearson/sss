@@ -22,11 +22,15 @@ pub fn apply_expansion_rules(
     // Group changes by their overlapping markers (HashMap<marker_indices, changes>)
     let grouped_changes = group_changes_by_markers(&changes);
 
+    // Collect all changes for position conversion
+    let all_changes: Vec<&MappedChange> = changes.iter().collect();
+
     // Process each group according to the appropriate rule
     let mut new_markers = process_grouped_changes(
         grouped_changes,
         original_markers,
         edited_text,
+        &all_changes,
     );
 
     // Add explicitly user-inserted markers
@@ -56,6 +60,7 @@ fn process_grouped_changes(
     grouped: std::collections::HashMap<Vec<usize>, Vec<&MappedChange>>,
     original_markers: &[Marker],
     edited_text: &str,
+    all_changes: &[&MappedChange],
 ) -> Vec<Marker> {
     let mut markers = Vec::new();
     let mut affected_marker_indices = std::collections::HashSet::new();
@@ -75,6 +80,7 @@ fn process_grouped_changes(
                 &original_markers[overlapping_indices[0]],
                 changes,
                 edited_text,
+                all_changes,
             ) {
                 markers.push(marker);
             }
@@ -85,6 +91,7 @@ fn process_grouped_changes(
                 &overlapping_indices,
                 original_markers,
                 edited_text,
+                all_changes,
             ) {
                 markers.push(marker);
             }
@@ -92,14 +99,17 @@ fn process_grouped_changes(
     }
 
     // Preserve original markers that weren't affected by any changes
-    // Use rendered positions since we're working with the edited text
+    // Convert their positions from rendered to edited coordinates
     for (idx, original_marker) in original_markers.iter().enumerate() {
         if !affected_marker_indices.contains(&idx) {
+            let edited_start = rendered_to_edited(original_marker.rendered_start, all_changes);
+            let edited_end = rendered_to_edited(original_marker.rendered_end, all_changes);
+
             markers.push(Marker {
-                source_start: original_marker.rendered_start,
-                source_end: original_marker.rendered_end,
-                rendered_start: original_marker.rendered_start,
-                rendered_end: original_marker.rendered_end,
+                source_start: edited_start,
+                source_end: edited_end,
+                rendered_start: edited_start,
+                rendered_end: edited_end,
                 content: original_marker.content.clone(),
             });
         }
@@ -113,24 +123,28 @@ fn apply_single_marker_rule(
     marker: &Marker,
     changes: Vec<&MappedChange>,
     edited_text: &str,
+    all_changes: &[&MappedChange],
 ) -> Option<Marker> {
-    // Sort changes by position
+    // Sort changes affecting this marker by position
     let mut sorted = changes;
     sorted.sort_by_key(|c| c.rendered_start);
 
-    // Compute new bounds
-    let new_start = marker.rendered_start.min(sorted[0].rendered_start);
+    // Compute new bounds in RENDERED coordinates
+    let new_start_rendered = marker.rendered_start.min(sorted[0].rendered_start);
+    let new_end_rendered = marker.rendered_end;
 
-    // Track cumulative size changes
-    let cumulative_delta: isize = sorted
-        .iter()
-        .map(|change| {
-            let old_len = change.rendered_end - change.rendered_start;
-            change.new_content.len() as isize - old_len as isize
-        })
-        .sum();
+    // Convert to EDITED coordinates
+    let mut new_start = rendered_to_edited(new_start_rendered, all_changes);
+    let mut new_end = rendered_to_edited(new_end_rendered, all_changes);
 
-    let new_end = (marker.rendered_end as isize + cumulative_delta).max(0) as usize;
+    // Expand to cover all the changes affecting this marker
+    for change in &sorted {
+        // Each change adds new content that should be covered by the marker
+        // Expand the end to include all new content
+        let change_start_edited = rendered_to_edited(change.rendered_start, all_changes);
+        let change_end_edited = change_start_edited + change.new_content.len();
+        new_end = new_end.max(change_end_edited);
+    }
 
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
@@ -150,8 +164,9 @@ fn apply_multi_marker_rule(
     overlapping_indices: &[usize],
     original_markers: &[Marker],
     edited_text: &str,
+    all_changes: &[&MappedChange],
 ) -> Option<Marker> {
-    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers);
+    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers, all_changes);
     let content = extract_content(edited_text, start, end, &change.new_content);
 
     Some(Marker {
@@ -190,24 +205,53 @@ fn find_change_boundaries(
     change: &MappedChange,
     overlapping_indices: &[usize],
     markers: &[Marker],
+    all_changes: &[&MappedChange],
 ) -> (usize, usize) {
-    // Find the leftmost start and rightmost end of all overlapping markers
-    let mut min_start = change.rendered_start;
-    let mut max_end = change.rendered_end;
+    // Find the leftmost start and rightmost end of all overlapping markers in RENDERED coords
+    let mut min_start_rendered = change.rendered_start;
+    let mut max_end_rendered = change.rendered_end;
 
     for &marker_idx in overlapping_indices {
         if marker_idx < markers.len() {
             let marker = &markers[marker_idx];
-            min_start = min_start.min(marker.rendered_start);
-            max_end = max_end.max(marker.rendered_end);
+            min_start_rendered = min_start_rendered.min(marker.rendered_start);
+            max_end_rendered = max_end_rendered.max(marker.rendered_end);
         }
     }
 
     // Extend to include the change itself
-    min_start = min_start.min(change.rendered_start);
-    max_end = max_end.max(change.rendered_start + change.new_content.len());
+    max_end_rendered = max_end_rendered.max(change.rendered_start + change.new_content.len());
+
+    // Convert to EDITED coordinates
+    let min_start = rendered_to_edited(min_start_rendered, all_changes);
+    let max_end = rendered_to_edited(max_end_rendered, all_changes);
 
     (min_start, max_end)
+}
+
+/// Convert a position from RENDERED coordinates to EDITED coordinates
+///
+/// RENDERED coordinates are positions in the text after removing markers from source.
+/// EDITED coordinates are positions in the user-edited text.
+/// The relationship between these changes due to edit operations.
+fn rendered_to_edited(rendered_pos: usize, all_changes: &[&MappedChange]) -> usize {
+    let mut edited_pos = rendered_pos as isize;
+
+    // Sort changes by position
+    let mut sorted: Vec<&MappedChange> = all_changes.iter().copied().collect();
+    sorted.sort_by_key(|c| c.rendered_start);
+
+    // Apply cumulative deltas from all changes that ended before this position
+    for change in sorted {
+        if change.rendered_end <= rendered_pos {
+            let old_len = change.rendered_end - change.rendered_start;
+            let new_len = change.new_content.len();
+            let delta = new_len as isize - old_len as isize;
+            edited_pos += delta;
+        }
+    }
+
+    edited_pos.max(0) as usize
 }
 
 /// Merge overlapping markers

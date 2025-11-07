@@ -83,6 +83,9 @@ impl TestProject {
 
     /// Mount the FUSE filesystem
     fn mount(&mut self) -> anyhow::Result<()> {
+        let debug_log = PathBuf::from("/tmp/fuse_test_debug.log");
+        let log_file = std::fs::File::create(&debug_log)?;
+
         let mut child = Command::new(env!("CARGO_BIN_EXE_sss"))
             .arg("mount")
             .arg(self.source_path())
@@ -91,7 +94,7 @@ impl TestProject {
             .env("HOME", self.home_dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(log_file)
             .spawn()?;
 
         // Give it time to fully initialize
@@ -194,39 +197,140 @@ impl TestProject {
         Ok(fs::read_to_string(file_path)?)
     }
 
-    /// Edit a file noninteractively using perl (more precise than ed, no trailing newlines)
+    /// Edit a file noninteractively - handles both substitutions and appends
     fn edit_file_with_ed(&self, path: &str, commands: &str) -> anyhow::Result<()> {
         let file_path = self.mount_path().join(path);
 
-        // Read current content
+        // Check if this is a complete rewrite (delete all + append)
+        if commands.starts_with("1,$d") {
+            // Extract the append text (between a\n and \n.\n)
+            let parts: Vec<&str> = commands.split("\n").collect();
+            if parts.len() >= 4 && parts[1] == "a" {
+                let mut new_content = String::new();
+                for i in 2..parts.len() {
+                    if parts[i] == "." {
+                        break;
+                    }
+                    if i > 2 {
+                        new_content.push('\n');
+                    }
+                    new_content.push_str(parts[i]);
+                }
+
+                fs::write(&file_path, new_content)?;
+                return Ok(());
+            }
+        }
+
+        // Check if this is an append command (contains $a)
+        if commands.contains("$a") {
+            // Handle append operation
+            let mut current = fs::read_to_string(&file_path)?;
+
+            // Extract the text to append (between $a\n and \n.\n)
+            let parts: Vec<&str> = commands.split("\n").collect();
+            if parts.len() >= 3 && parts[0] == "$a" {
+                // Get text between $a and the terminating .
+                let mut append_text = String::new();
+                for i in 1..parts.len() {
+                    if parts[i] == "." {
+                        break;
+                    }
+                    if i > 1 {
+                        append_text.push('\n');
+                    }
+                    append_text.push_str(parts[i]);
+                }
+
+                // Append to current content
+                if !current.ends_with('\n') && !append_text.is_empty() {
+                    current.push('\n');
+                }
+                current.push_str(&append_text);
+
+                fs::write(&file_path, current)?;
+                return Ok(());
+            }
+        }
+
+        // Handle substitution commands
         let current = fs::read_to_string(&file_path)?;
 
-        // Apply perl substitution
-        let perl_code = format!("$_ = do {{ local $/; <STDIN> }}; {}; print;", commands);
-        let mut child = Command::new("perl")
-            .arg("-e")
-            .arg(&perl_code)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+        // Check if it's a line-specific substitution (e.g., "2s/old/new/")
+        let line_specific_re = regex::Regex::new(r"^(\d+)s/").unwrap();
+        if let Some(captures) = line_specific_re.captures(commands) {
+            // Line-specific substitution
+            let line_num: usize = captures[1].parse().unwrap();
+            let subst_command = &commands[captures[0].len()-2..]; // Get the "s/old/new/" part
 
-        if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin.write_all(current.as_bytes())?;
+            // Split into lines, modify the specific line, rejoin
+            let mut lines: Vec<String> = current.lines().map(|s| s.to_string()).collect();
+            if line_num > 0 && line_num <= lines.len() {
+                // Apply substitution to the specific line
+                let perl_code = format!("$_ = shift @ARGV; {}; print;", subst_command);
+                let mut child = Command::new("perl")
+                    .arg("-e")
+                    .arg(&perl_code)
+                    .arg(&lines[line_num - 1])
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()?;
+
+                let output = child.wait_with_output()?;
+                if !output.status.success() {
+                    anyhow::bail!(
+                        "perl edit failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+
+                lines[line_num - 1] = String::from_utf8(output.stdout)?;
+            }
+
+            let modified = lines.join("\n");
+            fs::write(&file_path, modified)?;
+            return Ok(());
         }
 
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "perl edit failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+        // Global substitution - may be multiple commands separated by newlines
+        let mut content = current.clone();
+        eprintln!("DEBUG EDIT: Starting with content: {:?}", content);
+        for cmd in commands.lines() {
+            if cmd.trim().is_empty() {
+                continue;
+            }
+
+            eprintln!("DEBUG EDIT: Applying command: {:?}", cmd);
+            let perl_code = format!("$_ = do {{ local $/; <STDIN> }}; {}; print;", cmd);
+            let mut child = Command::new("perl")
+                .arg("-e")
+                .arg(&perl_code)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                stdin.write_all(content.as_bytes())?;
+            }
+
+            let output = child.wait_with_output()?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "perl edit failed on command '{}': {}",
+                    cmd,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+
+            content = String::from_utf8(output.stdout)?;
+            eprintln!("DEBUG EDIT: After command, content: {:?}", content);
         }
 
+        eprintln!("DEBUG EDIT: Writing final content: {:?}", content);
         // Write modified content back
-        let modified = String::from_utf8(output.stdout)?;
-        fs::write(&file_path, modified)?;
+        fs::write(&file_path, content)?;
 
         Ok(())
     }
@@ -587,7 +691,8 @@ fn test_fuse_multiple_markers_in_file() {
         source_content
     );
 
-    assert!(source_content.contains("root"));
-    assert!(source_content.contains("newsecret"));
-    assert!(source_content.contains("xyz-789"));
+    eprintln!("DEBUG: source_content = {:?}", source_content);
+    assert!(source_content.contains("root"), "Should contain 'root'");
+    assert!(source_content.contains("newsecret"), "Should contain 'newsecret'. Content: {}", source_content);
+    assert!(source_content.contains("xyz-789"), "Should contain 'xyz-789'");
 }

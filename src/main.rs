@@ -16,7 +16,7 @@ use sss::commands::handle_serve9p;
 fn add_fuse_commands(app: Command) -> Command {
     app.subcommand(
         Command::new("mount")
-            .about("Mount sss project with transparent rendering (Linux/macOS)")
+            .about("Mount sss project with transparent rendering (Linux with FUSE / macOS with macFUSE)")
             .arg(
                 Arg::new("source")
                     .help("Source directory (sss project). Defaults to current directory with --in-place")

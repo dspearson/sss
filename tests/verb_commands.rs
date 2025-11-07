@@ -1,4 +1,5 @@
 use std::env;
+use std::path::Path;
 use tempfile::TempDir;
 
 use sss::{
@@ -372,3 +373,287 @@ fn test_seal_and_open_are_independent() {
 // and stdin input tests would require spawning the sss binary with specific
 // environment variables and input, which is better done in a separate
 // end-to-end integration test suite.
+
+#[test]
+fn test_nested_braces_in_json() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test nested JSON in plaintext marker
+    let input = r#"config=⊕{{"key":"value","nested":{"inner":"data"}}}"#;
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    // Should have one encrypted marker
+    assert_eq!(sealed.matches("⊠{").count(), 1);
+    assert!(!sealed.contains("⊕{"));
+
+    // Open and render to verify content
+    let opened = processor.decrypt_content(&sealed).expect("Failed to open");
+    let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
+
+    assert_eq!(rendered, r#"config={"key":"value","nested":{"inner":"data"}}"#);
+}
+
+#[test]
+fn test_nested_braces_in_yaml() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test nested YAML-like structure
+    let input = "data=o+{a:{b:{c:value}}}";
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    assert!(sealed.contains("⊠{"));
+    assert!(!sealed.contains("o+{"));
+
+    let opened = processor.decrypt_content(&sealed).expect("Failed to open");
+    let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
+
+    assert_eq!(rendered, "data=a:{b:{c:value}}");
+}
+
+#[test]
+fn test_secrets_interpolation_angle_bracket_normalization() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test that <{...} markers are normalized to ⊲{...} (UTF-8 style)
+    let input = "secret=<{SECRET_NAME}";
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    // Should be normalized to UTF-8 style but NOT encrypted
+    assert!(!sealed.contains("⊠{"));
+    assert!(!sealed.contains("<{"));
+    assert!(sealed.contains("⊲{SECRET_NAME}"));
+}
+
+#[test]
+fn test_secrets_interpolation_marker() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test ⊲{...} secrets interpolation marker - should NOT be encrypted
+    let input = "password=⊲{DB_PASSWORD}";
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    // Interpolation markers are not encrypted - they pass through unchanged
+    assert!(!sealed.contains("⊠{"));
+    assert!(sealed.contains("⊲{DB_PASSWORD}"));
+    assert_eq!(sealed, input);
+}
+
+#[test]
+fn test_secrets_file_whole_encryption_dotsecretsfile() {
+    use std::path::Path;
+
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    let secrets_content = "DB_HOST: localhost\nDB_PASSWORD: secret123\nAPI_KEY: mykey\n";
+    let file_path = Path::new("config.secrets");
+
+    // Seal with path - should encrypt entire file
+    let sealed = processor
+        .seal_content_with_path(secrets_content, file_path)
+        .expect("Failed to seal secrets file");
+
+    // Should be a single encrypted block with POSIX newline
+    assert!(sealed.starts_with("⊠{"));
+    assert!(sealed.ends_with("}\n"), "Sealed secrets file should end with POSIX newline");
+    assert_eq!(sealed.matches("⊠{").count(), 1);
+    assert!(!sealed.contains("DB_HOST"));
+    assert!(!sealed.contains("DB_PASSWORD"));
+
+    // Open with path - should return plain text with NO markers
+    let opened = processor
+        .open_content_with_path(&sealed, file_path)
+        .expect("Failed to open secrets file");
+
+    assert_eq!(opened, secrets_content);
+    assert!(!opened.contains("⊠{"));
+    assert!(!opened.contains("⊕{"));
+    assert!(!opened.contains("⊲{"));
+}
+
+#[test]
+fn test_secrets_file_whole_encryption_named_secrets() {
+    use std::path::Path;
+
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    let secrets_content = "ldap-bind-password: mypass\njwt-secret: secret123\n";
+    let file_path = Path::new("secrets");
+
+    // Seal file named "secrets"
+    let sealed = processor
+        .seal_content_with_path(secrets_content, file_path)
+        .expect("Failed to seal secrets file");
+
+    // Should be a single encrypted block with POSIX newline
+    assert!(sealed.starts_with("⊠{"));
+    assert!(sealed.ends_with("}\n"), "Sealed secrets file should end with POSIX newline");
+    assert_eq!(sealed.matches("⊠{").count(), 1);
+
+    // Open should return plain text with NO markers
+    let opened = processor
+        .open_content_with_path(&sealed, file_path)
+        .expect("Failed to open secrets file");
+
+    assert_eq!(opened, secrets_content);
+    assert!(!opened.contains("⊠{"));
+    assert!(!opened.contains("⊕{"));
+}
+
+#[test]
+fn test_secrets_file_vs_regular_file() {
+    use std::path::Path;
+
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    let content = "password=⊕{secret123}";
+
+    // Regular file - encrypts markers only
+    let regular_file = Path::new("config.yaml");
+    let sealed_regular = processor
+        .seal_content_with_path(content, regular_file)
+        .expect("Failed to seal regular file");
+
+    // Should have encrypted marker, but "password=" prefix remains
+    assert!(sealed_regular.contains("password=⊠{"));
+
+    // Secrets file - encrypts entire content as-is (including the marker text itself)
+    let secrets_file = Path::new("config.secrets");
+    let sealed_secrets = processor
+        .seal_content_with_path(content, secrets_file)
+        .expect("Failed to seal secrets file");
+
+    // Should be single encrypted block, no prefix
+    assert!(sealed_secrets.starts_with("⊠{"));
+    assert!(!sealed_secrets.contains("password="));
+
+    // Opening regular file - returns plaintext markers
+    let opened_regular = processor
+        .open_content_with_path(&sealed_regular, regular_file)
+        .expect("Failed to open regular file");
+
+    assert!(opened_regular.contains("⊕{secret123}"));
+
+    // Opening secrets file - returns the exact original content (secrets files don't process markers)
+    let opened_secrets = processor
+        .open_content_with_path(&sealed_secrets, secrets_file)
+        .expect("Failed to open secrets file");
+
+    // Secrets file seals/unseals entire content as-is - it doesn't process the markers inside
+    assert_eq!(opened_secrets, "password=⊕{secret123}");
+}
+
+#[test]
+fn test_multiple_nested_markers_in_content() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    let input = r#"
+config:
+  json: ⊕{{"key":"value","nested":{"data":"here"}}}
+  yaml: o+{a:{b:{c:d}}}
+  secret_ref: <{API_KEY}
+  plain_text: not a marker
+"#;
+
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    // Should have 2 encrypted markers (⊕{} and o+{} only, not <{} which is for interpolation)
+    assert_eq!(sealed.matches("⊠{").count(), 2);
+    assert!(!sealed.contains("⊕{"));
+    assert!(!sealed.contains("o+{"));
+    // <{} markers are normalized to ⊲{} for interpolation
+    assert!(!sealed.contains("<{"));
+    assert!(sealed.contains("⊲{API_KEY}"));
+    assert!(sealed.contains("plain_text: not a marker"));
+
+    let opened = processor.decrypt_content(&sealed).expect("Failed to open");
+    let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
+
+    // Verify all content is correctly decrypted
+    assert!(rendered.contains(r#"{"key":"value","nested":{"data":"here"}}"#));
+    assert!(rendered.contains("a:{b:{c:d}}"));
+    assert!(rendered.contains("API_KEY"));
+    assert!(rendered.contains("plain_text: not a marker"));
+}
+
+#[test]
+fn test_empty_braces_in_markers() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test empty nested braces
+    let input = "data=⊕{{}}";
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    assert!(sealed.contains("⊠{"));
+
+    let opened = processor.decrypt_content(&sealed).expect("Failed to open");
+    let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
+
+    assert_eq!(rendered, "data={}");
+}
+
+#[test]
+fn test_deeply_nested_braces() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test deeply nested structure
+    let input = "config=o+{a:{b:{c:{d:{e:{f:value}}}}}}";
+    let sealed = processor.encrypt_content(input).expect("Failed to seal");
+
+    assert!(sealed.contains("⊠{"));
+
+    let opened = processor.decrypt_content(&sealed).expect("Failed to open");
+    let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
+
+    assert_eq!(rendered, "config=a:{b:{c:{d:{e:{f:value}}}}}");
+}
+
+#[test]
+fn test_secrets_file_posix_newline_and_idempotent_seal() {
+    let (_temp_dir, _username, repository_key) = setup_test_project();
+    let processor = Processor::new(repository_key).expect("Failed to create processor");
+
+    // Test POSIX compliance: sealed .secrets files should end with newline
+    let plaintext = "password: secret123";
+    let secrets_path = Path::new("test.secrets");
+
+    // First seal
+    let sealed1 = processor.seal_content_with_path(plaintext, secrets_path)
+        .expect("Failed to seal");
+
+    // Verify ends with newline (POSIX compliance)
+    assert!(sealed1.ends_with('\n'), "Sealed secrets file should end with newline for POSIX compliance");
+    assert!(sealed1.starts_with("⊠{"), "Sealed content should start with encrypted marker");
+
+    // Second seal (should be idempotent - no double encryption)
+    let sealed2 = processor.seal_content_with_path(&sealed1, secrets_path)
+        .expect("Failed to seal again");
+
+    // Verify idempotent: sealing an already-sealed file should not change it
+    assert_eq!(sealed1, sealed2, "Sealing should be idempotent - no double encryption");
+
+    // Open (decrypt) the sealed content
+    let opened = processor.open_content_with_path(&sealed1, secrets_path)
+        .expect("Failed to open");
+
+    assert_eq!(opened, plaintext, "Opening should return original plaintext");
+
+    // Re-seal after opening (new nonce, but still ends with newline)
+    let sealed3 = processor.seal_content_with_path(&opened, secrets_path)
+        .expect("Failed to re-seal");
+
+    assert!(sealed3.ends_with('\n'), "Re-sealed content should still end with newline");
+    assert_ne!(sealed1, sealed3, "Re-sealing should use a new nonce (different ciphertext)");
+
+    // Verify the cycle doesn't accumulate newlines
+    assert_eq!(sealed3.matches('\n').count(), 1, "Should have exactly one newline");
+}

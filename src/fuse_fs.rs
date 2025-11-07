@@ -15,11 +15,11 @@ use std::time::{Duration, UNIX_EPOCH};
 use crate::Processor;
 
 const TTL: Duration = Duration::from_secs(1);
+const TTL_ZERO: Duration = Duration::from_secs(0);  // No caching for passthrough files
 const ROOT_INO: u64 = 1;
 
 // Synthetic inodes for virtual files
-const SYNTHETIC_GIT_DIR_INO: u64 = u64::MAX - 2;
-const SYNTHETIC_GIT_FD_INO: u64 = u64::MAX - 1;
+const SYNTHETIC_OVERLAY_DIR_INO: u64 = u64::MAX - 1;  // Passthrough directory with raw filesystem access
 
 // Custom ioctl command for ssse edit to request opened mode (with ⊕{} markers)
 const SSS_IOC_OPENED_MODE: u32 = 0x5353_0001; // 'SS' magic + command 1
@@ -58,6 +58,71 @@ struct FileHandle {
     opened_mode: bool,
     /// Sealed mode: return raw sealed content with ⊠{} markers (signaled by O_NONBLOCK)
     sealed_mode: bool,
+    /// Origin mode: file is under .overlay/ - raw passthrough with no processing
+    origin_mode: bool,
+    /// File descriptor for passthrough files (kept open for lifetime of handle)
+    passthrough_fd: Option<i32>,
+    /// Original sealed content from backing store (captured at open time for writable files)
+    /// Used for smart reconstruction when editor truncates file before writing
+    original_sealed: Option<String>,
+}
+
+/// File operations strategy - defines how files are displayed and filtered
+trait FileOperations: Send + Sync {
+    /// Should this file be hidden from directory listings?
+    fn should_hide(&self, name: &str) -> bool;
+
+    /// Get file permissions (may adjust based on secrets, etc.)
+    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16;
+}
+
+/// SSS operations - renders ⊠{} to plaintext on read, seals to ⊠{} on write
+struct SssOperations {}
+
+impl FileOperations for SssOperations {
+    fn should_hide(&self, name: &str) -> bool {
+        matches!(
+            name,
+            ".git" | ".gitignore" | ".gitattributes" | ".gitmodules"
+        )
+    }
+
+    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16 {
+        use std::os::unix::fs::PermissionsExt;
+        let perm = metadata.permissions().mode() as u16;
+        if has_secrets {
+            // Force chmod 600 for files with secrets
+            0o600
+        } else {
+            perm
+        }
+    }
+}
+
+/// Passthrough operations - raw read/write with no SSS processing
+struct PassthroughOperations {}
+
+impl FileOperations for PassthroughOperations {
+    fn should_hide(&self, _name: &str) -> bool {
+        false  // Show everything including .git
+    }
+
+    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() as u16
+    }
+}
+
+/// Pinned path - maps a virtual prefix to source path with specific operations
+struct PinnedPath {
+    /// Virtual mount point (e.g., "/", "/.overlay")
+    virtual_prefix: PathBuf,
+
+    /// Corresponding source path (e.g., "/", "/")
+    source_path: PathBuf,
+
+    /// Operations for files under this path
+    operations: std::sync::Arc<dyn FileOperations>,
 }
 
 /// FUSE filesystem for transparent encryption/decryption of sss-managed files.
@@ -90,6 +155,10 @@ pub struct SssFS {
     /// File descriptor to mount point directory (held open before mount for /proc access)
     /// Allows accessing the underlying directory via /proc/self/fd/<mount_fd> even after FUSE mount
     mount_fd: Option<std::os::unix::io::RawFd>,
+    /// UID of the process running FUSE (for synthetic directories)
+    uid: u32,
+    /// GID of the process running FUSE (for synthetic directories)
+    gid: u32,
     /// Processor for encryption/decryption operations
     processor: Processor,
     /// Inode table: maps inode number to path information
@@ -104,6 +173,8 @@ pub struct SssFS {
     next_fh: RwLock<u64>,
     /// Cache of rendered file contents (inode -> decrypted bytes)
     render_cache: RwLock<HashMap<u64, Vec<u8>>>,
+    /// Pinned virtual paths with their operations
+    pinned_paths: Vec<PinnedPath>,
 }
 
 impl SssFS {
@@ -176,7 +247,12 @@ impl SssFS {
             let fd = unsafe {
                 let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
                 // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
-                libc::open(path_cstr.as_ptr(), libc::O_PATH | libc::O_DIRECTORY)
+                // macOS doesn't have O_PATH, use O_RDONLY | O_DIRECTORY instead
+                #[cfg(target_os = "linux")]
+                let flags = libc::O_PATH | libc::O_DIRECTORY;
+                #[cfg(target_os = "macos")]
+                let flags = libc::O_RDONLY | libc::O_DIRECTORY;
+                libc::open(path_cstr.as_ptr(), flags)
             };
 
             if fd < 0 {
@@ -205,10 +281,32 @@ impl SssFS {
         inode_table.insert(ROOT_INO, root_entry.clone());
         path_to_ino.insert(PathBuf::from("/"), ROOT_INO);
 
+        // Initialize pinned paths - order matters! More specific prefixes first
+        let pinned_paths = vec![
+            // .overlay/ - passthrough to root with no SSS processing
+            PinnedPath {
+                virtual_prefix: PathBuf::from("/.overlay"),
+                source_path: PathBuf::from("/"),
+                operations: std::sync::Arc::new(PassthroughOperations {}),
+            },
+            // Root - normal SSS operations (render/seal)
+            PinnedPath {
+                virtual_prefix: PathBuf::from("/"),
+                source_path: PathBuf::from("/"),
+                operations: std::sync::Arc::new(SssOperations {}),
+            },
+        ];
+
+        // Get current process uid/gid for synthetic directories
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+
         Ok(Self {
             source_path,
             source_fd,
             mount_fd,
+            uid,
+            gid,
             processor,
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
@@ -216,6 +314,7 @@ impl SssFS {
             file_handles: RwLock::new(HashMap::new()),
             next_fh: RwLock::new(1),
             render_cache: RwLock::new(HashMap::new()),
+            pinned_paths,
         })
     }
 
@@ -247,13 +346,45 @@ impl SssFS {
         self.mount_fd
     }
 
-    /// Get the real path for a given virtual path
-    fn real_path(&self, virtual_path: &Path) -> PathBuf {
-        if virtual_path == Path::new("/") {
-            self.source_path.clone()
-        } else {
-            self.source_path.join(virtual_path.strip_prefix("/").unwrap())
+    /// Find the pinned path that matches the given virtual path (longest prefix match)
+    fn find_pinned_path(&self, virtual_path: &Path) -> &PinnedPath {
+        // Longest prefix match - more specific paths come first in the vec
+        for pinned in &self.pinned_paths {
+            if virtual_path.starts_with(&pinned.virtual_prefix) {
+                return pinned;
+            }
         }
+
+        // Should never happen if we have a root "/" entry
+        panic!("No pinned path found for: {:?}", virtual_path);
+    }
+
+    /// Translate virtual path to source path and get operations
+    /// Returns: (source_rel_path, pinned_path)
+    fn translate_virtual_to_source(&self, virtual_path: &Path) -> (PathBuf, &PinnedPath) {
+        let pinned = self.find_pinned_path(virtual_path);
+
+        // Strip the virtual prefix and apply to source path
+        let rel_to_virtual = virtual_path
+            .strip_prefix(&pinned.virtual_prefix)
+            .unwrap_or(Path::new(""));
+
+        let source_path = if rel_to_virtual.as_os_str().is_empty() {
+            pinned.source_path.clone()
+        } else if pinned.source_path == Path::new("/") {
+            PathBuf::from(rel_to_virtual)
+        } else {
+            pinned.source_path.join(rel_to_virtual)
+        };
+
+        // Convert to relative path for fd operations
+        let source_rel = if source_path == Path::new("/") {
+            PathBuf::from(".")
+        } else {
+            source_path.strip_prefix("/").unwrap_or(&source_path).to_path_buf()
+        };
+
+        (source_rel, pinned)
     }
 
     /// Get or create an inode for a path
@@ -290,6 +421,10 @@ impl SssFS {
 
     /// Convert filesystem metadata to FUSE FileAttr
     fn metadata_to_attr(&self, ino: u64, metadata: &fs::Metadata, size_override: Option<u64>, force_writable: bool) -> FileAttr {
+        self.metadata_to_attr_with_secrets(ino, metadata, size_override, force_writable, false)
+    }
+
+    fn metadata_to_attr_with_secrets(&self, ino: u64, metadata: &fs::Metadata, size_override: Option<u64>, force_writable: bool, has_secrets: bool) -> FileAttr {
         let kind = if metadata.is_dir() {
             FileType::Directory
         } else if metadata.is_symlink() {
@@ -301,10 +436,20 @@ impl SssFS {
         // Use override size for rendered content
         let size = size_override.unwrap_or(metadata.len());
 
-        // Get base permissions and add write if needed
+        // Get base permissions
         let mut perm = Self::get_permissions(metadata);
-        if force_writable && kind == FileType::RegularFile {
-            // Ensure owner write permission (0o200)
+
+        // If file contains rendered secrets, restrict permissions for security
+        // chmod 600 for non-executable files, 700 for executable files
+        if has_secrets && kind == FileType::RegularFile {
+            let has_execute = (perm & 0o111) != 0;
+            perm = if has_execute {
+                0o700  // Owner read/write/execute only
+            } else {
+                0o600  // Owner read/write only
+            };
+        } else if force_writable && kind == FileType::RegularFile {
+            // Ensure owner write permission (0o200) for non-secret files
             perm |= 0o200;
         }
 
@@ -318,7 +463,7 @@ impl SssFS {
             crtime: metadata.created().unwrap_or(UNIX_EPOCH),
             kind,
             perm,
-            nlink: 1,
+            nlink: Self::get_nlink(metadata) as u32,
             uid: Self::get_uid(metadata),
             gid: Self::get_gid(metadata),
             rdev: 0,
@@ -360,9 +505,47 @@ impl SssFS {
         0
     }
 
+    #[cfg(unix)]
+    fn get_nlink(metadata: &fs::Metadata) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        metadata.nlink()
+    }
+
+    #[cfg(not(unix))]
+    fn get_nlink(_metadata: &fs::Metadata) -> u64 {
+        1
+    }
+
     /// Check if a file has encrypted markers (should be processed)
     fn has_encrypted_markers(content: &str) -> bool {
         content.contains("⊠{")
+    }
+
+    /// Check if a file has any SSS markers (encrypted OR plaintext)
+    fn has_any_markers(content: &str) -> bool {
+        content.contains("⊠{") || content.contains("⊕{") ||
+        content.contains("[*{") || content.contains("o+{")
+    }
+
+    /// Check if a file at the given path contains encrypted markers
+    fn file_has_secrets(&self, rel_path: &Path) -> bool {
+        // Use fd-based access to avoid infinite loop when mounted in-place
+        match self.metadata_via_fd(rel_path) {
+            Ok(metadata) if metadata.is_file() => {
+                // Try to read the file and check for encrypted markers
+                match self.read_file_via_fd(rel_path) {
+                    Ok(content) => {
+                        if let Ok(s) = String::from_utf8(content) {
+                            Self::has_encrypted_markers(&s)
+                        } else {
+                            false  // Not UTF-8, can't have text markers
+                        }
+                    }
+                    Err(_) => false,  // Can't read, assume no secrets
+                }
+            }
+            _ => false,  // Not a file or doesn't exist
+        }
     }
 
     /// Check if a file/directory should be hidden from FUSE view
@@ -384,25 +567,38 @@ impl SssFS {
         let mut stat: libc::stat = unsafe { std::mem::zeroed() };
 
         let result = unsafe {
-            libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, 0)
+            libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
         };
 
         if result < 0 {
-            return Err(anyhow!("Failed to stat file: {}", std::io::Error::last_os_error()));
+            let err = std::io::Error::last_os_error();
+            return Err(anyhow!("Failed to stat file: {}", err));
         }
 
-        // Convert libc::stat to std::fs::Metadata
-        // We need to open the file briefly to get proper Metadata
+        // Determine if this is a directory from the stat result
+        let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+
+        // Open with appropriate flags based on file type
+        // Directories need O_DIRECTORY, files need O_RDONLY
+        // O_NOFOLLOW to not follow symlinks
+        let flags = if is_dir {
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
+        } else {
+            libc::O_RDONLY | libc::O_NOFOLLOW
+        };
+
         let fd = unsafe {
-            libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
+            libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
         };
 
         if fd < 0 {
-            return Err(anyhow!("Failed to open file for metadata: {}", std::io::Error::last_os_error()));
+            let err = std::io::Error::last_os_error();
+            return Err(anyhow!("Failed to open file for metadata: {}", err));
         }
 
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        Ok(file.metadata()?)
+        let metadata = file.metadata()?;
+        Ok(metadata)
     }
 
     /// Read file using source_fd (works even if mounted over source)
@@ -629,38 +825,67 @@ impl SssFS {
         Ok(())
     }
 
-    fn write_and_seal(&self, path: &Path, rendered_content: &[u8]) -> Result<()> {
+    fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
         // Convert bytes to string
         let rendered_str = String::from_utf8(rendered_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
-        // Read current sealed version FROM BACKING STORE (not through FUSE!)
-        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
-        let sealed_current = match self.read_file_via_fd(rel_path) {
-            Ok(content) => String::from_utf8(content)
-                .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?,
-            Err(_) => {
-                // File doesn't exist or can't be read, write as-is
-                return self.write_raw_to_backing(path, rendered_content);
+        // Get current sealed version - use original_sealed if provided (from file handle),
+        // otherwise read from backing store
+        let sealed_current = if let Some(original) = original_sealed {
+            original.clone()
+        } else {
+            // Read current sealed version FROM BACKING STORE (not through FUSE!)
+            let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+            match self.read_file_via_fd(rel_path) {
+                Ok(content) => String::from_utf8(content)
+                    .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?,
+                Err(_) => {
+                    // File doesn't exist or can't be read, write as-is
+                    return self.write_raw_to_backing(path, rendered_content);
+                }
             }
         };
 
-        // If current version has no markers, just write the rendered content
-        if !Self::has_encrypted_markers(&sealed_current) {
+        // Check if new content has plaintext markers that need sealing
+        let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
+
+        // If current version has no markers and new content has no plaintext markers,
+        // just write the rendered content as-is
+        if !Self::has_any_markers(&sealed_current) && !new_has_plaintext_markers {
             return self.write_raw_to_backing(path, rendered_content);
         }
 
+        // If current has no markers but new has plaintext markers, seal them directly
+        if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
+            let sealed_new = self.processor.encrypt_content(&rendered_str)?;
+            return self.write_raw_to_backing(path, sealed_new.as_bytes());
+        }
+
         // Perform smart reconstruction:
-        // 1. Open (decrypt) current sealed version to get markers
+        // 1. Open (decrypt/open) current version to get content with markers
+        //    (Works for both ⊠{} encrypted and ⊕{} plaintext markers)
         let opened_current = self.processor.decrypt_content(&sealed_current)?;
 
-        // 2. Render current version for comparison
+        // 2. Render current version for comparison (strip all markers)
         let rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
 
-        // 3. Use similar diffing to reconstruct markers (from merge module)
-        let reconstructed = crate::merge::smart_reconstruct(&rendered_str, &opened_current, &rendered_current)?;
+        // 3. Use intelligent marker inference to reconstruct markers
+        //    This preserves marker placement even if content changed
+        let inference_result = crate::marker_inference::infer_markers(&opened_current, &rendered_str)
+            .map_err(|e| anyhow!("Marker inference failed: {}", e))?;
 
-        // 4. Seal the reconstructed content
+        // Log any warnings from marker inference
+        if !inference_result.warnings.is_empty() {
+            eprintln!("Marker inference warnings for {:?}:", path);
+            for warning in &inference_result.warnings {
+                eprintln!("  - {}", warning);
+            }
+        }
+
+        let reconstructed = inference_result.output;
+
+        // 4. Seal the reconstructed content (⊕{} → ⊠{})
         let sealed_new = self.processor.encrypt_content(&reconstructed)?;
 
         // 5. Write to backing store (not through FUSE!)
@@ -670,30 +895,43 @@ impl SssFS {
 
     /// Internal lookup implementation that returns Result
     fn lookup_impl(&mut self, parent: u64, name: &OsStr) -> Result<(u64, FileAttr)> {
-        // Hide git-related files from FUSE view
-        if let Some(name_str) = name.to_str() {
-            if Self::should_hide(name_str) {
-                return Err(anyhow!("File hidden"));
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            self.get_inode(parent)
+                .ok_or_else(|| anyhow!("Parent inode not found"))?
+        };
+
+        // Construct virtual path for the file
+        let virtual_path = parent_entry.path.join(name);
+
+        // Use translate_virtual_to_source to properly handle .overlay/ paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
+
+        // Hide git-related files from FUSE view (but not in .overlay passthrough)
+        if pinned.virtual_prefix != Path::new("/.overlay") {
+            if let Some(name_str) = name.to_str() {
+                if Self::should_hide(name_str) {
+                    return Err(anyhow!("File hidden"));
+                }
             }
         }
 
-        let parent_entry = self.get_inode(parent)
-            .ok_or_else(|| anyhow!("Parent inode not found"))?;
-
-        let parent_path = self.real_path(&parent_entry.path);
-        let file_path = parent_path.join(name);
-
-        let real_path = self.real_path(&file_path);
-        let mut rel_path = real_path.strip_prefix(&self.source_path).unwrap_or(&real_path);
-
-        if rel_path.as_os_str().is_empty() {
-            rel_path = Path::new(".");
-        }
+        let rel_path = if source_rel_path.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            &source_rel_path
+        };
 
         let metadata = self.metadata_via_fd(rel_path)?;
 
         // Get or create inode
-        let ino = self.get_or_create_inode(&file_path, parent);
+        let ino = self.get_or_create_inode(&virtual_path, parent);
         let attr = self.metadata_to_attr(ino, &metadata, None, false);
 
         Ok((ino, attr))
@@ -715,33 +953,6 @@ impl SssFS {
         }
     }
 
-    /// Cache file content based on mode and return size override
-    fn cache_file_content(&self, file_mode: FileMode, real_path: &Path, ino: u64) -> Option<u64> {
-        match file_mode {
-            FileMode::Sealed => {
-                self.read_sealed(real_path).ok().map(|sealed| {
-                    let size = sealed.len() as u64;
-                    self.render_cache.write().insert(ino, sealed);
-                    size
-                })
-            }
-            FileMode::Opened => {
-                self.read_and_open(real_path).ok().map(|opened| {
-                    let size = opened.len() as u64;
-                    self.render_cache.write().insert(ino, opened);
-                    size
-                })
-            }
-            FileMode::Rendered => {
-                self.read_and_render(real_path).ok().map(|rendered| {
-                    let size = rendered.len() as u64;
-                    self.render_cache.write().insert(ino, rendered);
-                    size
-                })
-            }
-        }
-    }
-
     /// Strip virtual suffix (.sss-opened) from path if present
     fn strip_virtual_suffix(path: &Path, is_opened_mode: bool) -> PathBuf {
         if is_opened_mode {
@@ -759,10 +970,10 @@ impl SssFS {
     /// Pre-cache file content based on mode flags
     fn precache_for_open(&self, file_path: &Path, is_sealed_mode: bool, is_opened_mode: bool, writable: bool) -> Option<Vec<u8>> {
         if is_sealed_mode {
-            // Sealed mode: wait for setxattr confirmation
-            None
+            // Sealed mode: pre-cache raw sealed content with ⊠{} markers
+            self.read_sealed(file_path).ok()
         } else if is_opened_mode {
-            // Opened mode: pre-cache with markers
+            // Opened mode: pre-cache with ⊕{} markers
             self.read_and_open(file_path).ok()
         } else if !writable {
             // Read-only: pre-render normally
@@ -812,14 +1023,19 @@ impl SssFS {
         Ok(dir_ptr)
     }
 
-    /// Read all entries from an open directory
-    fn read_dir_entries(&mut self, dir_ptr: *mut libc::DIR, parent_ino: u64, parent_path: &Path)
+    /// Read all entries from an open directory using pinned path operations
+    fn read_dir_entries_with_operations(&mut self, dir_ptr: *mut libc::DIR, parent_ino: u64, parent_path: &Path, operations: &dyn FileOperations)
         -> Vec<(u64, FileType, String)> {
         let mut items = Vec::new();
 
         unsafe {
             loop {
-                *libc::__errno_location() = 0;
+                // Reset errno before readdir
+                #[cfg(target_os = "linux")]
+                { *libc::__errno_location() = 0; }
+                #[cfg(target_os = "macos")]
+                { *libc::__error() = 0; }
+
                 let entry_ptr = libc::readdir(dir_ptr);
 
                 if entry_ptr.is_null() {
@@ -836,8 +1052,8 @@ impl SssFS {
                     continue;
                 }
 
-                // Hide git-related files
-                if Self::should_hide(&name) {
+                // Use operations from pinned path for hiding logic
+                if operations.should_hide(&name) {
                     continue;
                 }
 
@@ -882,68 +1098,50 @@ impl SssFS {
 
     /// Resolve entry path to relative path suitable for fd operations
     /// Handles prefix stripping and empty path conversion to "."
-    fn resolve_rel_path<'a>(&self, entry_path: &'a Path) -> std::borrow::Cow<'a, Path> {
-        let real_path = self.real_path(entry_path);
-        let rel_path = real_path.strip_prefix(&self.source_path)
-            .unwrap_or(&real_path);
+    fn resolve_rel_path(&self, entry_path: &Path) -> std::borrow::Cow<'static, Path> {
+        // Use translate_virtual_to_source to properly handle .overlay/ paths
+        let (source_rel_path, _pinned) = self.translate_virtual_to_source(entry_path);
 
-        if rel_path.as_os_str().is_empty() {
+        let result = if source_rel_path.as_os_str().is_empty() {
             std::borrow::Cow::Borrowed(Path::new("."))
         } else {
-            std::borrow::Cow::Owned(rel_path.to_path_buf())
-        }
+            std::borrow::Cow::Owned(source_rel_path)
+        };
+        result
     }
 }
 
 impl Filesystem for SssFS {
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        // Special case: .git/fd synthetic file
-        if ino == SYNTHETIC_GIT_FD_INO {
-            if let Some(mount_fd) = self.mount_fd {
-                let fd_string = format!("{}\n", mount_fd);
-                let attr = FileAttr {
-                    ino: SYNTHETIC_GIT_FD_INO,
-                    size: fd_string.len() as u64,
-                    blocks: 1,
-                    atime: UNIX_EPOCH,
-                    mtime: UNIX_EPOCH,
-                    ctime: UNIX_EPOCH,
-                    crtime: UNIX_EPOCH,
-                    kind: FileType::RegularFile,
-                    perm: 0o400,
-                    nlink: 1,
-                    uid: unsafe { libc::getuid() },
-                    gid: unsafe { libc::getgid() },
-                    rdev: 0,
-                    blksize: 512,
-                    flags: 0,
-                };
-                reply.attr(&TTL, &attr);
-                return;
+        // Handle synthetic .overlay directory
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
+            // Get attributes from the actual source directory
+            match self.metadata_via_fd(Path::new(".")) {
+                Ok(metadata) => {
+                    let attr = FileAttr {
+                        ino: SYNTHETIC_OVERLAY_DIR_INO,
+                        size: 0,
+                        blocks: 0,
+                        atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
+                        mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
+                        ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        crtime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        kind: FileType::Directory,
+                        perm: 0o755,  // rwxr-xr-x
+                        nlink: 2,
+                        uid: self.uid,
+                        gid: self.gid,
+                        rdev: 0,
+                        blksize: 512,
+                        flags: 0,
+                    };
+                    reply.attr(&TTL, &attr);
+                }
+                Err(_) => {
+                    reply.error(libc::EIO);
+                }
             }
-        }
-
-        // Special case: .git synthetic directory
-        if ino == SYNTHETIC_GIT_DIR_INO {
-            let attr = FileAttr {
-                ino: SYNTHETIC_GIT_DIR_INO,
-                size: 4096,
-                blocks: 8,
-                atime: UNIX_EPOCH,
-                mtime: UNIX_EPOCH,
-                ctime: UNIX_EPOCH,
-                crtime: UNIX_EPOCH,
-                kind: FileType::Directory,
-                perm: 0o500,
-                nlink: 2,
-                uid: unsafe { libc::getuid() },
-                gid: unsafe { libc::getgid() },
-                rdev: 0,
-                blksize: 512,
-                flags: 0,
-            };
-            reply.attr(&TTL, &attr);
             return;
         }
 
@@ -955,66 +1153,87 @@ impl Filesystem for SssFS {
             }
         };
 
-        let rel_path = self.resolve_rel_path(&entry.path);
 
-        match self.metadata_via_fd(&rel_path) {
+        // Translate virtual path to source path using pinned paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
+
+
+        match self.metadata_via_fd(&source_rel_path) {
             Ok(metadata) => {
-                let is_opened_mode = entry.path.to_str()
+                let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
+
+                let _is_opened_mode = entry.path.to_str()
                     .map(|s| s.ends_with(".sss-opened"))
                     .unwrap_or(false);
 
-                let size_override = self.compute_size_override(ino, &metadata);
-                let attr = self.metadata_to_attr(ino, &metadata, size_override, is_opened_mode);
+                // Compute size override for rendered/opened modes (passthrough = no override)
+                let size_override = if is_passthrough {
+                    None
+                } else {
+                    self.compute_size_override(ino, &metadata)
+                };
+
+                let has_secrets = metadata.is_file() && !is_passthrough &&
+                    self.file_has_secrets(&source_rel_path);
+
+                // Use operations to get permissions
+                let perm = pinned.operations.get_permissions(&metadata, has_secrets);
+
+                // Build FileAttr
+                let kind = if metadata.is_dir() {
+                    FileType::Directory
+                } else if metadata.is_symlink() {
+                    FileType::Symlink
+                } else {
+                    FileType::RegularFile
+                };
+
+                let size = size_override.unwrap_or(metadata.len());
+
+                let attr = FileAttr {
+                    ino,
+                    size,
+                    blocks: size.div_ceil(512),
+                    atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
+                    mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
+                    ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    crtime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    kind,
+                    perm,
+                    nlink: Self::get_nlink(&metadata) as u32,
+                    uid: Self::get_uid(&metadata),
+                    gid: Self::get_gid(&metadata),
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
                 reply.attr(&TTL, &attr);
             }
-            Err(_) => reply.error(libc::ENOENT),
+            Err(_) => {
+                reply.error(libc::ENOENT);
+            }
         }
     }
 
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
 
-        // Special case: .git/fd synthetic file
-        if name == "fd" && parent == SYNTHETIC_GIT_DIR_INO {
-            if let Some(mount_fd) = self.mount_fd {
-                let fd_string = format!("{}\n", mount_fd);
-                let attr = FileAttr {
-                    ino: SYNTHETIC_GIT_FD_INO,
-                    size: fd_string.len() as u64,
-                    blocks: 1,
-                    atime: UNIX_EPOCH,
-                    mtime: UNIX_EPOCH,
-                    ctime: UNIX_EPOCH,
-                    crtime: UNIX_EPOCH,
-                    kind: FileType::RegularFile,
-                    perm: 0o400, // Read-only for owner
-                    nlink: 1,
-                    uid: unsafe { libc::getuid() },
-                    gid: unsafe { libc::getgid() },
-                    rdev: 0,
-                    blksize: 512,
-                    flags: 0,
-                };
-                reply.entry(&TTL, &attr, 0);
-                return;
-            }
-        }
-
-        // Special case: .git directory (allow lookup but keep hidden from readdir)
-        if name == ".git" {
+        // Special case: looking up ".overlay" from root
+        if parent == ROOT_INO && name == ".overlay" {
             let attr = FileAttr {
-                ino: SYNTHETIC_GIT_DIR_INO,
-                size: 4096,
-                blocks: 8,
+                ino: SYNTHETIC_OVERLAY_DIR_INO,
+                size: 0,
+                blocks: 0,
                 atime: UNIX_EPOCH,
                 mtime: UNIX_EPOCH,
                 ctime: UNIX_EPOCH,
                 crtime: UNIX_EPOCH,
                 kind: FileType::Directory,
-                perm: 0o500, // Read+execute for owner only
+                perm: 0o755,
                 nlink: 2,
-                uid: unsafe { libc::getuid() },
-                gid: unsafe { libc::getgid() },
+                uid: self.uid,
+                gid: self.gid,
                 rdev: 0,
                 blksize: 512,
                 flags: 0,
@@ -1023,56 +1242,105 @@ impl Filesystem for SssFS {
             return;
         }
 
+        // Handle lookups within .overlay/ - parent is synthetic, build path manually
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            // Parent is .overlay synthetic directory
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            // Get parent entry from inode table
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        };
+
+
         // Parse virtual file mode (.sss-sealed, .sss-opened, or normal)
         let (actual_name, file_mode) = Self::parse_virtual_file_mode(name);
         let is_opened_mode = matches!(file_mode, FileMode::Opened);
 
-        // Hide git-related files from FUSE view (except .git itself, handled above)
-        if let Some(name_str) = actual_name.to_str() {
-            if Self::should_hide(name_str) {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        }
-
-        let parent_entry = match self.get_inode(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
-
-        // Build paths
+        // Build virtual path
         let virtual_path = if is_opened_mode {
             parent_entry.path.join(name) // Keep .sss-opened suffix
         } else {
-            parent_entry.path.join(actual_name)
-        };
-        let real_path = self.real_path(&parent_entry.path.join(actual_name));
-        let rel_path = real_path.strip_prefix(&self.source_path)
-            .unwrap_or(&real_path);
-        let rel_path = if rel_path.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            rel_path
+            parent_entry.path.join(&actual_name)
         };
 
 
-        match self.metadata_via_fd(rel_path) {
+        // Translate to source path using pinned paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
+
+
+        // Check if should hide (only for normal SSS paths, not passthrough)
+        if pinned.virtual_prefix != Path::new("/.overlay") {
+            if let Some(name_str) = actual_name.to_str() {
+                if pinned.operations.should_hide(name_str) {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        }
+
+        // Get metadata
+        match self.metadata_via_fd(&source_rel_path) {
             Ok(metadata) => {
                 let ino = self.get_or_create_inode(&virtual_path, parent);
 
-                let (size_override, force_writable) = if metadata.is_file() {
-                    (self.cache_file_content(file_mode, &real_path, ino), is_opened_mode)
+                let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
+
+                let size_override = if is_passthrough || matches!(file_mode, FileMode::Sealed) {
+                    None
                 } else {
-                    (None, false)
+                    self.compute_size_override(ino, &metadata)
                 };
 
-                let attr = self.metadata_to_attr(ino, &metadata, size_override, force_writable);
-                reply.entry(&TTL, &attr, 0);
+                let has_secrets = metadata.is_file() && !is_passthrough &&
+                    self.file_has_secrets(&source_rel_path);
+
+                let perm = pinned.operations.get_permissions(&metadata, has_secrets);
+
+                // Build FileAttr inline (same as getattr)
+                let kind = if metadata.is_dir() {
+                    FileType::Directory
+                } else if metadata.is_symlink() {
+                    FileType::Symlink
+                } else {
+                    FileType::RegularFile
+                };
+
+                let size = size_override.unwrap_or(metadata.len());
+
+                let attr = FileAttr {
+                    ino,
+                    size,
+                    blocks: size.div_ceil(512),
+                    atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
+                    mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
+                    ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    crtime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    kind,
+                    perm,
+                    nlink: Self::get_nlink(&metadata) as u32,
+                    uid: Self::get_uid(&metadata),
+                    gid: Self::get_gid(&metadata),
+                    rdev: 0,
+                    blksize: 512,
+                    flags: 0,
+                };
+
+                // Use zero TTL for passthrough files to disable kernel caching
+                // This prevents stale negative lookups after rename operations
+                let ttl = if is_passthrough { &TTL_ZERO } else { &TTL };
+                reply.entry(ttl, &attr, 0);
             }
-            Err(_e) => {
+            Err(_) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1087,36 +1355,34 @@ impl Filesystem for SssFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        // Special case: .git synthetic directory (contains only "fd" file)
-        if ino == SYNTHETIC_GIT_DIR_INO {
-            let items = vec![
-                (ino, FileType::Directory, ".".to_string()),
-                (ROOT_INO, FileType::Directory, "..".to_string()),
-                (SYNTHETIC_GIT_FD_INO, FileType::RegularFile, "fd".to_string()),
-            ];
 
-            for (i, item) in items.iter().enumerate().skip(offset as usize) {
-                if reply.add(item.0, (i + 1) as i64, item.1, &item.2) {
-                    break;
-                }
+        // Handle .overlay/ - parent is synthetic, build entry manually
+        let entry = if ino == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
             }
-
-            reply.ok();
-            return;
-        }
-
-        let entry = match self.get_inode(ino) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
+        } else {
+            // Get directory entry from inode table
+            match self.get_inode(ino) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
             }
         };
 
-        let rel_path = self.resolve_rel_path(&entry.path);
+
+        // Translate virtual path to source path using pinned paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
+        // Clone the operations Arc to avoid holding a borrow on self
+        let operations = pinned.operations.clone();
+
 
         // Open directory via FD
-        let dir_ptr = match self.open_dir_fd(&rel_path) {
+        let dir_ptr = match self.open_dir_fd(&source_rel_path) {
             Ok(p) => p,
             Err(_e) => {
                 reply.error(libc::EIO);
@@ -1130,12 +1396,17 @@ impl Filesystem for SssFS {
             (entry.parent, FileType::Directory, "..".to_string()),
         ];
 
-        // Read directory entries
-        items.extend(self.read_dir_entries(dir_ptr, ino, &entry.path));
+        // Read directory entries - use pinned path operations for filtering
+        let entries = self.read_dir_entries_with_operations(dir_ptr, ino, &entry.path, &*operations);
+        items.extend(entries);
+
+        // If this is the root directory, add synthetic .overlay directory
+        if ino == ROOT_INO {
+            items.push((SYNTHETIC_OVERLAY_DIR_INO, FileType::Directory, ".overlay".to_string()));
+        }
 
         // Close directory
         unsafe { libc::closedir(dir_ptr); }
-
 
         // Send entries to FUSE
         for (i, item) in items.iter().enumerate().skip(offset as usize) {
@@ -1150,6 +1421,12 @@ impl Filesystem for SssFS {
     /// Open a file
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
 
+        // Block operations on .git blocking directory only
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
+            reply.error(libc::EISDIR);
+            return;
+        }
+
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
@@ -1158,19 +1435,34 @@ impl Filesystem for SssFS {
             }
         };
 
-        // Determine file modes
-        let is_opened_mode = entry.path.to_str()
-            .map(|s| s.ends_with(".sss-opened"))
-            .unwrap_or(false);
-        let is_sealed_mode = (flags & libc::O_NONBLOCK) != 0;
+
+        // Translate virtual path to source path using pinned paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
+        let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
+
+
+        // Determine file modes (not applicable for passthrough files)
+        // Opened mode: detected by nonsense flag combination O_DIRECTORY|O_CREAT
+        // (semantically invalid: can't create when opening as directory, so never used by real programs)
+        let is_opened_mode = !is_passthrough &&
+            (flags & libc::O_DIRECTORY) != 0 &&
+            (flags & libc::O_CREAT) != 0;
+        // Sealed mode: detected by nonsense flag combination O_RDONLY|O_TRUNC
+        // (semantically invalid: can't truncate read-only file, so never used by real programs)
+        let is_sealed_mode = !is_passthrough &&
+            (flags & libc::O_ACCMODE) == libc::O_RDONLY &&
+            (flags & libc::O_TRUNC) != 0;
         let writable = (flags & libc::O_RDWR) != 0 || (flags & libc::O_WRONLY) != 0;
 
-        
-        
-
-        // Strip virtual suffix and get real file path
-        let real_path = self.real_path(&entry.path);
-        let file_path = Self::strip_virtual_suffix(&real_path, is_opened_mode);
+        // Get full file path for handle
+        let file_path = if is_passthrough {
+            // Passthrough: use source path directly
+            self.source_path.join(&source_rel_path)
+        } else {
+            // SSS mode: use translated source path and strip virtual suffix if opened mode
+            let translated_path = self.source_path.join(&source_rel_path);
+            Self::strip_virtual_suffix(&translated_path, is_opened_mode)
+        };
 
         // Generate file handle
         let fh = {
@@ -1180,22 +1472,128 @@ impl Filesystem for SssFS {
             fh
         };
 
-        // Pre-cache content based on mode
-        let cached_content = self.precache_for_open(&file_path, is_sealed_mode, is_opened_mode, writable);
+        // Pre-cache content based on mode (skip for passthrough - raw access)
+        let cached_content = if is_passthrough {
+            None
+        } else {
+            self.precache_for_open(&file_path, is_sealed_mode, is_opened_mode, writable)
+        };
+
+        // Capture original sealed content from backing store if file is writable
+        // This is needed for smart reconstruction when editor truncates file before writing
+        // Skip for passthrough files (raw, no markers)
+        let original_sealed = if !is_passthrough && writable && !is_sealed_mode && !is_opened_mode {
+            let rel_path = file_path.strip_prefix(&self.source_path).unwrap_or(&file_path);
+            self.read_file_via_fd(rel_path)
+                .ok()
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+                .filter(|s| Self::has_any_markers(s))
+        } else {
+            None
+        };
+
+        // Open file descriptor for passthrough files to avoid reopening on every operation
+        let passthrough_fd = if is_passthrough && writable {
+            // Build open flags for passthrough file
+            let mut open_flags = if writable {
+                if (flags & libc::O_RDWR) != 0 {
+                    libc::O_RDWR
+                } else {
+                    libc::O_WRONLY
+                }
+            } else {
+                libc::O_RDONLY
+            };
+
+            // Preserve important flags
+            if (flags & libc::O_TRUNC) != 0 {
+                open_flags |= libc::O_TRUNC;
+            }
+            if (flags & libc::O_CREAT) != 0 {
+                open_flags |= libc::O_CREAT;
+            }
+            if (flags & libc::O_EXCL) != 0 {
+                open_flags |= libc::O_EXCL;
+            }
+
+            // Open file via source_fd (with mode 0666 if creating)
+            let path_cstr = match std::ffi::CString::new(source_rel_path.as_os_str().as_bytes()) {
+                Ok(p) => p,
+                Err(_) => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            let fd = unsafe {
+                if (open_flags & libc::O_CREAT) != 0 {
+                    libc::openat(self.source_fd, path_cstr.as_ptr(), open_flags, 0o666)
+                } else {
+                    libc::openat(self.source_fd, path_cstr.as_ptr(), open_flags)
+                }
+            };
+
+            if fd < 0 {
+                let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+                reply.error(errno);
+                return;
+            }
+
+            Some(fd)
+        } else {
+            None
+        };
 
         // Store file handle
-        let handle = FileHandle {
+        let mut handle = FileHandle {
             ino,
-            path: file_path,
+            path: file_path.clone(),
             cached_content,
             writable,
             dirty: false,
             opened_mode: is_opened_mode,
             sealed_mode: is_sealed_mode,
+            origin_mode: is_passthrough,  // Keep field name for now
+            passthrough_fd,
+            original_sealed,
         };
 
+        // Handle O_TRUNC flag for writable non-passthrough files (but not sealed mode)
+        // When a file is opened with O_TRUNC, it should be truncated to zero length immediately
+        let should_truncate = !is_passthrough &&
+                              writable &&
+                              (flags & libc::O_TRUNC) != 0 &&
+                              !is_sealed_mode;
+
+        if should_truncate {
+            // Truncate the file on disk immediately
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&file_path)
+                .is_err()
+            {
+                reply.error(libc::EIO);
+                return;
+            }
+
+            // Set cached content to empty since file is now truncated
+            handle.cached_content = Some(Vec::new());
+            handle.dirty = false;  // File is already truncated on disk
+        }
+
         self.file_handles.write().insert(fh, handle);
-        reply.opened(fh, 0);
+
+        // For passthrough writable files, use FOPEN_DIRECT_IO to bypass page cache
+        // This ensures mmap writes go through our handlers instead of kernel page cache
+        let flags = if is_passthrough && writable {
+            const FOPEN_DIRECT_IO: u32 = 1 << 0;  // From linux/fuse.h
+            FOPEN_DIRECT_IO
+        } else {
+            0
+        };
+
+        reply.opened(fh, flags);
     }
 
     /// Read file data
@@ -1210,42 +1608,34 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        // Special case: .git/fd synthetic file
-        if ino == SYNTHETIC_GIT_FD_INO {
-            if let Some(mount_fd) = self.mount_fd {
-                let content = format!("{}\n", mount_fd);
-                let bytes = content.as_bytes();
-                let start = offset as usize;
-                let end = std::cmp::min(start + size as usize, bytes.len());
-
-                if start < bytes.len() {
-                    reply.data(&bytes[start..end]);
-                } else {
-                    reply.data(&[]);
-                }
-                return;
-            } else {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        }
-
         // Get content from handle or fall back to direct read
         let handles = self.file_handles.read();
         let content = match handles.get(&fh) {
             Some(handle) => {
-                // Sealed mode pending: wait for setxattr confirmation
-                if handle.sealed_mode && handle.cached_content.is_none() {
+                // Origin mode: raw passthrough, read directly from file
+                if handle.origin_mode {
+                    let path = handle.path.clone();
+                    drop(handles);
+                    let rel_path = path.strip_prefix(&self.source_path).unwrap_or(&path);
+                    match self.read_file_via_fd(rel_path) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    }
+                } else if handle.sealed_mode && handle.cached_content.is_none() {
+                    // Sealed mode pending: wait for setxattr confirmation
                     reply.error(libc::EAGAIN);
                     return;
-                }
-
-                // Get content based on handle mode
-                match self.get_handle_content(handle) {
-                    Ok(c) => c,
-                    Err(_e) => {
-                        reply.error(libc::EIO);
-                        return;
+                } else {
+                    // Get content based on handle mode
+                    match self.get_handle_content(handle) {
+                        Ok(c) => c,
+                        Err(_e) => {
+                            reply.error(libc::EIO);
+                            return;
+                        }
                     }
                 }
             }
@@ -1260,8 +1650,10 @@ impl Filesystem for SssFS {
                     }
                 };
 
-                let real_path = self.real_path(&entry.path);
-                match self.read_and_render(&real_path) {
+                // Use translate_virtual_to_source to properly handle .overlay/ paths
+                let (source_rel_path, _pinned) = self.translate_virtual_to_source(&entry.path);
+                let file_path = self.source_path.join(&source_rel_path);
+                match self.read_and_render(&file_path) {
                     Ok(c) => c,
                     Err(_e) => {
                         reply.error(libc::EIO);
@@ -1295,8 +1687,8 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
-        // Block writes to synthetic files
-        if ino == SYNTHETIC_GIT_FD_INO || ino == SYNTHETIC_GIT_DIR_INO {
+        // Block writes to .git blocking directory only
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EPERM);
             return;
         }
@@ -1315,12 +1707,56 @@ impl Filesystem for SssFS {
             return;
         }
 
-        // Block writes to .git/* (check path)
-        if handle.path.starts_with(".git/") || handle.path.starts_with(".git") {
-            reply.error(libc::EPERM);
+        // Block writes to .git/* at project root (unless in origin_mode passthrough via .overlay/)
+        if !handle.origin_mode {
+            if let Ok(rel_path) = handle.path.strip_prefix(&self.source_path) {
+                let path_str = rel_path.to_string_lossy();
+                if path_str.starts_with(".git/") || path_str == ".git" {
+                    reply.error(libc::EPERM);
+                    return;
+                }
+            }
+        }
+
+        // For passthrough files (origin_mode), write directly to disk without caching
+        // Use the stored fd to avoid reopening on every write (which fixes race conditions)
+        if handle.origin_mode {
+            let fd = match handle.passthrough_fd {
+                Some(fd) => fd,
+                None => {
+                    reply.error(libc::EIO);
+                    return;
+                }
+            };
+
+            // Use pwrite() for atomic seek+write operation
+            // Note: pwrite() may do partial writes, but FUSE handles retries,
+            // so we just report how many bytes were actually written
+            let bytes_written = unsafe {
+                libc::pwrite(
+                    fd,
+                    data.as_ptr() as *const libc::c_void,
+                    data.len(),
+                    offset,
+                )
+            };
+
+            if bytes_written < 0 {
+                let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+                reply.error(errno);
+                return;
+            }
+
+            if bytes_written == 0 && !data.is_empty() {
+                reply.error(libc::EIO);
+                return;
+            }
+
+            reply.written(bytes_written as u32);
             return;
         }
 
+        // Non-passthrough files: use caching (for SSS processing)
         // Initialize or extend cached content
         let mut content = handle.cached_content.take().unwrap_or_else(Vec::new);
 
@@ -1352,31 +1788,45 @@ impl Filesystem for SssFS {
     ) {
         let mut handles = self.file_handles.write();
         if let Some(handle) = handles.remove(&fh) {
+            // Close passthrough fd if present
+            if let Some(fd) = handle.passthrough_fd {
+                unsafe {
+                    libc::close(fd);
+                }
+            }
+
             // If file was written to, seal and write back
             if handle.dirty && handle.writable {
                 if let Some(content) = handle.cached_content {
-                    // Convert content to string for analysis
-                    let content_str = String::from_utf8_lossy(&content);
-
-                    // Check if content already has encrypted markers (⊠{})
-                    let is_already_sealed = Self::has_encrypted_markers(&content_str);
-
-                    // Check if this file should be processed by sss or written raw
-                    let write_result = if !Self::should_process_with_sss(&handle.path) {
-                        // Swap files and temp files: write raw (no sss processing)
+                    // Check if this is an origin file (raw passthrough)
+                    let write_result = if handle.origin_mode {
+                        // Origin mode: write raw without any SSS processing
                         self.write_raw_to_backing(&handle.path, &content)
-                    } else if handle.sealed_mode {
-                        // Sealed mode: content is already sealed (⊠{}), write raw to backing store
-                        self.write_raw_to_backing(&handle.path, &content)
-                    } else if is_already_sealed {
-                        // Content already has ⊠{} markers - write directly (no processing)
-                        self.write_raw_to_backing(&handle.path, &content)
-                    } else if handle.opened_mode {
-                        // Opened mode: content has ⊕{} markers, seal directly
-                        self.write_sealed_to_backing(&handle.path, &content)
                     } else {
-                        // Normal mode: content is rendered, do smart reconstruction
-                        self.write_and_seal(&handle.path, &content)
+                        // Normal SSS processing
+                        let content_str = String::from_utf8_lossy(&content);
+
+                        // Check if content already has encrypted markers (⊠{})
+                        let is_already_sealed = Self::has_encrypted_markers(&content_str);
+
+                        // Check if this file should be processed by sss or written raw
+                        if !Self::should_process_with_sss(&handle.path) {
+                            // Swap files and temp files: write raw (no sss processing)
+                            self.write_raw_to_backing(&handle.path, &content)
+                        } else if handle.sealed_mode {
+                            // Sealed mode: content is already sealed (⊠{}), write raw to backing store
+                            self.write_raw_to_backing(&handle.path, &content)
+                        } else if is_already_sealed {
+                            // Content already has ⊠{} markers - write directly (no processing)
+                            self.write_raw_to_backing(&handle.path, &content)
+                        } else if handle.opened_mode {
+                            // Opened mode: content has ⊕{} markers, seal directly
+                            self.write_sealed_to_backing(&handle.path, &content)
+                        } else {
+                            // Normal mode: content is rendered, do smart reconstruction
+                            // Pass original_sealed if we have it (prevents marker loss when editor truncates)
+                            self.write_and_seal(&handle.path, &content, handle.original_sealed.as_ref())
+                        }
                     };
 
                     if let Err(e) = write_result {
@@ -1463,6 +1913,36 @@ impl Filesystem for SssFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        // Handle .overlay synthetic directory - return current attributes
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
+            match self.metadata_via_fd(Path::new(".")) {
+                Ok(metadata) => {
+                    let attr = FileAttr {
+                        ino: SYNTHETIC_OVERLAY_DIR_INO,
+                        size: 0,
+                        blocks: 0,
+                        atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
+                        mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
+                        ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        crtime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        kind: FileType::Directory,
+                        perm: 0o755,
+                        nlink: 2,
+                        uid: self.uid,
+                        gid: self.gid,
+                        rdev: 0,
+                        blksize: 512,
+                        flags: 0,
+                    };
+                    reply.attr(&TTL, &attr);
+                }
+                Err(_) => {
+                    reply.error(libc::EIO);
+                }
+            }
+            return;
+        }
+
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
@@ -1507,6 +1987,21 @@ impl Filesystem for SssFS {
 
             // Clear render cache for this file
             self.render_cache.write().remove(&ino);
+
+            // IMPORTANT: Clear cached_content in any open file handles for this inode
+            // to prevent stale data from being written back on close
+            let mut handles = self.file_handles.write();
+            for handle in handles.values_mut() {
+                if handle.ino == ino {
+                    if new_size == 0 {
+                        // Truncate to zero - clear all cached content
+                        handle.cached_content = None;
+                    } else if let Some(ref mut content) = handle.cached_content {
+                        // Truncate to specific size
+                        content.truncate(new_size as usize);
+                    }
+                }
+            }
         }
 
         // Handle mode change
@@ -1523,7 +2018,7 @@ impl Filesystem for SssFS {
                 libc::fchmodat(
                     self.source_fd,
                     path_cstr.as_ptr(),
-                    new_mode,
+                    new_mode as libc::mode_t,
                     0,
                 )
             };
@@ -1554,18 +2049,45 @@ impl Filesystem for SssFS {
         &mut self,
         _req: &Request,
         _ino: u64,
-        _fh: u64,
-        _datasync: bool,
+        fh: u64,
+        datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        // No-op for now - writes are already synchronous
+
+        // For passthrough files with an fd, sync to flush mmap writes
+        let handles = self.file_handles.read();
+        if let Some(handle) = handles.get(&fh) {
+            if let Some(fd) = handle.passthrough_fd {
+                let result = if datasync {
+                    // macOS doesn't have fdatasync, use fsync or F_FULLFSYNC
+                    #[cfg(target_os = "linux")]
+                    unsafe { libc::fdatasync(fd) }
+                    #[cfg(target_os = "macos")]
+                    unsafe { libc::fsync(fd) }
+                } else {
+                    unsafe { libc::fsync(fd) }
+                };
+
+                if result < 0 {
+                    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+                    reply.error(errno);
+                    return;
+                }
+            }
+        }
+
         reply.ok();
     }
 
     /// Check file access permissions
-    fn access(&mut self, _req: &Request, ino: u64, _mask: i32, reply: fuser::ReplyEmpty) {
-        // For simplicity, allow all access
-        // In a more secure implementation, we'd check actual permissions
+    fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
+
+        // Handle synthetic directories
+        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+            reply.ok();
+            return;
+        }
+
         let entry = match self.get_inode(ino) {
             Some(e) => e,
             None => {
@@ -1574,17 +2096,32 @@ impl Filesystem for SssFS {
             }
         };
 
-        let real_path = self.real_path(&entry.path);
-        let mut rel_path = real_path.strip_prefix(&self.source_path).unwrap_or(&real_path);
+        // Translate virtual path to source path
+        let (source_rel_path, _pinned) = self.translate_virtual_to_source(&entry.path);
 
-        if rel_path.as_os_str().is_empty() {
-            rel_path = Path::new(".");
-        }
+        // Use faccessat to check actual permissions
+        let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
 
-        // Check if file exists via fd
-        match self.metadata_via_fd(rel_path) {
-            Ok(_) => reply.ok(),
-            Err(_) => reply.error(libc::EACCES),
+        // faccessat checks access permissions relative to source_fd
+        let result = unsafe {
+            libc::faccessat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                mask,
+                0, // flags
+            )
+        };
+
+        if result == 0 {
+            reply.ok();
+        } else {
+            reply.error(libc::EACCES);
         }
     }
 
@@ -1597,9 +2134,24 @@ impl Filesystem for SssFS {
         _lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
-        // Check if file handle exists
+
+        // For passthrough files, sync to flush any mmap'd writes
         let handles = self.file_handles.read();
-        if handles.contains_key(&fh) {
+        if let Some(handle) = handles.get(&fh) {
+            if let Some(fd) = handle.passthrough_fd {
+                // Use fdatasync for better performance (only data, not metadata)
+                // macOS doesn't have fdatasync, use fsync instead
+                #[cfg(target_os = "linux")]
+                let result = unsafe { libc::fdatasync(fd) };
+                #[cfg(target_os = "macos")]
+                let result = unsafe { libc::fsync(fd) };
+
+                if result < 0 {
+                    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+                    reply.error(errno);
+                    return;
+                }
+            }
             reply.ok();
         } else {
             reply.error(libc::EBADF);
@@ -1617,33 +2169,36 @@ impl Filesystem for SssFS {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-        // Block creation in synthetic .git directory
-        if parent == SYNTHETIC_GIT_DIR_INO {
-            reply.error(libc::EPERM);
-            return;
-        }
 
-        // Get parent directory path
-        let parent_entry = match self.get_inode(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
             }
         };
 
-        // Block creation under .git/
-        if parent_entry.path.starts_with(".git") || parent_entry.path == Path::new(".git") {
-            reply.error(libc::EPERM);
-            return;
-        }
+        // Build virtual path for new file
+        let virtual_path = parent_entry.path.join(name);
 
-        let parent_path = self.real_path(&parent_entry.path);
-        let file_path = parent_path.join(name);
+        // Translate to source path using pinned paths
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
+        let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
+
+        // Get full file path for attr response
+        let file_path = self.source_path.join(&source_rel_path);
 
         // Create the file in the backing store
-        let rel_path = file_path.strip_prefix(&self.source_path).unwrap_or(&file_path);
-        let path_cstr = match CString::new(rel_path.as_os_str().as_bytes()) {
+        let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
             Ok(p) => p,
             Err(_) => {
                 reply.error(libc::EINVAL);
@@ -1651,23 +2206,52 @@ impl Filesystem for SssFS {
             }
         };
 
-        // Create file via fd with O_CREAT | O_EXCL
-        // Use 0o600 for security - files may contain rendered secrets
+        // Check if file already exists
+        let exists = unsafe {
+            let mut stat_buf: libc::stat = std::mem::zeroed();
+            libc::fstatat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                &mut stat_buf,
+                libc::AT_SYMLINK_NOFOLLOW,
+            ) == 0
+        };
+
+        // Determine open flags
+        // If file exists and O_EXCL is NOT in flags, open it without O_EXCL
+        // If file exists and O_EXCL IS in flags, let the open fail with EEXIST
+        // If file doesn't exist, create it with O_EXCL to ensure atomic creation
+        let open_flags = if exists && (flags & libc::O_EXCL) == 0 {
+            // File exists, caller didn't request exclusive - open existing file
+            libc::O_CREAT | (flags & !libc::O_EXCL)
+        } else {
+            // Either file doesn't exist, or caller wants exclusive creation
+            libc::O_CREAT | libc::O_EXCL | flags
+        };
+
         let fd = unsafe {
             libc::openat(
                 self.source_fd,
                 path_cstr.as_ptr(),
-                libc::O_CREAT | libc::O_WRONLY | libc::O_EXCL | flags,
+                open_flags,
                 0o600,
             )
         };
 
         if fd < 0 {
-            reply.error(libc::EIO);
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
             return;
         }
 
-        unsafe { libc::close(fd) };
+        // For passthrough writable files, keep fd open; otherwise close it
+        let writable = (flags & libc::O_WRONLY) != 0 || (flags & libc::O_RDWR) != 0;
+        let passthrough_fd = if is_passthrough && writable {
+            Some(fd)
+        } else {
+            unsafe { libc::close(fd) };
+            None
+        };
 
         // Now do a regular lookup and open
         match self.lookup_impl(parent, name) {
@@ -1682,46 +2266,112 @@ impl Filesystem for SssFS {
                     ino,
                     path: file_path,
                     cached_content: None,
-                    writable: (flags & libc::O_WRONLY != 0) || (flags & libc::O_RDWR != 0),
+                    writable,
                     dirty: false,
                     opened_mode: false,
                     sealed_mode: false,
+                    origin_mode: is_passthrough,
+                    passthrough_fd,
+                    original_sealed: None,
                 };
 
                 self.file_handles.write().insert(fh, handle);
-                reply.created(&TTL, &attr, 0, fh, 0);
+
+                // For passthrough writable files, use FOPEN_DIRECT_IO to bypass page cache
+                let open_flags = if is_passthrough && writable {
+                    const FOPEN_DIRECT_IO: u32 = 1 << 0;  // From linux/fuse.h
+                    FOPEN_DIRECT_IO
+                } else {
+                    0
+                };
+
+                reply.created(&TTL, &attr, 0, fh, open_flags);
             }
+            Err(_) => reply.error(libc::EIO),
+        }
+    }
+
+    /// Create a directory
+    fn mkdir(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        _umask: u32,
+        reply: fuser::ReplyEntry,
+    ) {
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        };
+
+        // Build virtual path and translate using pinned paths
+        let virtual_path = parent_entry.path.join(name);
+        let (source_rel_path, _) = self.translate_virtual_to_source(&virtual_path);
+
+        // Create the directory using mkdirat
+        use std::os::unix::ffi::OsStrExt;
+        let path_cstr = match std::ffi::CString::new(source_rel_path.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let result = unsafe {
+            libc::mkdirat(self.source_fd, path_cstr.as_ptr(), mode as libc::mode_t)
+        };
+
+        if result != 0 {
+            reply.error(libc::EIO);
+            return;
+        }
+
+        // Lookup the newly created directory to get its attributes
+        match self.lookup_impl(parent, name) {
+            Ok((_ino, attr)) => reply.entry(&TTL, &attr, 0),
             Err(_) => reply.error(libc::EIO),
         }
     }
 
     /// Remove a file
     fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
-        // Block deletion from synthetic .git directory
-        if parent == SYNTHETIC_GIT_DIR_INO {
-            reply.error(libc::EPERM);
-            return;
-        }
-
-        let parent_entry = match self.get_inode(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
             }
         };
 
-        // Block deletion under .git/
-        if parent_entry.path.starts_with(".git") || parent_entry.path == Path::new(".git") {
-            reply.error(libc::EPERM);
-            return;
-        }
+        // Build virtual path and translate using pinned paths
+        let virtual_path = parent_entry.path.join(name);
+        let (source_rel_path, _pinned) = self.translate_virtual_to_source(&virtual_path);
 
-        let parent_path = self.real_path(&parent_entry.path);
-        let file_path = parent_path.join(name);
-        let rel_path = file_path.strip_prefix(&self.source_path).unwrap_or(&file_path);
-
-        let path_cstr = match CString::new(rel_path.as_os_str().as_bytes()) {
+        let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
             Ok(p) => p,
             Err(_) => {
                 reply.error(libc::EINVAL);
@@ -1732,12 +2382,176 @@ impl Filesystem for SssFS {
         let result = unsafe { libc::unlinkat(self.source_fd, path_cstr.as_ptr(), 0) };
 
         if result == 0 {
-            // Remove from inode cache
+            // Remove from inode cache (inode table uses virtual paths)
             let mut inodes = self.inode_table.write();
-            inodes.retain(|_, entry| entry.path != file_path.strip_prefix(&self.source_path).unwrap_or(&file_path));
+            inodes.retain(|_, entry| entry.path != virtual_path);
+            drop(inodes);
+
+            // Also remove from path-to-inode map to keep caches synchronized
+            let mut path_map = self.path_to_ino.write();
+            path_map.remove(&virtual_path);
+
             reply.ok();
         } else {
-            reply.error(libc::EIO);
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
+        }
+    }
+
+    /// Remove a directory
+    fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        };
+
+        // Build virtual path and translate using pinned paths
+        let virtual_path = parent_entry.path.join(name);
+        let (source_rel_path, _) = self.translate_virtual_to_source(&virtual_path);
+
+        let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        // Use AT_REMOVEDIR flag for rmdir
+        let result = unsafe {
+            libc::unlinkat(self.source_fd, path_cstr.as_ptr(), libc::AT_REMOVEDIR)
+        };
+
+        if result == 0 {
+            // Remove from inode cache
+            let mut inodes = self.inode_table.write();
+            inodes.retain(|_, entry| entry.path != virtual_path);
+            drop(inodes);
+
+            // Also remove from path-to-inode map to keep caches synchronized
+            let mut path_map = self.path_to_ino.write();
+            path_map.remove(&virtual_path);
+
+            reply.ok();
+        } else {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
+        }
+    }
+
+    /// Create a hard link to a file
+    fn link(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        newparent: u64,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+
+        // Get the existing file's path
+        let existing_entry = match self.get_inode(ino) {
+            Some(e) => e,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // Get the new parent directory's path
+        let new_parent_entry = if newparent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(newparent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        };
+
+
+        // Build paths and translate to source
+        let (old_rel, old_pinned) = self.translate_virtual_to_source(&existing_entry.path);
+
+        let new_virtual_path = new_parent_entry.path.join(newname);
+        let (new_rel, new_pinned) = self.translate_virtual_to_source(&new_virtual_path);
+
+        // Only allow hard links for passthrough files in .overlay
+        let is_passthrough = old_pinned.virtual_prefix == Path::new("/.overlay")
+            && new_pinned.virtual_prefix == Path::new("/.overlay");
+
+        if !is_passthrough {
+            reply.error(libc::EPERM);
+            return;
+        }
+
+
+        // Convert paths to CStrings
+        let old_cstr = match CString::new(old_rel.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let new_cstr = match CString::new(new_rel.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        // Create hard link using linkat()
+        let result = unsafe {
+            libc::linkat(
+                self.source_fd,
+                old_cstr.as_ptr(),
+                self.source_fd,
+                new_cstr.as_ptr(),
+                0,
+            )
+        };
+
+        if result == 0 {
+
+            // Invalidate cache for new path
+            let mut path_map = self.path_to_ino.write();
+            path_map.remove(&new_virtual_path);
+            drop(path_map);
+
+            // Look up the newly created link and return its attributes
+            match self.lookup_impl(newparent, newname) {
+                Ok((_, attr)) => {
+                    let ttl = &TTL_ZERO;  // Use zero TTL for passthrough files
+                    reply.entry(ttl, &attr, 0);
+                }
+                Err(_) => {
+                    reply.error(libc::EIO);
+                }
+            }
+        } else {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
         }
     }
 
@@ -1752,44 +2566,46 @@ impl Filesystem for SssFS {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
-        // Block rename involving synthetic .git directory
-        if parent == SYNTHETIC_GIT_DIR_INO || newparent == SYNTHETIC_GIT_DIR_INO {
-            reply.error(libc::EPERM);
-            return;
-        }
-
-        let old_parent_entry = match self.get_inode(parent) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
+        // Handle .overlay synthetic directory for old parent
+        let old_parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
             }
         };
 
-        let new_parent_entry = match self.get_inode(newparent) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
+        // Handle .overlay synthetic directory for new parent
+        let new_parent_entry = if newparent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(newparent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
             }
         };
 
-        // Block rename involving .git/
-        let old_is_git = old_parent_entry.path.starts_with(".git") || old_parent_entry.path == Path::new(".git");
-        let new_is_git = new_parent_entry.path.starts_with(".git") || new_parent_entry.path == Path::new(".git");
-        if old_is_git || new_is_git {
-            reply.error(libc::EPERM);
-            return;
-        }
+        // Build virtual paths and translate using pinned paths
+        let old_virtual_path = old_parent_entry.path.join(name);
+        let (old_rel, _) = self.translate_virtual_to_source(&old_virtual_path);
 
-        let old_parent_path = self.real_path(&old_parent_entry.path);
-        let new_parent_path = self.real_path(&new_parent_entry.path);
-
-        let old_path = old_parent_path.join(name);
-        let new_path = new_parent_path.join(newname);
-
-        let old_rel = old_path.strip_prefix(&self.source_path).unwrap_or(&old_path);
-        let new_rel = new_path.strip_prefix(&self.source_path).unwrap_or(&new_path);
+        let new_virtual_path = new_parent_entry.path.join(newname);
+        let (new_rel, _) = self.translate_virtual_to_source(&new_virtual_path);
 
         let old_cstr = match CString::new(old_rel.as_os_str().as_bytes()) {
             Ok(p) => p,
@@ -1807,6 +2623,7 @@ impl Filesystem for SssFS {
             }
         };
 
+
         let result = unsafe {
             libc::renameat(
                 self.source_fd,
@@ -1817,12 +2634,23 @@ impl Filesystem for SssFS {
         };
 
         if result == 0 {
-            // Update inode cache
+
+            // Update inode cache - remove both old and new paths to force fresh lookups
+            // This prevents stale cache entries from causing ENOENT errors
             let mut inodes = self.inode_table.write();
-            inodes.retain(|_, entry| entry.path != old_rel);
+            inodes.retain(|_, entry| entry.path != old_virtual_path && entry.path != new_virtual_path);
+            drop(inodes);
+
+            // Also remove from path-to-inode map to keep caches synchronized
+            let mut path_map = self.path_to_ino.write();
+            path_map.remove(&old_virtual_path);
+            path_map.remove(&new_virtual_path);
+
+
             reply.ok();
         } else {
-            reply.error(libc::EIO);
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
         }
     }
 
@@ -1874,6 +2702,160 @@ impl Filesystem for SssFS {
         } else {
             // Not our signal - reject
             reply.error(libc::ENOTSUP);
+        }
+    }
+
+    /// Create a symlink
+    fn symlink(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        link: &std::path::Path,
+        reply: fuser::ReplyEntry,
+    ) {
+        // Handle .overlay synthetic directory
+        let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
+            InodeEntry {
+                _ino: SYNTHETIC_OVERLAY_DIR_INO,
+                path: PathBuf::from("/.overlay"),
+                parent: ROOT_INO,
+            }
+        } else {
+            match self.get_inode(parent) {
+                Some(e) => e,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            }
+        };
+
+        // Build virtual path and translate using pinned paths
+        let virtual_path = parent_entry.path.join(name);
+        let (rel_path, _) = self.translate_virtual_to_source(&virtual_path);
+
+        // Create the symlink using symlinkat
+        use std::os::unix::ffi::OsStrExt;
+        let link_cstr = match std::ffi::CString::new(link.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let name_cstr = match std::ffi::CString::new(rel_path.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let result = unsafe {
+            libc::symlinkat(
+                link_cstr.as_ptr(),
+                self.source_fd,
+                name_cstr.as_ptr(),
+            )
+        };
+
+        if result != 0 {
+            reply.error(libc::EIO);
+            return;
+        }
+
+        // Lookup the newly created symlink
+        match self.lookup_impl(parent, name) {
+            Ok((_ino, attr)) => reply.entry(&TTL, &attr, 0),
+            Err(_) => reply.error(libc::EIO),
+        }
+    }
+
+    /// Read symlink target
+    fn readlink(&mut self, _req: &Request, ino: u64, reply: fuser::ReplyData) {
+        // Block operations on .git synthetic directories
+        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+            reply.error(libc::EINVAL);
+            return;
+        }
+
+        let entry = match self.get_inode(ino) {
+            Some(e) => e,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // Translate virtual path to source path using pinned paths
+        let (rel_path, _) = self.translate_virtual_to_source(&entry.path);
+
+        // Read symlink target using readlinkat
+        use std::os::unix::ffi::OsStrExt;
+        let path_cstr = match std::ffi::CString::new(rel_path.as_os_str().as_bytes()) {
+            Ok(p) => p,
+            Err(_) => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        let len = unsafe {
+            libc::readlinkat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+            )
+        };
+
+        if len < 0 {
+            reply.error(libc::EIO);
+        } else {
+            buf.truncate(len as usize);
+            reply.data(&buf);
+        }
+    }
+
+    /// Get filesystem statistics
+    fn statfs(&mut self, _req: &Request, _ino: u64, reply: fuser::ReplyStatfs) {
+
+        // Get statfs from the underlying filesystem
+        let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::fstatfs(self.source_fd, &mut stat)
+        };
+
+        if result == 0 {
+            // Return the underlying filesystem's stats
+            // This ensures all directories appear to be on the same filesystem
+            #[cfg(target_os = "linux")]
+            reply.statfs(
+                stat.f_blocks,           // Total blocks
+                stat.f_bfree,            // Free blocks
+                stat.f_bavail,           // Available blocks
+                stat.f_files,            // Total inodes
+                stat.f_ffree,            // Free inodes
+                stat.f_bsize as u32,     // Block size
+                stat.f_namelen as u32,   // Max filename length
+                stat.f_frsize as u32,    // Fragment size
+            );
+            #[cfg(target_os = "macos")]
+            reply.statfs(
+                stat.f_blocks,           // Total blocks
+                stat.f_bfree,            // Free blocks
+                stat.f_bavail,           // Available blocks
+                stat.f_files,            // Total inodes
+                stat.f_ffree,            // Free inodes
+                stat.f_bsize as u32,     // Block size
+                255,                     // Max filename length (macOS typical)
+                stat.f_bsize as u32,     // Fragment size (use bsize)
+            );
+        } else {
+            reply.error(libc::EIO);
         }
     }
 }

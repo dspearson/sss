@@ -1,0 +1,45 @@
+# Alpine-based Dockerfile for building sss with musl + FUSE support
+FROM rust:alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    musl-dev \
+    gcc \
+    make \
+    file \
+    fuse3-dev \
+    fuse3-static \
+    pkgconfig \
+    git
+
+# Set working directory
+WORKDIR /build
+
+# Copy source
+COPY . .
+
+# Create cargo config to use Alpine's gcc for musl linking
+RUN mkdir -p .cargo && cat > .cargo/config.toml <<EOF
+[target.x86_64-unknown-linux-musl]
+linker = "gcc"
+EOF
+
+# Build for native musl target (Alpine's default)
+RUN cargo build --release --features fuse
+
+# Create minimal runtime image
+FROM alpine:latest
+
+# Install runtime dependencies (just the FUSE kernel module interface)
+RUN apk add --no-cache fuse3
+
+# Copy binary from builder
+COPY --from=builder /build/target/release/sss /usr/local/bin/sss
+COPY --from=builder /build/target/release/sss-agent /usr/local/bin/sss-agent
+COPY --from=builder /build/target/release/sss-askpass-tty /usr/local/bin/sss-askpass-tty
+COPY --from=builder /build/target/release/sss-askpass-gui /usr/local/bin/sss-askpass-gui
+
+# Set up FUSE device access
+RUN mkdir -p /dev/fuse
+
+ENTRYPOINT ["/usr/local/bin/sss"]

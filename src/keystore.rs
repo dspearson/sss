@@ -195,11 +195,10 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)?;
-            if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content) {
-                if let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
+            if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content)
+                && let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
                     keypairs.push(keypair);
                 }
-            }
         }
 
         // Sort by creation time (most recent first)

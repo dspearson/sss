@@ -74,8 +74,8 @@ fn find_delimiter_pairs(text: &str, open: char, close: char) -> Vec<DelimiterPai
         for (pos, ch) in text.char_indices() {
             if ch == open {
                 stack.push(pos);
-            } else if ch == close {
-                if let Some(open_pos) = stack.pop() {
+            } else if ch == close
+                && let Some(open_pos) = stack.pop() {
                     pairs.push(DelimiterPair {
                         open_pos,
                         close_pos: pos,
@@ -83,7 +83,6 @@ fn find_delimiter_pairs(text: &str, open: char, close: char) -> Vec<DelimiterPai
                         close_char: close,
                     });
                 }
-            }
         }
     }
 

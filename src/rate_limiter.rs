@@ -47,15 +47,14 @@ impl RateLimiter {
         // Check current record
         if let Some(record) = attempts.get(identifier) {
             // Check if locked out
-            if let Some(locked_until) = record.locked_until {
-                if now < locked_until {
+            if let Some(locked_until) = record.locked_until
+                && now < locked_until {
                     let remaining = locked_until.duration_since(now);
                     return Err(format!(
                         "Too many failed attempts. Try again in {} minutes.",
                         remaining.as_secs() / 60 + 1
                     ));
                 }
-            }
 
             // Check if within rate limit
             if record.count >= self.max_attempts {

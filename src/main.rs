@@ -576,8 +576,8 @@ fn create_cli_app() -> Command {
 fn main() -> Result<()> {
     // Special case: if called as "ssse", handle editor mode
     let args: Vec<String> = env::args().collect();
-    if let Some(program_name) = args[0].split('/').next_back() {
-        if program_name == "ssse" || program_name == "ssse.exe" {
+    if let Some(program_name) = args[0].split('/').next_back()
+        && (program_name == "ssse" || program_name == "ssse.exe") {
             if args.len() != 2 {
                 return Err(anyhow!("Usage: ssse <file>"));
             }
@@ -595,7 +595,6 @@ fn main() -> Result<()> {
             }
             return Err(anyhow!("Failed to process editor mode"));
         }
-    }
 
     let matches = create_cli_app().get_matches();
 

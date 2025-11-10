@@ -351,12 +351,11 @@ impl ConfigManager {
     /// Remove an ignore pattern from a project
     pub fn remove_ignore_pattern(&mut self, project_path: &Path, pattern: &str) -> Result<bool> {
         let path_str = project_path.to_string_lossy().to_string();
-        if let Some(settings) = self.user_settings.projects.get_mut(&path_str) {
-            if let Some(pos) = settings.ignore_patterns.iter().position(|p| p == pattern) {
+        if let Some(settings) = self.user_settings.projects.get_mut(&path_str)
+            && let Some(pos) = settings.ignore_patterns.iter().position(|p| p == pattern) {
                 settings.ignore_patterns.remove(pos);
                 return Ok(true);
             }
-        }
         Ok(false)
     }
 

@@ -45,7 +45,7 @@ fn group_changes_by_markers(
 
     for change in changes {
         let key = change.overlapping_markers.clone();
-        grouped.entry(key).or_insert_with(Vec::new).push(change);
+        grouped.entry(key).or_default().push(change);
     }
 
     grouped

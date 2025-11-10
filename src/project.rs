@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey};
+use crate::toml_helpers;
 
 /// A user's configuration in the project
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -141,13 +142,12 @@ impl ProjectConfig {
             )
         })?;
 
-        toml::from_str(&content).map_err(|e| anyhow!("Failed to parse project config file: {}", e))
+        toml_helpers::parse_toml(&content, "project")
     }
 
     /// Save project configuration to file
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| anyhow!("Failed to serialise project config: {}", e))?;
+        let content = toml_helpers::serialize_toml(self, "project config")?;
 
         fs::write(&path, content).map_err(|e| {
             anyhow!(

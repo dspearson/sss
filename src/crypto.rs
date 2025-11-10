@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::error_helpers;
+
 // libsodium bindings
 use libsodium_sys as sodium;
 
@@ -51,9 +53,7 @@ fn validate_and_decode_base64(
         return Err(anyhow!("Invalid characters in Base64 encoded {}", key_type));
     }
 
-    let decoded = BASE64_STANDARD
-        .decode(encoded)
-        .map_err(|e| anyhow!("Failed to decode base64 {}: {}", key_type, e))?;
+    let decoded = error_helpers::decode_base64(encoded, key_type)?;
 
     if decoded.len() != expected_len {
         return Err(anyhow!(

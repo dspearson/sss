@@ -185,8 +185,8 @@ impl SssFS {
     /// * `source_path` - Path to the directory containing files to be transparently processed
     /// * `processor` - Configured [`Processor`] instance for encryption/decryption operations
     /// * `mount_path` - Optional path to the mount point directory. If provided, a file descriptor
-    ///                  will be held open to this directory, allowing access via /proc/self/fd/<fd>
-    ///                  even after the FUSE filesystem is mounted over it.
+    ///   will be held open to this directory, allowing access via /proc/self/fd/<fd>
+    ///   even after the FUSE filesystem is mounted over it.
     ///
     /// # Returns
     ///
@@ -918,13 +918,11 @@ impl SssFS {
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
 
         // Hide git-related files from FUSE view (but not in .overlay passthrough)
-        if pinned.virtual_prefix != Path::new("/.overlay") {
-            if let Some(name_str) = name.to_str() {
-                if Self::should_hide(name_str) {
+        if pinned.virtual_prefix != Path::new("/.overlay")
+            && let Some(name_str) = name.to_str()
+                && Self::should_hide(name_str) {
                     return Err(anyhow!("File hidden"));
                 }
-            }
-        }
 
         let rel_path = if source_rel_path.as_os_str().is_empty() {
             Path::new(".")
@@ -1106,12 +1104,12 @@ impl SssFS {
         // Use translate_virtual_to_source to properly handle .overlay/ paths
         let (source_rel_path, _pinned) = self.translate_virtual_to_source(entry_path);
 
-        let result = if source_rel_path.as_os_str().is_empty() {
+        
+        if source_rel_path.as_os_str().is_empty() {
             std::borrow::Cow::Borrowed(Path::new("."))
         } else {
             std::borrow::Cow::Owned(source_rel_path)
-        };
-        result
+        }
     }
 }
 
@@ -1274,7 +1272,7 @@ impl Filesystem for SssFS {
         let virtual_path = if is_opened_mode {
             parent_entry.path.join(name) // Keep .sss-opened suffix
         } else {
-            parent_entry.path.join(&actual_name)
+            parent_entry.path.join(actual_name)
         };
 
 
@@ -1283,14 +1281,12 @@ impl Filesystem for SssFS {
 
 
         // Check if should hide (only for normal SSS paths, not passthrough)
-        if pinned.virtual_prefix != Path::new("/.overlay") {
-            if let Some(name_str) = actual_name.to_str() {
-                if pinned.operations.should_hide(name_str) {
+        if pinned.virtual_prefix != Path::new("/.overlay")
+            && let Some(name_str) = actual_name.to_str()
+                && pinned.operations.should_hide(name_str) {
                     reply.error(libc::ENOENT);
                     return;
                 }
-            }
-        }
 
         // Get metadata
         match self.metadata_via_fd(&source_rel_path) {
@@ -1712,15 +1708,14 @@ impl Filesystem for SssFS {
         }
 
         // Block writes to .git/* at project root (unless in origin_mode passthrough via .overlay/)
-        if !handle.origin_mode {
-            if let Ok(rel_path) = handle.path.strip_prefix(&self.source_path) {
+        if !handle.origin_mode
+            && let Ok(rel_path) = handle.path.strip_prefix(&self.source_path) {
                 let path_str = rel_path.to_string_lossy();
                 if path_str.starts_with(".git/") || path_str == ".git" {
                     reply.error(libc::EPERM);
                     return;
                 }
             }
-        }
 
         // For passthrough files (origin_mode), write directly to disk without caching
         // Use the stored fd to avoid reopening on every write (which fixes race conditions)
@@ -1804,8 +1799,8 @@ impl Filesystem for SssFS {
             }
 
             // If file was written to, seal and write back
-            if handle.dirty && handle.writable {
-                if let Some(content) = handle.cached_content {
+            if handle.dirty && handle.writable
+                && let Some(content) = handle.cached_content {
                     eprintln!("DEBUG RELEASE: File {:?} was modified, sealed_mode={}, opened_mode={}",
                         handle.path, handle.sealed_mode, handle.opened_mode);
 
@@ -1858,7 +1853,6 @@ impl Filesystem for SssFS {
                     // Invalidate render cache
                     self.render_cache.write().remove(&handle.ino);
                 }
-            }
         }
         reply.ok();
     }
@@ -2076,8 +2070,8 @@ impl Filesystem for SssFS {
 
         // For passthrough files with an fd, sync to flush mmap writes
         let handles = self.file_handles.read();
-        if let Some(handle) = handles.get(&fh) {
-            if let Some(fd) = handle.passthrough_fd {
+        if let Some(handle) = handles.get(&fh)
+            && let Some(fd) = handle.passthrough_fd {
                 let result = if datasync {
                     // macOS doesn't have fdatasync, use fsync or F_FULLFSYNC
                     #[cfg(target_os = "linux")]
@@ -2094,7 +2088,6 @@ impl Filesystem for SssFS {
                     return;
                 }
             }
-        }
 
         reply.ok();
     }
@@ -2103,7 +2096,7 @@ impl Filesystem for SssFS {
     fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
 
         // Handle synthetic directories
-        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.ok();
             return;
         }
@@ -2796,7 +2789,7 @@ impl Filesystem for SssFS {
     /// Read symlink target
     fn readlink(&mut self, _req: &Request, ino: u64, reply: fuser::ReplyData) {
         // Block operations on .git synthetic directories
-        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EINVAL);
             return;
         }

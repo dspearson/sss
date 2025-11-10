@@ -10,7 +10,6 @@
 #![cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -268,7 +267,7 @@ impl TestProject {
             if line_num > 0 && line_num <= lines.len() {
                 // Apply substitution to the specific line
                 let perl_code = format!("$_ = shift @ARGV; {}; print;", subst_command);
-                let mut child = Command::new("perl")
+                let child = Command::new("perl")
                     .arg("-e")
                     .arg(&perl_code)
                     .arg(&lines[line_num - 1])

@@ -103,7 +103,7 @@ fn is_char_marked(pos: usize, markers: &[Marker]) -> bool {
 /// Shrink marker to exclude both delimiters of a pair (per spec section 8)
 fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>) {
     // Find markers that include either delimiter
-    let mut indices_to_update: Vec<usize> = markers
+    let indices_to_update: Vec<usize> = markers
         .iter()
         .enumerate()
         .filter(|(_, m)| {

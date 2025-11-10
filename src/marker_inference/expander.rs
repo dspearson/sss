@@ -380,15 +380,14 @@ fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) ->
 
         // Check if current boundaries are delimiters
         for &(open, close) in &pairs {
-            if start < bytes.len() && end > 0 && end <= bytes.len() {
-                if bytes[start] == open && bytes[end - 1] == close {
+            if start < bytes.len() && end > 0 && end <= bytes.len()
+                && bytes[start] == open && bytes[end - 1] == close {
                     // Found a pair - shrink boundaries
                     start += 1;
                     end -= 1;
                     found_pair = true;
                     break;
                 }
-            }
         }
 
         if !found_pair {
@@ -474,7 +473,7 @@ fn rendered_to_edited(rendered_pos: usize, all_changes: &[&MappedChange]) -> usi
     let mut edited_pos = rendered_pos as isize;
 
     // Sort changes by position
-    let mut sorted: Vec<&MappedChange> = all_changes.iter().copied().collect();
+    let mut sorted: Vec<&MappedChange> = all_changes.to_vec();
     sorted.sort_by_key(|c| c.rendered_start);
 
     // Apply cumulative deltas from all changes that ended before this position

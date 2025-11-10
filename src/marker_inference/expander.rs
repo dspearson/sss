@@ -121,6 +121,7 @@ fn process_grouped_changes(
                 changes,
                 edited_text,
                 all_changes,
+                original_markers,
             ) {
                 markers.push(marker);
             }
@@ -284,6 +285,7 @@ fn apply_single_marker_rule(
     changes: Vec<&MappedChange>,
     edited_text: &str,
     all_changes: &[&MappedChange],
+    original_markers: &[Marker],
 ) -> Option<Marker> {
     // Sort changes affecting this marker by position
     let mut sorted = changes;
@@ -293,9 +295,14 @@ fn apply_single_marker_rule(
     let new_start_rendered = marker.rendered_start.min(sorted[0].rendered_start);
     let new_end_rendered = marker.rendered_end;
 
+    // Check if there's another marker immediately after this one
+    let has_adjacent_marker_after = original_markers.iter().any(|m| {
+        m.rendered_start == marker.rendered_end
+    });
+
     // Check if there's a pure insertion at the marker's end boundary
-    // If so, we should not include it in the initial coordinate transformation
-    let has_insertion_at_end = sorted.iter().any(|c| {
+    // Only use special handling if there's NO adjacent marker (to prevent over-expansion)
+    let has_insertion_at_end = !has_adjacent_marker_after && sorted.iter().any(|c| {
         c.rendered_start == c.rendered_end && // Pure insertion
         !c.new_content.is_empty() &&
         c.rendered_start == marker.rendered_end // At marker's end
@@ -334,15 +341,10 @@ fn apply_single_marker_rule(
             new_start = new_start.min(change_start_edited);
         }
 
-        // Only expand the end if this is NOT a pure insertion at the marker's right boundary
-        // Pure insertions after the marker should not expand it (they're new unmarked content)
-        // But modifications/deletions/insertions WITHIN the marker should expand it
-        let is_insertion_after_marker = is_pure_insertion && change.rendered_start == marker.rendered_end;
-
-        if !is_insertion_after_marker {
-            // Expand the end to include changes that overlap or modify the marker
-            new_end = new_end.max(change_end_edited);
-        }
+        // Expand the end to include changes that overlap or modify the marker
+        // Don't expand for pure insertions at the boundary IF we're using special coordinate handling
+        // (The has_insertion_at_end check already handles not including those in new_end initially)
+        new_end = new_end.max(change_end_edited);
     }
 
     // Apply boundary adjustments per spec sections 5 and 8

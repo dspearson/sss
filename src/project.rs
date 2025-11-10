@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey};
-use crate::toml_helpers;
+use crate::{error_helpers, toml_helpers};
 
 /// A user's configuration in the project
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -188,7 +188,7 @@ impl ProjectConfig {
         let user_config = self
             .users
             .get(username)
-            .ok_or_else(|| anyhow!("User '{}' not found in project", username))?;
+            .ok_or_else(|| error_helpers::user_not_found_error(username))?;
 
         Ok(user_config.sealed_key.clone())
     }
@@ -208,7 +208,7 @@ impl ProjectConfig {
         let user_config = self
             .users
             .get(username)
-            .ok_or_else(|| anyhow!("User '{}' not found in project", username))?;
+            .ok_or_else(|| error_helpers::user_not_found_error(username))?;
 
         PublicKey::from_base64(&user_config.public)
     }

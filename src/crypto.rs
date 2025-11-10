@@ -295,8 +295,7 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
         }
     }
 
-    let repo_key_b64 =
-        String::from_utf8(opened).map_err(|e| anyhow!("Invalid UTF-8 in opened key: {}", e))?;
+    let repo_key_b64 = error_helpers::utf8_from_bytes(opened, "opened key")?;
 
     RepositoryKey::from_base64(&repo_key_b64)
 }

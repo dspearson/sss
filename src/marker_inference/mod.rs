@@ -186,4 +186,44 @@ mod tests {
         let result = infer_markers(source, edited).unwrap();
         assert!(result.output.contains("⊕{newsecret456}"));
     }
+
+    #[test]
+    fn test_content_propagation_duplicate() {
+        // Exact scenario from failing FUSE test
+        let source = "password: o+{secret}\nother text";
+        let edited = "password: secret\nother text\npassword again: secret";
+
+        let result = infer_markers(source, edited).unwrap();
+        println!("Result: {}", result.output);
+
+        let marker_count = result.output.matches("⊕{secret}").count()
+            + result.output.matches("o+{secret}").count();
+
+        assert_eq!(marker_count, 2,
+            "Both instances of 'secret' should be marked. Output: {}",
+            result.output);
+    }
+
+    #[test]
+    fn test_multiple_markers_all_changed() {
+        // The exact scenario that's failing
+        let source = "username: o+{admin}\npassword: o+{secret}\napi_key: o+{abc-123}";
+        let edited = "username: root\npassword: newsecret\napi_key: xyz-789";
+
+        let result = infer_markers(source, edited).unwrap();
+        println!("Result: {:?}", result.output);
+
+        // All three values should be marked
+        assert!(result.output.contains("⊕{root}"),
+            "Should mark 'root'. Output: {}", result.output);
+        assert!(result.output.contains("⊕{newsecret}"),
+            "Should mark 'newsecret'. Output: {}", result.output);
+        assert!(result.output.contains("⊕{xyz-789}"),
+            "Should mark 'xyz-789'. Output: {}", result.output);
+
+        // Expected output
+        let expected = "username: ⊕{root}\npassword: ⊕{newsecret}\napi_key: ⊕{xyz-789}";
+        assert_eq!(result.output, expected,
+            "Output should match expected format");
+    }
 }

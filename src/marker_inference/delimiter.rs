@@ -6,8 +6,8 @@ use super::types::{DelimiterPair, Marker};
 
 /// Validate paired delimiters
 ///
-/// Ensures that both delimiters of a pair are marked or both are unmarked.
-/// Returns a list of warnings for any unmatched delimiter pairs.
+/// Ensures that both delimiters of a pair are excluded from markers per spec section 8.
+/// Returns a list of warnings for any delimiter pairs that were adjusted.
 pub fn validate_delimiters(text: &str, markers: &mut Vec<Marker>) -> Vec<String> {
     let mut warnings = Vec::new();
     let pairs = vec![
@@ -26,11 +26,12 @@ pub fn validate_delimiters(text: &str, markers: &mut Vec<Marker>) -> Vec<String>
             let open_marked = is_char_marked(pair.open_pos, markers);
             let close_marked = is_char_marked(pair.close_pos, markers);
 
-            if open_marked != close_marked {
-                // Expand marker to cover both delimiters (conservative)
-                expand_marker_to_cover_pair(&pair, markers);
+            // Per spec section 8: delimiters should be OUTSIDE markers
+            // If either delimiter is marked, shrink marker to exclude both
+            if open_marked || close_marked {
+                shrink_marker_to_exclude_pair(&pair, markers);
                 warnings.push(format!(
-                    "Unmatched delimiter pair '{}' at positions {}-{}, expanded marker",
+                    "Delimiter pair '{}' at positions {}-{}, shrunk marker to exclude delimiters (per spec section 8)",
                     open, pair.open_pos, pair.close_pos
                 ));
             }
@@ -99,56 +100,52 @@ fn is_char_marked(pos: usize, markers: &[Marker]) -> bool {
         .any(|m| m.source_start <= pos && pos < m.source_end)
 }
 
-/// Expand marker to cover both delimiters of a pair
-fn expand_marker_to_cover_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>) {
-    // Find markers that overlap the pair
-    let overlapping: Vec<usize> = markers
+/// Shrink marker to exclude both delimiters of a pair (per spec section 8)
+fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>) {
+    // Find markers that include either delimiter
+    let mut indices_to_update: Vec<usize> = markers
         .iter()
         .enumerate()
         .filter(|(_, m)| {
-            (m.source_start <= pair.open_pos && pair.open_pos < m.source_end)
-                || (m.source_start <= pair.close_pos && pair.close_pos < m.source_end)
+            // Check if marker includes the opening delimiter
+            let includes_open = m.source_start <= pair.open_pos && pair.open_pos < m.source_end;
+            // Check if marker includes the closing delimiter
+            let includes_close = m.source_start <= pair.close_pos && pair.close_pos < m.source_end;
+            includes_open || includes_close
         })
         .map(|(idx, _)| idx)
         .collect();
 
-    if overlapping.is_empty() {
-        // No existing marker, create one covering the pair
-        markers.push(Marker {
-            source_start: pair.open_pos,
-            source_end: pair.close_pos + 1,
-            rendered_start: pair.open_pos,
-            rendered_end: pair.close_pos + 1,
-            content: String::new(), // Will be filled by reconstruction
-        });
-    } else {
-        // Expand existing marker(s) to cover both delimiters
-        let min_start = overlapping
-            .iter()
-            .map(|&idx| markers[idx].source_start)
-            .min()
-            .unwrap()
-            .min(pair.open_pos);
-        let max_end = overlapping
-            .iter()
-            .map(|&idx| markers[idx].source_end)
-            .max()
-            .unwrap()
-            .max(pair.close_pos + 1);
+    // Update each marker to exclude both delimiters
+    for idx in indices_to_update.iter().rev() {
+        let marker = &mut markers[*idx];
 
-        // Remove old markers (in reverse order to preserve indices)
-        for &idx in overlapping.iter().rev() {
-            markers.remove(idx);
+        // Shrink to exclude delimiters
+        let mut new_start = marker.source_start;
+        let mut new_end = marker.source_end;
+
+        // If opening delimiter is at or before start, move start past it
+        if new_start <= pair.open_pos && pair.open_pos < new_end {
+            new_start = pair.open_pos + 1;
         }
 
-        // Add expanded marker
-        markers.push(Marker {
-            source_start: min_start,
-            source_end: max_end,
-            rendered_start: min_start,
-            rendered_end: max_end,
-            content: String::new(), // Will be filled by reconstruction
-        });
+        // If closing delimiter is before or at end, move end before it
+        if new_start <= pair.close_pos && pair.close_pos < new_end {
+            new_end = pair.close_pos;
+        }
+
+        // Update marker if it still has content after shrinking
+        if new_start < new_end {
+            marker.source_start = new_start;
+            marker.source_end = new_end;
+            marker.rendered_start = new_start;
+            marker.rendered_end = new_end;
+            // Clear content so reconstructor re-extracts from text with new boundaries
+            marker.content.clear();
+        } else {
+            // Marker would be empty after shrinking, remove it
+            markers.remove(*idx);
+        }
     }
 }
 

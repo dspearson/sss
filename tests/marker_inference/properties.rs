@@ -86,7 +86,8 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Output should contain the marked content
-            prop_assert!(result.output.contains("⊕{") || result.output.contains(&content));
+            let has_marker = result.output.contains("⊕{") || result.output.contains(&content);
+            assert!(has_marker);
         }
     }
 
@@ -106,7 +107,7 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Should have at least one marker
-            prop_assert!(result.output.contains("⊕{"));
+            assert!(result.output.contains("⊕{"));
         }
     }
 
@@ -131,7 +132,8 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // User marker should be converted to canonical form
-            prop_assert!(result.output.contains(&format!("⊕{{{}}}", content)));
+            let expected = format!("⊕{{{}}}", content);
+            assert!(result.output.contains(&expected));
         }
     }
 
@@ -163,7 +165,8 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // x should merge with left marker (a)
-            prop_assert!(result.output.contains("⊕{ax}") || result.output.contains("⊕{a"));
+            let has_ax = result.output.contains("⊕{ax}") || result.output.contains("⊕{a");
+            assert!(has_ax);
         }
     }
 
@@ -194,7 +197,8 @@ proptest! {
         let edited = "text o+\\{literal}";
 
         if let Ok(result) = infer_markers(&source, &edited) {
-            prop_assert!(result.output.contains("o+\\{literal}"));
+            let expected = "o+\\{literal}";
+            assert!(result.output.contains(expected));
         }
     }
 

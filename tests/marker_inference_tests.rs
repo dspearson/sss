@@ -4,6 +4,9 @@
 
 use sss::marker_inference::infer_markers;
 
+// Include additional test modules
+mod marker_inference;
+
 /// Section 8.3 Example 1: Consistent Marking
 ///
 /// Spec quote: "Both quotes outside marker, content inside marked"

@@ -3,7 +3,7 @@
 //! Tests that verify exact compliance with marker-design.md specification.
 //! Each test corresponds to a specific example or rule from the spec.
 
-use crate::marker_inference::infer_markers;
+use sss::marker_inference::infer_markers;
 
 /// Section 8.3 Example 1: Consistent Marking
 ///

@@ -243,8 +243,7 @@ fn apply_left_bias_expansion(
     let new_end = rendered_to_edited(new_end_rendered, all_changes);
 
     // Apply boundary adjustments per spec sections 5 and 8
-    let (new_start, new_end) = shrink_to_exclude_delimiters(edited_text, new_start, new_end);
-    let (new_start, new_end) = shrink_to_exclude_trailing_whitespace(edited_text, new_start, new_end);
+    let (new_start, new_end) = apply_boundary_adjustments(edited_text, new_start, new_end);
 
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
@@ -303,8 +302,7 @@ fn apply_single_marker_rule(
     }
 
     // Apply boundary adjustments per spec sections 5 and 8
-    let (new_start, new_end) = shrink_to_exclude_delimiters(edited_text, new_start, new_end);
-    let (new_start, new_end) = shrink_to_exclude_trailing_whitespace(edited_text, new_start, new_end);
+    let (new_start, new_end) = apply_boundary_adjustments(edited_text, new_start, new_end);
 
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
@@ -345,6 +343,15 @@ fn extract_content(text: &str, start: usize, end: usize, fallback: &str) -> Stri
     } else {
         fallback.to_string()
     }
+}
+
+/// Apply all boundary adjustments (delimiters + whitespace) per spec sections 5 and 8
+///
+/// This is a convenience function that applies both delimiter and whitespace adjustments
+/// in the correct order, as required by the marker inference specification.
+fn apply_boundary_adjustments(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let (start, end) = shrink_to_exclude_delimiters(text, start, end);
+    shrink_to_exclude_trailing_whitespace(text, start, end)
 }
 
 /// Adjust boundaries to exclude paired delimiters per spec section 8
@@ -458,8 +465,7 @@ fn find_change_boundaries(
     let max_end = rendered_to_edited(max_end_rendered, all_changes);
 
     // Apply boundary adjustments per spec sections 5 and 8
-    let (min_start, max_end) = shrink_to_exclude_delimiters(edited_text, min_start, max_end);
-    let (min_start, max_end) = shrink_to_exclude_trailing_whitespace(edited_text, min_start, max_end);
+    let (min_start, max_end) = apply_boundary_adjustments(edited_text, min_start, max_end);
 
     (min_start, max_end)
 }

@@ -180,13 +180,29 @@ fn process_grouped_changes(
             let edited_start = rendered_to_edited(original_marker.rendered_start, all_changes);
             let edited_end = rendered_to_edited(original_marker.rendered_end, all_changes);
 
-            markers.push(Marker {
-                source_start: edited_start,
-                source_end: edited_end,
-                rendered_start: edited_start,
-                rendered_end: edited_end,
-                content: original_marker.content.clone(),
-            });
+            // Don't preserve marker if its position is now invalid (content was deleted)
+            if edited_start >= edited_end || edited_start >= edited_text.len() || edited_end > edited_text.len() {
+                continue;
+            }
+
+            // Verify the content at this position matches what we expect
+            // If content was deleted, don't preserve the marker
+            let actual_content = if edited_end <= edited_text.len() {
+                &edited_text[edited_start..edited_end]
+            } else {
+                ""
+            };
+
+            // Only preserve if content is non-empty and matches expected
+            if !actual_content.is_empty() {
+                markers.push(Marker {
+                    source_start: edited_start,
+                    source_end: edited_end,
+                    rendered_start: edited_start,
+                    rendered_end: edited_end,
+                    content: original_marker.content.clone(),
+                });
+            }
         }
     }
 
@@ -248,6 +264,11 @@ fn apply_left_bias_expansion(
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
 
+    // Don't create marker if content was completely deleted
+    if new_start >= new_end || new_start >= edited_text.len() {
+        return None;
+    }
+
     Some(Marker {
         source_start: new_start,
         source_end: new_end,
@@ -307,6 +328,11 @@ fn apply_single_marker_rule(
     // Extract content
     let content = extract_content(edited_text, new_start, new_end, &marker.content);
 
+    // Don't create marker if content was completely deleted
+    if new_start >= new_end || new_start >= edited_text.len() {
+        return None;
+    }
+
     Some(Marker {
         source_start: new_start,
         source_end: new_end,
@@ -326,6 +352,11 @@ fn apply_multi_marker_rule(
 ) -> Option<Marker> {
     let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers, all_changes, edited_text);
     let content = extract_content(edited_text, start, end, &change.new_content);
+
+    // Don't create marker if content was completely deleted
+    if start >= end || start >= edited_text.len() {
+        return None;
+    }
 
     Some(Marker {
         source_start: start,

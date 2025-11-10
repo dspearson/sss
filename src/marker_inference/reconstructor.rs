@@ -38,6 +38,13 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
             String::new()
         };
 
+        // Skip empty markers (but preserve whitespace-only markers per spec)
+        // Empty markers should be removed entirely, but whitespace is meaningful
+        if content.is_empty() {
+            pos = marker.source_end;
+            continue;
+        }
+
         // Add marker in canonical format (⊕{...})
         output.push_str("⊕{");
         output.push_str(&content);

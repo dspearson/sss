@@ -658,12 +658,13 @@ impl SssFS {
 
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
         self.read_and_process(path, |fs, content| {
-            // Only process if file has encrypted markers
-            if Self::has_encrypted_markers(&content) {
+            // Process if file has any markers (sealed or opened)
+            if Self::has_any_markers(&content) {
                 // Decrypt and render (remove all markers)
+                // decrypt_to_raw handles both sealed (⊠{}) and opened (⊕{}, o+{}) markers
                 fs.processor.decrypt_to_raw(&content)
             } else {
-                // Return as-is for non-encrypted files
+                // Return as-is for non-marked files
                 Ok(content)
             }
         })
@@ -856,10 +857,11 @@ impl SssFS {
             return self.write_raw_to_backing(path, rendered_content);
         }
 
-        // If current has no markers but new has plaintext markers, seal them directly
+        // If current has no markers but new has plaintext markers, normalize to canonical ⊕{} form
         if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
-            let sealed_new = self.processor.encrypt_content(&rendered_str)?;
-            return self.write_raw_to_backing(path, sealed_new.as_bytes());
+            // Convert o+{} to ⊕{} but keep in opened form (don't seal)
+            let normalized = rendered_str.replace("o+{", "⊕{");
+            return self.write_raw_to_backing(path, normalized.as_bytes());
         }
 
         // Perform smart reconstruction:
@@ -868,7 +870,7 @@ impl SssFS {
         let opened_current = self.processor.decrypt_content(&sealed_current)?;
 
         // 2. Render current version for comparison (strip all markers)
-        let rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
+        let _rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
 
         // 3. Use intelligent marker inference to reconstruct markers
         //    This preserves marker placement even if content changed
@@ -885,11 +887,10 @@ impl SssFS {
 
         let reconstructed = inference_result.output;
 
-        // 4. Seal the reconstructed content (⊕{} → ⊠{})
-        let sealed_new = self.processor.encrypt_content(&reconstructed)?;
-
-        // 5. Write to backing store (not through FUSE!)
-        self.write_raw_to_backing(path, sealed_new.as_bytes())
+        // 4. Write reconstructed content with opened markers (⊕{}) to backing store
+        //    Do NOT seal - keep markers in opened form for continued editing
+        //    Marker inference already produced the correct ⊕{} markers
+        self.write_raw_to_backing(path, reconstructed.as_bytes())
     }
 
 

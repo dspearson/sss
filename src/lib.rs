@@ -110,15 +110,29 @@ mod tests {
 
     #[test]
     fn test_load_key_functions() {
-        // Test that load_key functions are properly exported
-        // These will fail in test environment but should compile
+        use std::env;
+
+        // Test that load_key functions are properly exported and work correctly
+        // Save original directory
+        let original_dir = env::current_dir().unwrap();
+
+        // Create a temporary directory for testing
+        let temp_dir = std::env::temp_dir().join(format!("sss_test_load_key_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Change to temp directory (no config file there)
+        env::set_current_dir(&temp_dir).unwrap();
+
+        // Test that load_key functions fail when no config exists
         let result = load_key();
-        // We expect this to fail in test environment (no keys set up)
-        assert!(result.is_err());
+        assert!(result.is_err(), "load_key should fail when no config exists");
 
         let result = load_key_for_user("test_user");
-        // We expect this to fail in test environment (no keys set up)
-        assert!(result.is_err());
+        assert!(result.is_err(), "load_key_for_user should fail when no config exists");
+
+        // Cleanup: return to original directory and remove temp dir
+        env::set_current_dir(&original_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

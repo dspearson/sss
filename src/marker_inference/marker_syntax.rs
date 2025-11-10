@@ -38,6 +38,7 @@ impl MarkerFormat {
     }
 
     /// Length of the escaped form in bytes
+    #[allow(dead_code)]
     pub fn escaped_len(self) -> usize {
         match self {
             MarkerFormat::OPlus => 4,   // "o+\\{"

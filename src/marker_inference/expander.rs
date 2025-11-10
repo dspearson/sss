@@ -293,18 +293,34 @@ fn apply_single_marker_rule(
     let new_start_rendered = marker.rendered_start.min(sorted[0].rendered_start);
     let new_end_rendered = marker.rendered_end;
 
+    // Check if there's a pure insertion at the marker's end boundary
+    // If so, we should not include it in the initial coordinate transformation
+    let has_insertion_at_end = sorted.iter().any(|c| {
+        c.rendered_start == c.rendered_end && // Pure insertion
+        !c.new_content.is_empty() &&
+        c.rendered_start == marker.rendered_end // At marker's end
+    });
+
     // Convert to EDITED coordinates
     let mut new_start = rendered_to_edited(new_start_rendered, all_changes);
-    let mut new_end = rendered_to_edited(new_end_rendered, all_changes);
+    let mut new_end = if has_insertion_at_end {
+        // For insertions at the end, use the position WITHOUT including the insertion
+        // This prevents the marker from incorrectly expanding to include new content
+        rendered_to_edited_excluding_insertion_at(new_end_rendered, all_changes)
+    } else {
+        rendered_to_edited(new_end_rendered, all_changes)
+    };
 
     // Expand to cover all the changes affecting this marker
     for change in &sorted {
+        let is_pure_insertion = change.rendered_start == change.rendered_end && !change.new_content.is_empty();
+
         // Each change adds new content that should be covered by the marker
         let change_pos_edited = rendered_to_edited(change.rendered_start, all_changes);
 
         // For pure insertions, the content appears BEFORE the converted position
         // (since rendered_to_edited includes the delta from this insertion)
-        let change_start_edited = if change.rendered_start == change.rendered_end && !change.new_content.is_empty() {
+        let change_start_edited = if is_pure_insertion {
             // Pure insertion: content is inserted before the converted position
             change_pos_edited.saturating_sub(change.new_content.len())
         } else {
@@ -318,8 +334,15 @@ fn apply_single_marker_rule(
             new_start = new_start.min(change_start_edited);
         }
 
-        // Expand the end to include all new content
-        new_end = new_end.max(change_end_edited);
+        // Only expand the end if this is NOT a pure insertion at the marker's right boundary
+        // Pure insertions after the marker should not expand it (they're new unmarked content)
+        // But modifications/deletions/insertions WITHIN the marker should expand it
+        let is_insertion_after_marker = is_pure_insertion && change.rendered_start == marker.rendered_end;
+
+        if !is_insertion_after_marker {
+            // Expand the end to include changes that overlap or modify the marker
+            new_end = new_end.max(change_end_edited);
+        }
     }
 
     // Apply boundary adjustments per spec sections 5 and 8
@@ -515,6 +538,41 @@ fn rendered_to_edited(rendered_pos: usize, all_changes: &[&MappedChange]) -> usi
 
     // Apply cumulative deltas from all changes that ended before this position
     for change in sorted {
+        if change.rendered_end <= rendered_pos {
+            let old_len = change.rendered_end - change.rendered_start;
+            let new_len = change.new_content.len();
+            let delta = new_len as isize - old_len as isize;
+            edited_pos += delta;
+        }
+    }
+
+    edited_pos.max(0) as usize
+}
+
+/// Convert a position from RENDERED coordinates to EDITED coordinates,
+/// but exclude any pure insertion at exactly this position.
+///
+/// This is used when a marker's end boundary has an insertion - we want
+/// the position WITHOUT including the inserted content.
+fn rendered_to_edited_excluding_insertion_at(rendered_pos: usize, all_changes: &[&MappedChange]) -> usize {
+    let mut edited_pos = rendered_pos as isize;
+
+    // Sort changes by position
+    let mut sorted: Vec<&MappedChange> = all_changes.to_vec();
+    sorted.sort_by_key(|c| c.rendered_start);
+
+    // Apply cumulative deltas from all changes
+    for change in sorted {
+        // Skip pure insertions AT this exact position
+        let is_pure_insertion_at_pos = change.rendered_start == change.rendered_end &&
+                                        !change.new_content.is_empty() &&
+                                        change.rendered_start == rendered_pos;
+
+        if is_pure_insertion_at_pos {
+            // Don't include this insertion in the position calculation
+            continue;
+        }
+
         if change.rendered_end <= rendered_pos {
             let old_len = change.rendered_end - change.rendered_start;
             let new_len = change.new_content.len();

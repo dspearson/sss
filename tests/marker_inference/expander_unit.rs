@@ -359,7 +359,7 @@ fn test_warning_generation() {
         .expect("Should handle with warnings");
 
     // Might have warnings but should complete
-    assert!(result.output.len() > 0);
+    assert!(!result.output.is_empty());
 }
 
 #[test]

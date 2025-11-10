@@ -19,7 +19,7 @@ fn get_rendered(text: &str) -> String {
                 if chars.peek() == Some(&'{') {
                     chars.next(); // consume '{'
                     // Skip until }
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         if c == '}' {
                             break;
                         }
@@ -130,7 +130,7 @@ proptest! {
         let source = "plain text";
         let edited = format!("plain o+{{{}}}",  content);
 
-        if let Ok(result) = infer_markers(&source, &edited) {
+        if let Ok(result) = infer_markers(source, &edited) {
             // User marker should be converted to canonical form
             let expected = format!("⊕{{{}}}", content);
             assert!(result.output.contains(&expected));
@@ -140,12 +140,11 @@ proptest! {
     /// Property: Deterministic output for same input
     #[test]
     fn prop_deterministic(source in "[a-z ]{0,100}", edited in "[a-z ]{0,100}") {
-        if let Ok(result1) = infer_markers(&source, &edited) {
-            if let Ok(result2) = infer_markers(&source, &edited) {
+        if let Ok(result1) = infer_markers(&source, &edited)
+            && let Ok(result2) = infer_markers(&source, &edited) {
                 prop_assert_eq!(result1.output, result2.output);
                 prop_assert_eq!(result1.warnings, result2.warnings);
             }
-        }
     }
 
     /// Property: Marker content length should not exceed edited text length
@@ -163,7 +162,7 @@ proptest! {
         let source = "o+{a}o+{b}";
         let edited = "axb";
 
-        if let Ok(result) = infer_markers(&source, &edited) {
+        if let Ok(result) = infer_markers(source, edited) {
             // x should merge with left marker (a)
             let has_ax = result.output.contains("⊕{ax}") || result.output.contains("⊕{a");
             assert!(has_ax);
@@ -196,7 +195,7 @@ proptest! {
         let source = "text o+\\{literal}";
         let edited = "text o+\\{literal}";
 
-        if let Ok(result) = infer_markers(&source, &edited) {
+        if let Ok(result) = infer_markers(source, edited) {
             let expected = "o+\\{literal}";
             assert!(result.output.contains(expected));
         }

@@ -429,6 +429,37 @@ impl Processor {
         self.encrypt_content_with_path(content, "<content>")
     }
 
+    /// Processes a single plaintext marker for encryption
+    fn process_plaintext_marker(&self, marker: &MarkerMatch, file_path: &str, original_text: &str) -> String {
+        // Check size limits
+        if !self.check_marker_size(&marker.content, "Plaintext") {
+            // Keep original marker if too large
+            return original_text[marker.start..marker.end].to_string();
+        }
+
+        // Use deterministic encryption if we have project_created timestamp
+        let encrypted_result = if !self.project_created.is_empty() {
+            encrypt_to_base64_deterministic(
+                &marker.content,
+                &self.repository_key,
+                &self.project_created,
+                file_path,
+            )
+        } else {
+            // Fall back to random nonce if no project context
+            encrypt_to_base64(&marker.content, &self.repository_key)
+        };
+
+        // Format result or handle error
+        match encrypted_result {
+            Ok(encrypted) => format!("⊠{{{}}}", encrypted),
+            Err(e) => {
+                let original = &original_text[marker.start..marker.end];
+                self.handle_encrypt_error(&e, original)
+            }
+        }
+    }
+
     pub fn encrypt_content_with_path(&self, content: &str, file_path: &str) -> Result<String> {
         // First, normalize ASCII secrets markers ⊲{} to UTF-8 ⊲{}
         let normalized_content = normalize_secrets_markers(content);
@@ -446,32 +477,9 @@ impl Processor {
             // Add content before this marker
             result.push_str(&normalized_content[last_end..marker.start]);
 
-            // Process this marker
-            if !self.check_marker_size(&marker.content, "Plaintext") {
-                // Keep original marker if too large
-                result.push_str(&normalized_content[marker.start..marker.end]);
-            } else {
-                // Use deterministic encryption if we have project_created timestamp
-                let encrypted_result = if !self.project_created.is_empty() {
-                    encrypt_to_base64_deterministic(
-                        &marker.content,
-                        &self.repository_key,
-                        &self.project_created,
-                        file_path,
-                    )
-                } else {
-                    // Fall back to random nonce if no project context
-                    encrypt_to_base64(&marker.content, &self.repository_key)
-                };
-
-                match encrypted_result {
-                    Ok(encrypted) => result.push_str(&format!("⊠{{{}}}", encrypted)),
-                    Err(e) => {
-                        let original = &normalized_content[marker.start..marker.end];
-                        result.push_str(&self.handle_encrypt_error(&e, original));
-                    }
-                }
-            }
+            // Process and add the encrypted marker
+            let processed = self.process_plaintext_marker(&marker, file_path, &normalized_content);
+            result.push_str(&processed);
 
             last_end = marker.end;
         }

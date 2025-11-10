@@ -750,21 +750,8 @@ impl SssFS {
         Ok(())
     }
 
-    /// Write opened content (with ⊕{} markers) directly to backing store
-    /// This is used for opened_mode writes where content already has markers
-    fn write_sealed_to_backing(&self, path: &Path, opened_content: &[u8]) -> Result<()> {
-        // Convert bytes to string
-        let opened_str = String::from_utf8(opened_content.to_vec())
-            .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
-
-        // Seal the opened content (⊕{} → ⊠{})
-        let sealed_content = self.processor.encrypt_content(&opened_str)?;
-
-        // Write to backing store via file descriptor
-        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
-        let path_cstr = CString::new(rel_path.as_os_str().as_bytes())?;
-
-        // Create temporary file via fd
+    /// Creates a temporary file path for atomic write operations
+    fn create_temp_file_path(&self, rel_path: &Path) -> Result<(PathBuf, CString)> {
         let temp_name = format!(".{}.tmp", rel_path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed"));
@@ -772,6 +759,13 @@ impl SssFS {
             .unwrap_or_else(|| Path::new("."))
             .join(&temp_name);
         let temp_path_cstr = CString::new(temp_rel_path.as_os_str().as_bytes())?;
+        Ok((temp_rel_path, temp_path_cstr))
+    }
+
+    /// Atomically writes content via file descriptor using temp file + rename pattern
+    fn write_via_fd_atomic(&self, rel_path: &Path, content: &str) -> Result<()> {
+        let path_cstr = CString::new(rel_path.as_os_str().as_bytes())?;
+        let (_temp_path, temp_path_cstr) = self.create_temp_file_path(rel_path)?;
 
         // Write to temp file
         let temp_fd = unsafe {
@@ -790,22 +784,22 @@ impl SssFS {
         let write_result = unsafe {
             let bytes_written = libc::write(
                 temp_fd,
-                sealed_content.as_ptr() as *const _,
-                sealed_content.len(),
+                content.as_ptr() as *const _,
+                content.len(),
             );
             libc::close(temp_fd);
             bytes_written
         };
 
-        if write_result < 0 || write_result != sealed_content.len() as isize {
+        if write_result < 0 || write_result != content.len() as isize {
             // Clean up temp file
             unsafe {
                 libc::unlinkat(self.source_fd, temp_path_cstr.as_ptr(), 0);
             }
-            return Err(anyhow!("Failed to write sealed content"));
+            return Err(anyhow!("Failed to write content"));
         }
 
-        // Rename temp to target (atomic)
+        // Atomically rename temp to target
         let result = unsafe {
             libc::renameat(
                 self.source_fd,
@@ -826,57 +820,48 @@ impl SssFS {
         Ok(())
     }
 
-    fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
+    /// Write opened content (with ⊕{} markers) directly to backing store
+    /// This is used for opened_mode writes where content already has markers
+    fn write_sealed_to_backing(&self, path: &Path, opened_content: &[u8]) -> Result<()> {
         // Convert bytes to string
-        let rendered_str = String::from_utf8(rendered_content.to_vec())
+        let opened_str = String::from_utf8(opened_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
-        // Get current sealed version - use original_sealed if provided (from file handle),
-        // otherwise read from backing store
-        let sealed_current = if let Some(original) = original_sealed {
-            original.clone()
-        } else {
-            // Read current sealed version FROM BACKING STORE (not through FUSE!)
-            let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
-            match self.read_file_via_fd(rel_path) {
-                Ok(content) => String::from_utf8(content)
-                    .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?,
-                Err(_) => {
-                    // File doesn't exist or can't be read, write as-is
-                    return self.write_raw_to_backing(path, rendered_content);
-                }
+        // Seal the opened content (⊕{} → ⊠{})
+        let sealed_content = self.processor.encrypt_content(&opened_str)?;
+
+        // Write to backing store via file descriptor
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        self.write_via_fd_atomic(rel_path, &sealed_content)
+    }
+
+    /// Gets current sealed content from parameter or backing store
+    fn get_current_sealed_content(&self, path: &Path, original_sealed: Option<&String>) -> Result<Option<String>> {
+        if let Some(original) = original_sealed {
+            return Ok(Some(original.clone()));
+        }
+
+        // Read current sealed version FROM BACKING STORE (not through FUSE!)
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        match self.read_file_via_fd(rel_path) {
+            Ok(content) => {
+                let sealed = String::from_utf8(content)
+                    .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?;
+                Ok(Some(sealed))
             }
-        };
-
-        // Check if new content has plaintext markers that need sealing
-        let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
-
-        // If current version has no markers and new content has no plaintext markers,
-        // just write the rendered content as-is
-        if !Self::has_any_markers(&sealed_current) && !new_has_plaintext_markers {
-            return self.write_raw_to_backing(path, rendered_content);
+            Err(_) => Ok(None), // File doesn't exist or can't be read
         }
+    }
 
-        // If current has no markers but new has plaintext markers, normalize to canonical ⊕{} form
-        if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
-            // Convert o+{} to ⊕{} but keep in opened form (don't seal)
-            let normalized = rendered_str.replace("o+{", "⊕{");
-            return self.write_raw_to_backing(path, normalized.as_bytes());
-        }
+    /// Performs smart reconstruction using marker inference
+    fn perform_smart_reconstruction(&self, path: &Path, sealed_current: &str, rendered_str: &str) -> Result<String> {
+        // Open (decrypt/open) current version to get content with markers
+        let opened_current = self.processor.decrypt_content(sealed_current)?;
 
-        // Perform smart reconstruction:
-        // 1. Open (decrypt/open) current version to get content with markers
-        //    (Works for both ⊠{} encrypted and ⊕{} plaintext markers)
-        let opened_current = self.processor.decrypt_content(&sealed_current)?;
-
-        // 2. Render current version for comparison (strip all markers)
-        let _rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
-
-        // 3. Use intelligent marker inference to reconstruct markers
-        //    This preserves marker placement even if content changed
+        // Use intelligent marker inference to reconstruct markers
         eprintln!("DEBUG FUSE: opened_current = {:?}", opened_current);
         eprintln!("DEBUG FUSE: rendered_str = {:?}", rendered_str);
-        let inference_result = crate::marker_inference::infer_markers(&opened_current, &rendered_str)
+        let inference_result = crate::marker_inference::infer_markers(&opened_current, rendered_str)
             .map_err(|e| anyhow!("Marker inference failed: {}", e))?;
         eprintln!("DEBUG FUSE: inference result = {:?}", inference_result.output);
 
@@ -888,11 +873,36 @@ impl SssFS {
             }
         }
 
-        let reconstructed = inference_result.output;
+        Ok(inference_result.output)
+    }
 
-        // 4. Write reconstructed content with opened markers (⊕{}) to backing store
-        //    Do NOT seal - keep markers in opened form for continued editing
-        //    Marker inference already produced the correct ⊕{} markers
+    fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
+        // Convert bytes to string
+        let rendered_str = String::from_utf8(rendered_content.to_vec())
+            .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
+
+        // Get current sealed version
+        let sealed_current = match self.get_current_sealed_content(path, original_sealed)? {
+            Some(content) => content,
+            None => return self.write_raw_to_backing(path, rendered_content), // New file, write as-is
+        };
+
+        // Check if new content has plaintext markers
+        let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
+
+        // Simple case: no markers in either version
+        if !Self::has_any_markers(&sealed_current) && !new_has_plaintext_markers {
+            return self.write_raw_to_backing(path, rendered_content);
+        }
+
+        // Normalize case: no current markers but new has plaintext markers
+        if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
+            let normalized = rendered_str.replace("o+{", "⊕{");
+            return self.write_raw_to_backing(path, normalized.as_bytes());
+        }
+
+        // Smart reconstruction: use marker inference to preserve marker placement
+        let reconstructed = self.perform_smart_reconstruction(path, &sealed_current, &rendered_str)?;
         self.write_raw_to_backing(path, reconstructed.as_bytes())
     }
 

@@ -12,6 +12,7 @@ use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
+use crate::filesystem_common::{has_encrypted_markers, has_any_markers};
 use crate::Processor;
 
 const TTL: Duration = Duration::from_secs(1);
@@ -517,15 +518,7 @@ impl SssFS {
     }
 
     /// Check if a file has encrypted markers (should be processed)
-    fn has_encrypted_markers(content: &str) -> bool {
-        content.contains("⊠{")
-    }
-
-    /// Check if a file has any SSS markers (encrypted OR plaintext)
-    fn has_any_markers(content: &str) -> bool {
-        content.contains("⊠{") || content.contains("⊕{") ||
-        content.contains("[*{") || content.contains("o+{")
-    }
+    // Note: has_encrypted_markers() and has_any_markers() moved to filesystem_common module
 
     /// Check if a file at the given path contains encrypted markers
     fn file_has_secrets(&self, rel_path: &Path) -> bool {
@@ -536,7 +529,7 @@ impl SssFS {
                 match self.read_file_via_fd(rel_path) {
                     Ok(content) => {
                         if let Ok(s) = String::from_utf8(content) {
-                            Self::has_encrypted_markers(&s)
+                            has_encrypted_markers(&s)
                         } else {
                             false  // Not UTF-8, can't have text markers
                         }
@@ -659,7 +652,7 @@ impl SssFS {
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
         self.read_and_process(path, |fs, content| {
             // Process if file has any markers (sealed or opened)
-            if Self::has_any_markers(&content) {
+            if has_any_markers(&content) {
                 // Decrypt and render (remove all markers)
                 // decrypt_to_raw handles both sealed (⊠{}) and opened (⊕{}, o+{}) markers
                 fs.processor.decrypt_to_raw(&content)
@@ -674,7 +667,7 @@ impl SssFS {
     fn read_and_open(&self, path: &Path) -> Result<Vec<u8>> {
         self.read_and_process(path, |fs, content| {
             // Only process if file has encrypted markers
-            if Self::has_encrypted_markers(&content) {
+            if has_encrypted_markers(&content) {
                 // Decrypt to opened form (⊠{} → ⊕{})
                 fs.processor.decrypt_content(&content)
             } else {
@@ -891,12 +884,12 @@ impl SssFS {
         let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
 
         // Simple case: no markers in either version
-        if !Self::has_any_markers(&sealed_current) && !new_has_plaintext_markers {
+        if !has_any_markers(&sealed_current) && !new_has_plaintext_markers {
             return self.write_raw_to_backing(path, rendered_content);
         }
 
         // Normalize case: no current markers but new has plaintext markers
-        if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
+        if !has_any_markers(&sealed_current) && new_has_plaintext_markers {
             let normalized = rendered_str.replace("o+{", "⊕{");
             return self.write_raw_to_backing(path, normalized.as_bytes());
         }
@@ -1497,7 +1490,7 @@ impl Filesystem for SssFS {
             self.read_file_via_fd(rel_path)
                 .ok()
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .filter(|s| Self::has_any_markers(s))
+                .filter(|s| has_any_markers(s))
         } else {
             None
         };
@@ -1825,7 +1818,7 @@ impl Filesystem for SssFS {
                         eprintln!("DEBUG RELEASE: Content (first 200 chars): {:?}", &content_str.chars().take(200).collect::<String>());
 
                         // Check if content already has encrypted markers (⊠{})
-                        let is_already_sealed = Self::has_encrypted_markers(&content_str);
+                        let is_already_sealed = has_encrypted_markers(&content_str);
                         eprintln!("DEBUG RELEASE: is_already_sealed={}", is_already_sealed);
 
                         // Check if this file should be processed by sss or written raw
@@ -2905,17 +2898,17 @@ mod tests {
 
     #[test]
     fn test_has_encrypted_markers_true() {
-        assert!(SssFS::has_encrypted_markers("password: ⊠{abc123}"));
-        assert!(SssFS::has_encrypted_markers("⊠{secret}"));
-        assert!(SssFS::has_encrypted_markers("prefix ⊠{data} suffix"));
+        assert!(has_encrypted_markers("password: ⊠{abc123}"));
+        assert!(has_encrypted_markers("⊠{secret}"));
+        assert!(has_encrypted_markers("prefix ⊠{data} suffix"));
     }
 
     #[test]
     fn test_has_encrypted_markers_false() {
-        assert!(!SssFS::has_encrypted_markers("password: plaintext"));
-        assert!(!SssFS::has_encrypted_markers("⊕{plaintext_marker}"));
-        assert!(!SssFS::has_encrypted_markers(""));
-        assert!(!SssFS::has_encrypted_markers("no markers here"));
+        assert!(!has_encrypted_markers("password: plaintext"));
+        assert!(!has_encrypted_markers("⊕{plaintext_marker}"));
+        assert!(!has_encrypted_markers(""));
+        assert!(!has_encrypted_markers("no markers here"));
     }
 
     #[test]

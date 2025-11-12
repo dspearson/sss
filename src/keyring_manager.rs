@@ -4,7 +4,6 @@ use std::path::Path;
 
 // Temporarily use old config for backwards compatibility
 use serde::{Deserialize, Serialize};
-use std::fs;
 
 use crate::{error_helpers, toml_helpers};
 

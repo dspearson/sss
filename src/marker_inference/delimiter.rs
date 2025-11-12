@@ -116,11 +116,14 @@ fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>
         .map(|(idx, _)| idx)
         .collect();
 
+    // Define all delimiter characters (used to check if content is only delimiters)
+    let delimiter_chars = vec!['"', '\'', '[', ']', '{', '}', '(', ')', '<', '>'];
+
     // Update each marker to exclude both delimiters
     for idx in indices_to_update.iter().rev() {
         let marker = &mut markers[*idx];
 
-        // Shrink to exclude delimiters
+        // Calculate what the new boundaries would be
         let mut new_start = marker.source_start;
         let mut new_end = marker.source_end;
 
@@ -134,18 +137,41 @@ fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>
             new_end = pair.close_pos;
         }
 
-        // Update marker if it still has content after shrinking
-        if new_start < new_end {
+        // Check if the delimiters are adjacent (nothing between them)
+        let delimiters_adjacent = pair.close_pos == pair.open_pos + 1;
+
+        // Check if content between delimiters is only other delimiter characters
+        let content_is_only_delimiters = if !marker.content.is_empty() {
+            // Check if removing these delimiters would leave only delimiter characters
+            // This is a heuristic: if the marker content is very short and only contains delimiters,
+            // it's likely that the delimiters are part of the content, not wrapping it
+            let content_length = marker.content.len();
+            let delimiter_count = marker.content.chars().filter(|c| delimiter_chars.contains(c)).count();
+            content_length > 0 && delimiter_count == content_length && content_length <= 10
+        } else {
+            false
+        };
+
+        // Only shrink if:
+        // 1. It wouldn't make the marker empty AND
+        // 2. The delimiters aren't adjacent (meaning there's content between them) AND
+        // 3. The content isn't just a sequence of delimiter characters
+        let should_shrink = new_start < new_end &&
+                           !delimiters_adjacent &&
+                           !content_is_only_delimiters;
+
+        if should_shrink {
             marker.source_start = new_start;
             marker.source_end = new_end;
             marker.rendered_start = new_start;
             marker.rendered_end = new_end;
             // Clear content so reconstructor re-extracts from text with new boundaries
             marker.content.clear();
-        } else {
-            // Marker would be empty after shrinking, remove it
-            markers.remove(*idx);
         }
+        // If we can't shrink, leave the marker as-is (include the delimiters)
+        // This handles cases like:
+        // - Adjacent delimiters: []
+        // - Content is only delimiters: @#$%^&*()[]{}
     }
 }
 

@@ -129,19 +129,22 @@ fn handle_unclosed_marker(
 
 /// Add a valid user marker to the list
 fn add_user_marker(
-    marker_text: &str,
-    prefix_len: usize,
+    _marker_text: &str,
+    _prefix_len: usize,
     content: &str,
     validated: &mut String,
     user_markers: &mut Vec<UserMarker>,
 ) {
+    // Record the position where content will be in the validated text
     let marker_start = validated.len();
     user_markers.push(UserMarker {
         start: marker_start,
-        end: marker_start + prefix_len + content.len() + 1,
+        end: marker_start + content.len(), // Just the content, no marker syntax
         content: content.to_string(),
     });
-    validated.push_str(marker_text);
+    // Only add the CONTENT to validated text, not the marker syntax
+    // The reconstructor will add ⊕{...} markers later
+    validated.push_str(content);
 }
 
 #[cfg(test)]
@@ -151,7 +154,8 @@ mod tests {
     #[test]
     fn test_valid_marker() {
         let result = validate_user_markers("text o+{secret} more");
-        assert_eq!(result.text, "text o+{secret} more");
+        // Marker syntax should be stripped, only content remains
+        assert_eq!(result.text, "text secret more");
         assert_eq!(result.user_markers.len(), 1);
         assert_eq!(result.user_markers[0].content, "secret");
         assert_eq!(result.warnings.len(), 0);

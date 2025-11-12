@@ -3,38 +3,64 @@
 //! These tests verify invariants that should hold for all inputs.
 
 use proptest::prelude::*;
+use proptest::test_runner::Config;
 use sss::marker_inference::infer_markers;
+
+// Configure proptest to avoid file I/O contention in parallel test execution
+fn proptest_config() -> Config {
+    Config {
+        // Disable file persistence to avoid race conditions in parallel test execution
+        failure_persistence: None,
+        ..Config::default()
+    }
+}
 
 // Helper to parse markers and get rendered text
 fn get_rendered(text: &str) -> String {
-    // Simple marker removal for testing
+    // Simple marker removal for testing - handles both o+{...} and ⊕{...}
     let mut result = String::new();
-    let mut chars = text.chars().peekable();
+    let mut i = 0;
+    let bytes = text.as_bytes();
 
-    while let Some(ch) = chars.next() {
-        if ch == 'o' {
-            // Check for o+{
-            if chars.peek() == Some(&'+') {
-                chars.next(); // consume '+'
-                if chars.peek() == Some(&'{') {
-                    chars.next(); // consume '{'
-                    // Skip until }
-                    for c in chars.by_ref() {
-                        if c == '}' {
-                            break;
-                        }
-                        result.push(c);
-                    }
-                    continue;
-                }
+    while i < text.len() {
+        // Check for o+{
+        if i + 3 <= text.len() && &text[i..i+3] == "o+{" {
+            i += 3; // skip "o+{"
+            // Extract content until }
+            while i < text.len() && bytes[i] != b'}' {
+                result.push(bytes[i] as char);
+                i += 1;
             }
+            if i < text.len() {
+                i += 1; // skip '}'
+            }
+            continue;
         }
+
+        // Check for ⊕{ (3 bytes for ⊕ + 1 for {)
+        if i + "⊕{".len() <= text.len() && &text[i..i+"⊕{".len()] == "⊕{" {
+            i += "⊕{".len(); // skip "⊕{"
+            // Extract content until }
+            while i < text.len() && bytes[i] != b'}' {
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < text.len() {
+                i += 1; // skip '}'
+            }
+            continue;
+        }
+
+        // Regular character
+        let ch = text[i..].chars().next().unwrap();
         result.push(ch);
+        i += ch.len_utf8();
     }
     result
 }
 
 proptest! {
+    #![proptest_config(proptest_config())]
     /// Property: Applying inference twice should give the same result (idempotence)
     #[test]
     fn prop_idempotence(source in "[a-z ]{0,100}", edited in "[a-z ]{0,100}") {

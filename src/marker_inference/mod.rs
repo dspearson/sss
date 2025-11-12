@@ -194,7 +194,6 @@ mod tests {
         let edited = "password: secret\nother text\npassword again: secret";
 
         let result = infer_markers(source, edited).unwrap();
-        println!("Result: {}", result.output);
 
         let marker_count = result.output.matches("⊕{secret}").count()
             + result.output.matches("o+{secret}").count();
@@ -211,7 +210,6 @@ mod tests {
         let edited = "username: root\npassword: newsecret\napi_key: xyz-789";
 
         let result = infer_markers(source, edited).unwrap();
-        println!("Result: {:?}", result.output);
 
         // All three values should be marked
         assert!(result.output.contains("⊕{root}"),

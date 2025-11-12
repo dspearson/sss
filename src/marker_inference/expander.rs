@@ -41,15 +41,53 @@ pub fn apply_expansion_rules(
 }
 
 /// Group changes by which markers they overlap
+///
+/// Special handling: If changes form a contiguous or near-contiguous sequence
+/// and together span multiple markers, merge them into a single group.
 fn group_changes_by_markers(
     changes: &[MappedChange],
 ) -> std::collections::HashMap<Vec<usize>, Vec<&MappedChange>> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+
+    // First, do standard grouping
     let mut grouped: HashMap<Vec<usize>, Vec<&MappedChange>> = HashMap::new();
 
     for change in changes {
         let key = change.overlapping_markers.clone();
         grouped.entry(key).or_default().push(change);
+    }
+
+    // Check if we have multiple groups that should be merged
+    // This happens when changes are contiguous and together span multiple markers
+    let all_markers: HashSet<usize> = changes
+        .iter()
+        .flat_map(|c| c.overlapping_markers.iter().copied())
+        .collect();
+
+    if all_markers.len() > 1 && grouped.len() > 1 {
+        // Check if changes form a contiguous or near-contiguous sequence
+        let mut sorted_changes: Vec<&MappedChange> = changes.iter().collect();
+        sorted_changes.sort_by_key(|c| c.rendered_start);
+
+        // Only merge if:
+        // 1. Changes are truly contiguous (gaps are VERY small, like 1-2 chars from diff matching)
+        // 2. And the number of markers is reasonable (not merging 50+ markers)
+        let is_truly_contiguous = sorted_changes.windows(2).all(|window| {
+            let gap = window[1].rendered_start.saturating_sub(window[0].rendered_end);
+            gap <= 2 // Very tight threshold to avoid over-merging
+        });
+
+        // Don't merge if it would combine too many independent markers
+        let marker_count_reasonable = all_markers.len() <= 3;
+
+        if is_truly_contiguous && marker_count_reasonable {
+            // Merge all groups into one with all markers
+            let all_markers_vec: Vec<usize> = all_markers.into_iter().collect();
+            let all_changes: Vec<&MappedChange> = changes.iter().collect();
+            let mut merged = HashMap::new();
+            merged.insert(all_markers_vec, all_changes);
+            return merged;
+        }
     }
 
     grouped
@@ -163,7 +201,7 @@ fn process_grouped_changes(
         } else {
             // Rule 1: Multiple markers with overlapping interiors - merge them
             if let Some(marker) = apply_multi_marker_rule(
-                changes[0],
+                &changes,
                 &overlapping_indices,
                 original_markers,
                 edited_text,
@@ -262,11 +300,16 @@ fn apply_left_bias_expansion(
     // Apply boundary adjustments per spec sections 5 and 8
     let (new_start, new_end) = apply_boundary_adjustments(edited_text, new_start, new_end);
 
-    // Extract content
-    let content = extract_content(edited_text, new_start, new_end, &marker.content);
+    // Don't create marker if content was completely deleted or position is invalid
+    if new_start >= new_end || new_start >= edited_text.len() || new_end > edited_text.len() {
+        return None;
+    }
 
-    // Don't create marker if content was completely deleted
-    if new_start >= new_end || new_start >= edited_text.len() {
+    // Extract content from the edited text
+    let content = edited_text[new_start..new_end].to_string();
+
+    // Don't create marker if extracted content is empty (deletion case)
+    if content.is_empty() {
         return None;
     }
 
@@ -321,6 +364,7 @@ fn apply_single_marker_rule(
     // Expand to cover all the changes affecting this marker
     for change in &sorted {
         let is_pure_insertion = change.rendered_start == change.rendered_end && !change.new_content.is_empty();
+        let is_insertion_at_marker_end = is_pure_insertion && change.rendered_start == marker.rendered_end;
 
         // Each change adds new content that should be covered by the marker
         let change_pos_edited = rendered_to_edited(change.rendered_start, all_changes);
@@ -342,19 +386,32 @@ fn apply_single_marker_rule(
         }
 
         // Expand the end to include changes that overlap or modify the marker
-        // Don't expand for pure insertions at the boundary IF we're using special coordinate handling
-        // (The has_insertion_at_end check already handles not including those in new_end initially)
-        new_end = new_end.max(change_end_edited);
+        // Per Rule 2: Adjacent modifications should expand the marker
+        // EXCEPTION: Don't expand for pure insertions AT THE END that start with whitespace
+        // AND contain non-whitespace content (i.e., " and secret" but not just " ")
+        // (These are separate phrases/words that should be handled by propagation)
+        let is_phrase_insertion = is_insertion_at_marker_end &&
+            change.new_content.starts_with(|c: char| c.is_whitespace()) &&
+            change.new_content.trim().len() > 0; // Has actual content after whitespace
+
+        if !is_phrase_insertion {
+            new_end = new_end.max(change_end_edited);
+        }
     }
 
     // Apply boundary adjustments per spec sections 5 and 8
     let (new_start, new_end) = apply_boundary_adjustments(edited_text, new_start, new_end);
 
-    // Extract content
-    let content = extract_content(edited_text, new_start, new_end, &marker.content);
+    // Don't create marker if content was completely deleted or position is invalid
+    if new_start >= new_end || new_start >= edited_text.len() || new_end > edited_text.len() {
+        return None;
+    }
 
-    // Don't create marker if content was completely deleted
-    if new_start >= new_end || new_start >= edited_text.len() {
+    // Extract content from the edited text
+    let content = edited_text[new_start..new_end].to_string();
+
+    // Don't create marker if extracted content is empty (deletion case)
+    if content.is_empty() {
         return None;
     }
 
@@ -369,17 +426,24 @@ fn apply_single_marker_rule(
 
 /// Apply expansion rule for multiple overlapping markers (Rule 1)
 fn apply_multi_marker_rule(
-    change: &MappedChange,
+    changes: &[&MappedChange],
     overlapping_indices: &[usize],
     original_markers: &[Marker],
     edited_text: &str,
     all_changes: &[&MappedChange],
 ) -> Option<Marker> {
-    let (start, end) = find_change_boundaries(change, overlapping_indices, original_markers, all_changes, edited_text);
-    let content = extract_content(edited_text, start, end, &change.new_content);
+    let (start, end) = find_change_boundaries_multi(changes, overlapping_indices, original_markers, all_changes, edited_text);
 
-    // Don't create marker if content was completely deleted
-    if start >= end || start >= edited_text.len() {
+    // Don't create marker if content was completely deleted or position is invalid
+    if start >= end || start >= edited_text.len() || end > edited_text.len() {
+        return None;
+    }
+
+    // Extract content from the edited text
+    let content = edited_text[start..end].to_string();
+
+    // Don't create marker if extracted content is empty (deletion case)
+    if content.is_empty() {
         return None;
     }
 
@@ -390,15 +454,6 @@ fn apply_multi_marker_rule(
         rendered_end: end,
         content,
     })
-}
-
-/// Extract content from text with fallback
-fn extract_content(text: &str, start: usize, end: usize, fallback: &str) -> String {
-    if start < text.len() && end <= text.len() {
-        text[start..end].to_string()
-    } else {
-        fallback.to_string()
-    }
 }
 
 /// Apply all boundary adjustments (delimiters + whitespace) per spec sections 5 and 8
@@ -433,6 +488,11 @@ fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) ->
         (b'<', b'>'),
     ];
 
+    // All delimiter characters for checking content
+    let delimiter_chars: Vec<u8> = pairs.iter()
+        .flat_map(|&(o, c)| vec![o, c])
+        .collect();
+
     // Keep checking and shrinking as long as we find delimiter pairs
     loop {
         if start >= end {
@@ -445,11 +505,36 @@ fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) ->
         for &(open, close) in &pairs {
             if start < bytes.len() && end > 0 && end <= bytes.len()
                 && bytes[start] == open && bytes[end - 1] == close {
-                    // Found a pair - shrink boundaries
-                    start += 1;
-                    end -= 1;
-                    found_pair = true;
-                    break;
+                    // Found a delimiter pair at boundaries
+                    // Only shrink if there's actual content between them that's NOT just more delimiters
+                    // This prevents over-shrinking when the content is a sequence of special chars
+
+                    // Check what's between the delimiters
+                    let inner_start = start + 1;
+                    let inner_end = end - 1;
+
+                    if inner_start >= inner_end {
+                        // Empty content between delimiters - don't shrink
+                        // The delimiters themselves ARE the content
+                        break;
+                    }
+
+                    // Check if there's at least one non-delimiter character between them
+                    let has_non_delimiter_content = bytes[inner_start..inner_end]
+                        .iter()
+                        .any(|&b| !delimiter_chars.contains(&b));
+
+                    if has_non_delimiter_content {
+                        // There's real content between delimiters - safe to shrink
+                        start += 1;
+                        end -= 1;
+                        found_pair = true;
+                        break;
+                    } else {
+                        // Content is only delimiter characters - don't shrink
+                        // Example: [{()}] should not be shrunk to nothing
+                        break;
+                    }
                 }
         }
 
@@ -465,12 +550,22 @@ fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) ->
 ///
 /// Trailing whitespace should not be included in markers to avoid
 /// breaking word boundaries when rendering.
+///
+/// EXCEPTION: If the entire content is whitespace, preserve it (per spec Section 9.1)
 fn shrink_to_exclude_trailing_whitespace(text: &str, start: usize, mut end: usize) -> (usize, usize) {
     if start >= end || end > text.len() {
         return (start, end);
     }
 
     let bytes = text.as_bytes();
+
+    // Check if entire content is whitespace
+    let all_whitespace = text[start..end].bytes().all(|b| b.is_ascii_whitespace());
+
+    // If entire content is whitespace, preserve it (whitespace can be sensitive)
+    if all_whitespace {
+        return (start, end);
+    }
 
     // Shrink end to exclude trailing whitespace
     while end > start && end > 0 && bytes[end - 1].is_ascii_whitespace() {
@@ -493,18 +588,26 @@ fn add_user_markers_to_list(markers: &mut Vec<Marker>, user_markers: &[UserMarke
     }
 }
 
-/// Find boundaries for a change that spans multiple markers
-fn find_change_boundaries(
-    change: &MappedChange,
+/// Find boundaries for multiple changes that span multiple markers
+fn find_change_boundaries_multi(
+    changes: &[&MappedChange],
     overlapping_indices: &[usize],
     markers: &[Marker],
     all_changes: &[&MappedChange],
     edited_text: &str,
 ) -> (usize, usize) {
-    // Find the leftmost start and rightmost end of all overlapping markers in RENDERED coords
-    let mut min_start_rendered = change.rendered_start;
-    let mut max_end_rendered = change.rendered_end;
 
+    // Find the span in rendered coordinates
+    let mut min_start_rendered = usize::MAX;
+    let mut max_end_rendered = 0;
+
+    // Include all changes
+    for change in changes {
+        min_start_rendered = min_start_rendered.min(change.rendered_start);
+        max_end_rendered = max_end_rendered.max(change.rendered_end);
+    }
+
+    // Include all markers
     for &marker_idx in overlapping_indices {
         if marker_idx < markers.len() {
             let marker = &markers[marker_idx];
@@ -513,17 +616,20 @@ fn find_change_boundaries(
         }
     }
 
-    // Extend to include the change itself
-    max_end_rendered = max_end_rendered.max(change.rendered_start + change.new_content.len());
+    // Find the span in edited text by looking at where changes and markers appear
+    // We want the EARLIEST position and LATEST position affected by any change/marker
 
-    // Convert to EDITED coordinates
-    let min_start = rendered_to_edited(min_start_rendered, all_changes);
-    let max_end = rendered_to_edited(max_end_rendered, all_changes);
+    // Convert rendered span using position mapping for the START
+    // For the start, we want the position BEFORE any insertions at that position
+    let min_start_edited = rendered_to_edited_excluding_insertion_at(min_start_rendered, all_changes);
+
+    // For the end, we want the position AFTER everything
+    let max_end_edited = rendered_to_edited(max_end_rendered, all_changes);
 
     // Apply boundary adjustments per spec sections 5 and 8
-    let (min_start, max_end) = apply_boundary_adjustments(edited_text, min_start, max_end);
+    let (adjusted_start, adjusted_end) = apply_boundary_adjustments(edited_text, min_start_edited, max_end_edited);
 
-    (min_start, max_end)
+    (adjusted_start, adjusted_end)
 }
 
 /// Convert a position from RENDERED coordinates to EDITED coordinates

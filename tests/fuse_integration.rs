@@ -293,13 +293,11 @@ impl TestProject {
 
         // Global substitution - may be multiple commands separated by newlines
         let mut content = current.clone();
-        eprintln!("DEBUG EDIT: Starting with content: {:?}", content);
         for cmd in commands.lines() {
             if cmd.trim().is_empty() {
                 continue;
             }
 
-            eprintln!("DEBUG EDIT: Applying command: {:?}", cmd);
             let perl_code = format!("$_ = do {{ local $/; <STDIN> }}; {}; print;", cmd);
             let mut child = Command::new("perl")
                 .arg("-e")
@@ -324,10 +322,8 @@ impl TestProject {
             }
 
             content = String::from_utf8(output.stdout)?;
-            eprintln!("DEBUG EDIT: After command, content: {:?}", content);
         }
 
-        eprintln!("DEBUG EDIT: Writing final content: {:?}", content);
         // Write modified content back
         fs::write(&file_path, content)?;
 
@@ -690,7 +686,6 @@ fn test_fuse_multiple_markers_in_file() {
         source_content
     );
 
-    eprintln!("DEBUG: source_content = {:?}", source_content);
     assert!(source_content.contains("root"), "Should contain 'root'");
     assert!(source_content.contains("newsecret"), "Should contain 'newsecret'. Content: {}", source_content);
     assert!(source_content.contains("xyz-789"), "Should contain 'xyz-789'");

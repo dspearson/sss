@@ -158,6 +158,7 @@ mod tests {
     use clap::Command;
     use std::fs;
     use tempfile::TempDir;
+    use serial_test::serial;
 
     // RAII guard to ensure current directory is restored after test
     struct DirGuard {
@@ -264,6 +265,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_project_config_or_fail_no_config() {
         let temp_dir = TempDir::new().unwrap();
         let _guard = DirGuard::new().unwrap();
@@ -283,6 +285,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_project_config_or_fail_with_valid_config() {
         let temp_dir = TempDir::new().unwrap();
         let _guard = DirGuard::new().unwrap();
@@ -315,6 +318,7 @@ added = "2025-01-01T00:00:00Z"
     }
 
     #[test]
+    #[serial]
     fn test_load_project_config_or_fail_with_invalid_config() {
         let temp_dir = TempDir::new().unwrap();
         let _guard = DirGuard::new().unwrap();

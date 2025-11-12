@@ -35,7 +35,7 @@ fn validate_and_decode_base64(
     expected_len: usize,
     key_type: &str,
 ) -> Result<Vec<u8>> {
-    use base64::prelude::*;
+    
 
     if encoded.len() > crate::constants::MAX_BASE64_KEY_LENGTH {
         return Err(anyhow!(

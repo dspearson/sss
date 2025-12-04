@@ -210,7 +210,8 @@ fn install_hooks_to_repo(use_multiplex: bool) -> Result<()> {
         println!("Hooks installed successfully!");
         println!();
         println!("Note: The post-merge and post-checkout hooks use 'sss render --project',");
-        println!("which requires project permission. To enable automatic rendering:");
+        println!("which recursively renders all files in the project.");
+        println!("To enable automatic rendering after git operations:");
         println!("  sss project enable render");
     }
 

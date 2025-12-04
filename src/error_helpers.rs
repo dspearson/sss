@@ -193,20 +193,48 @@ pub fn get_home_dir() -> Result<String> {
     std::env::var("HOME").map_err(|_| anyhow!("HOME environment variable not set"))
 }
 
-/// Get username from environment (USER or USERNAME)
+/// Get the current username with proper precedence
+///
+/// Precedence order:
+/// 1. SSS_USER environment variable (highest)
+/// 2. Global config username (from user settings)
+/// 3. USER/USERNAME environment variables (lowest - fallback only)
+///
+/// This respects the user's explicit configuration choices.
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use sss::error_helpers::get_username;
 ///
 /// let username = get_username();
-/// // Result depends on environment
+/// // Returns username based on precedence: SSS_USER > config > USER
 /// ```
 pub fn get_username() -> Result<String> {
-    std::env::var("USER")
+    use crate::config_manager::ConfigManager;
+    use crate::validation::validate_username;
+
+    // 1. Check SSS_USER environment variable first
+    if let Ok(username) = std::env::var("SSS_USER") {
+        validate_username(&username)?;
+        return Ok(username);
+    }
+
+    // 2. Try to load config and get default username
+    if let Ok(config_manager) = ConfigManager::new() {
+        if let Some(username) = config_manager.get_default_username() {
+            validate_username(&username)?;
+            return Ok(username);
+        }
+    }
+
+    // 3. Fall back to system username (USER/USERNAME env vars)
+    let username = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
-        .map_err(|_| anyhow!("Could not determine username from environment"))
+        .map_err(|_| anyhow!("Could not determine username. Set SSS_USER environment variable or configure default username with 'sss settings username <name>'"))?;
+
+    validate_username(&username)?;
+    Ok(username)
 }
 
 /// Create user not found error

@@ -14,6 +14,8 @@ pub mod error_helpers;
 pub mod filesystem_common;
 pub mod toml_helpers;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
+pub mod fuse;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub mod fuse_fs;
 #[cfg(all(target_os = "windows", feature = "winfsp"))]
 pub mod winfsp_fs;

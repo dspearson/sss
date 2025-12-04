@@ -240,8 +240,16 @@ impl Processor {
     }
 
     pub fn new(repository_key: RepositoryKey) -> Result<Self> {
+        Self::new_with_secrets_filename(repository_key, "secrets".to_string())
+    }
+
+    /// Create a new processor with custom secrets filename
+    pub fn new_with_secrets_filename(repository_key: RepositoryKey, secrets_filename: String) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key(repository_key.clone())),
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+                repository_key.clone(),
+                secrets_filename,
+            )),
             repository_key,
             project_root: None,
             project_created: String::new(), // Will be set later if needed
@@ -254,8 +262,26 @@ impl Processor {
         project_root: PathBuf,
         project_created: String,
     ) -> Result<Self> {
+        Self::new_with_context_and_secrets_filename(
+            repository_key,
+            project_root,
+            project_created,
+            "secrets".to_string(),
+        )
+    }
+
+    /// Create a new processor with project metadata and custom secrets filename
+    pub fn new_with_context_and_secrets_filename(
+        repository_key: RepositoryKey,
+        project_root: PathBuf,
+        project_created: String,
+        secrets_filename: String,
+    ) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key(repository_key.clone())),
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+                repository_key.clone(),
+                secrets_filename,
+            )),
             repository_key,
             project_root: Some(project_root),
             project_created,
@@ -264,8 +290,20 @@ impl Processor {
 
     /// Create a new processor with a specified project root for secrets lookup
     pub fn new_with_project_root(repository_key: RepositoryKey, project_root: PathBuf) -> Result<Self> {
+        Self::new_with_project_root_and_secrets_filename(repository_key, project_root, "secrets".to_string())
+    }
+
+    /// Create a new processor with a specified project root and custom secrets filename
+    pub fn new_with_project_root_and_secrets_filename(
+        repository_key: RepositoryKey,
+        project_root: PathBuf,
+        secrets_filename: String,
+    ) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key(repository_key.clone())),
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+                repository_key.clone(),
+                secrets_filename,
+            )),
             repository_key,
             project_root: Some(project_root),
             project_created: String::new(), // Will be set later if needed

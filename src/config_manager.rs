@@ -125,6 +125,12 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Get the default username from user settings (without precedence logic)
+    /// Returns None if no default username is configured
+    pub fn get_default_username(&self) -> Option<String> {
+        self.user_settings.default_username.clone()
+    }
+
     /// Get the effective username (with precedence)
     pub fn get_username(&self, cli_override: Option<&str>) -> Result<String> {
         // CLI override has highest precedence

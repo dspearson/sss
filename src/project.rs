@@ -44,6 +44,10 @@ pub struct ProjectConfig {
     #[serde(default, skip_serializing_if = "RotationMetadata::is_empty")]
     pub rotation: RotationMetadata,
 
+    /// Custom secrets filename (defaults to "secrets" if not set)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets_filename: Option<String>,
+
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -65,6 +69,7 @@ impl Default for ProjectConfig {
             users: HashMap::new(),
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
+            secrets_filename: None,
             key: None,
         }
     }
@@ -128,6 +133,7 @@ impl ProjectConfig {
             users,
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
+            secrets_filename: None,
             key: None,
         })
     }
@@ -310,6 +316,21 @@ impl ProjectConfig {
                 self.rotation.rotation_count, last_rotation, reason
             )
         }
+    }
+
+    /// Get the secrets filename (defaults to "secrets" if not configured)
+    pub fn get_secrets_filename(&self) -> &str {
+        self.secrets_filename.as_deref().unwrap_or("secrets")
+    }
+
+    /// Set the secrets filename
+    pub fn set_secrets_filename(&mut self, filename: String) {
+        self.secrets_filename = Some(filename);
+    }
+
+    /// Clear the secrets filename (use default)
+    pub fn clear_secrets_filename(&mut self) {
+        self.secrets_filename = None;
     }
 }
 

@@ -13,21 +13,7 @@ if ! sss status &> /dev/null; then
     exit 0
 fi
 
-# Try to render first (auto-render takes precedence)
-output=$(sss render --project 2>&1)
-exit_code=$?
+# Try to render project files (requires auto-render permission)
+sss render --project 2>&1 || true
 
-if [ $exit_code -eq 0 ]; then
-    # Render succeeded
-    exit 0
-fi
-
-# If render failed due to not being enabled, try open instead
-if echo "$output" | grep -q "Automatic rendering not enabled"; then
-    # Try auto-open instead
-    sss open --project 2>&1 | grep -v "Automatic opening not enabled" || true
-    exit 0
-fi
-
-# For other errors, fail silently to allow checkout to complete
 exit 0

@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.1.4
+Version:        1.1.5
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -10,13 +10,13 @@ Source0:        %{name}-%{version}.tar.gz
 # Disable debug package generation (Rust binaries are stripped in release mode)
 %global debug_package %{nil}
 
-BuildRequires:  libsodium-devel >= 1.0.18
+BuildRequires:  libsodium-devel >= 1.0.14
 BuildRequires:  gcc
 BuildRequires:  fuse3-devel
 BuildRequires:  fuse3
 # Note: rust and cargo installed via rustup in container builds
 
-Requires:       libsodium >= 1.0.18
+Requires:       libsodium >= 1.0.14
 Requires:       fuse3
 
 %description

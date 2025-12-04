@@ -33,6 +33,7 @@ fn test_username_resolution_precedence_cli_override() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_precedence_env_var() {
     let (manager, _temp_dir) = create_test_config_manager();
 
@@ -48,6 +49,7 @@ fn test_username_resolution_precedence_env_var() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_precedence_user_settings() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
@@ -65,6 +67,7 @@ fn test_username_resolution_precedence_user_settings() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_precedence_system_fallback() {
     let (manager, _temp_dir) = create_test_config_manager();
 
@@ -82,6 +85,7 @@ fn test_username_resolution_precedence_system_fallback() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_full_precedence_chain() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
@@ -204,6 +208,7 @@ fn test_cli_override_bypasses_validation() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_sss_user_env_var_precedence() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
@@ -246,6 +251,7 @@ fn test_clear_default_username() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_empty_sss_user_env() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
@@ -270,6 +276,7 @@ fn test_username_resolution_empty_sss_user_env() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_multiple_config_managers_independent() {
     let temp_dir1 = TempDir::new().expect("Failed to create temp dir 1");
     let temp_dir2 = TempDir::new().expect("Failed to create temp dir 2");
@@ -293,10 +300,25 @@ fn test_multiple_config_managers_independent() {
         .set_default_username(Some("user2".to_string()))
         .expect("Failed to set username2");
 
-    // Should be independent
-    unsafe { env::remove_var("SSS_USER"); }
+    // Should be independent - clear all username env vars to test config-based resolution
+    let user_backup = env::var("USER").ok();
+    let username_backup = env::var("USERNAME").ok();
+    unsafe {
+        env::remove_var("SSS_USER");
+        env::remove_var("USER");
+        env::remove_var("USERNAME");
+    }
+
     assert_eq!(manager1.get_username(None).unwrap(), "user1");
     assert_eq!(manager2.get_username(None).unwrap(), "user2");
+
+    // Restore env vars
+    if let Some(val) = user_backup {
+        unsafe { env::set_var("USER", val); }
+    }
+    if let Some(val) = username_backup {
+        unsafe { env::set_var("USERNAME", val); }
+    }
 }
 
 #[test]
@@ -350,6 +372,7 @@ fn test_config_manager_handles_confdir_flag() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_resolution_error_messages() {
     let (manager, _temp_dir) = create_test_config_manager();
 

@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VERSION="1.1.4"
+VERSION="1.1.5"
 NAME="sss"
 
 # Colors for output
@@ -88,6 +88,7 @@ create_tarball() {
     # Copy source files
     mkdir -p "$source_dir"
     cp -r "$PROJECT_ROOT/src" "$source_dir/"
+    cp -r "$PROJECT_ROOT/benches" "$source_dir/"
     cp -r "$PROJECT_ROOT/githooks" "$source_dir/"
     cp -r "$PROJECT_ROOT/vendor" "$source_dir/"
     cp "$PROJECT_ROOT/Cargo.toml" "$source_dir/"

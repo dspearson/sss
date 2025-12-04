@@ -19,6 +19,7 @@ static SECRETS_LINE_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub struct SecretsCache {
     cache: HashMap<PathBuf, HashMap<String, String>>,
     repository_key: Option<RepositoryKey>,
+    secrets_filename: String,
 }
 
 impl Default for SecretsCache {
@@ -32,6 +33,7 @@ impl SecretsCache {
         Self {
             cache: HashMap::new(),
             repository_key: None,
+            secrets_filename: "secrets".to_string(),
         }
     }
 
@@ -40,7 +42,22 @@ impl SecretsCache {
         Self {
             cache: HashMap::new(),
             repository_key: Some(repository_key),
+            secrets_filename: "secrets".to_string(),
         }
+    }
+
+    /// Create a new SecretsCache with a repository key and custom secrets filename
+    pub fn with_repository_key_and_filename(repository_key: RepositoryKey, secrets_filename: String) -> Self {
+        Self {
+            cache: HashMap::new(),
+            repository_key: Some(repository_key),
+            secrets_filename,
+        }
+    }
+
+    /// Set the secrets filename
+    pub fn set_secrets_filename(&mut self, filename: String) {
+        self.secrets_filename = filename;
     }
 
     /// Load secrets from a file and cache them
@@ -94,7 +111,7 @@ impl SecretsCache {
     }
 
     /// Find secrets file using the lookup hierarchy
-    /// Searches for: $filename.secrets, secrets, ../secrets, up to git root
+    /// Searches for: $filename.secrets, {secrets_filename}, ../{secrets_filename}, up to git root
     pub fn find_secrets_file<P: AsRef<Path>>(
         &self,
         file_path: P,
@@ -113,10 +130,10 @@ impl SecretsCache {
             return Ok(filename_secrets);
         }
 
-        // Strategy 2: Search for "secrets" file upward to project root
+        // Strategy 2: Search for configured secrets file upward to project root
         let mut current_dir = file_dir.to_path_buf();
         loop {
-            let secrets_path = current_dir.join("secrets");
+            let secrets_path = current_dir.join(&self.secrets_filename);
             if secrets_path.exists() {
                 return Ok(secrets_path);
             }
@@ -134,9 +151,10 @@ impl SecretsCache {
         }
 
         Err(anyhow!(
-            "No secrets file found for {}. Searched: {}.secrets and 'secrets' up to project root.",
+            "No secrets file found for {}. Searched: {}.secrets and '{}' up to project root.",
             file_path.display(),
-            file_path.display()
+            file_path.display(),
+            self.secrets_filename
         ))
     }
 

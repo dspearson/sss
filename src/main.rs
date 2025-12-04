@@ -503,6 +503,21 @@ fn create_cli_app() -> Command {
                                 ),
                         )
                         .subcommand(Command::new("list").about("Show all ignore patterns")),
+                )
+                .subcommand(
+                    Command::new("secrets-file")
+                        .about("Configure the secrets filename for this project")
+                        .subcommand(
+                            Command::new("set")
+                                .about("Set custom secrets filename")
+                                .arg(
+                                    Arg::new("filename")
+                                        .help("Filename to use instead of 'secrets' (e.g., '.env', 'config')")
+                                        .required(true),
+                                ),
+                        )
+                        .subcommand(Command::new("show").about("Show configured secrets filename"))
+                        .subcommand(Command::new("clear").about("Clear custom secrets filename (use default 'secrets')")),
                 ),
         )
         .subcommand(
@@ -516,7 +531,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -524,6 +539,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively seal all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -532,7 +554,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -540,6 +562,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively open all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -548,7 +577,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -556,6 +585,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively render all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -582,10 +618,19 @@ fn main() -> Result<()> {
                 return Err(anyhow!("Usage: ssse <file>"));
             }
             let file_path = &args[1];
-            // Use actual system username instead of hardcoded "default"
-            let username = env::var("USER")
-                .or_else(|_| env::var("USERNAME"))
-                .unwrap_or_else(|_| "user".to_string());
+            // Get username with proper precedence: SSS_USER > config > USER
+            let username = env::var("SSS_USER")
+                .ok()
+                .or_else(|| {
+                    // Try to load config and get default username
+                    use sss::config_manager::ConfigManager;
+                    ConfigManager::new()
+                        .ok()
+                        .and_then(|cm| cm.get_default_username())
+                })
+                .or_else(|| env::var("USER").ok())
+                .or_else(|| env::var("USERNAME").ok())
+                .unwrap_or_else(|| "user".to_string());
 
             // Call edit command directly
             let edit_matches = create_cli_app()

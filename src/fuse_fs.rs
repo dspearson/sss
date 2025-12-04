@@ -607,13 +607,23 @@ impl SssFS {
 
             // Determine file type
             let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
-            let flags = if is_dir {
+            let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
+            fuse_debug!("    metadata_via_fd: is_dir={}, is_symlink={}", is_dir, is_symlink);
+
+            // Open with appropriate flags based on file type
+            // For symlinks: use O_SYMLINK if available (macOS) to open symlink itself
+            // For directories: use O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+            // For regular files: use O_RDONLY | O_NOFOLLOW
+            #[cfg(target_os = "macos")]
+            let flags = if is_symlink {
+                libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW
+            } else if is_dir {
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
             } else {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
-            fuse_debug!("    metadata_via_fd: calling openat...");
+            fuse_debug!("    metadata_via_fd: calling openat with flags={:#x}...", flags);
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
@@ -621,6 +631,24 @@ impl SssFS {
             if fd < 0 {
                 let err = std::io::Error::last_os_error();
                 fuse_debug!("    metadata_via_fd: openat failed: {}", err);
+
+                // If this is a symlink and openat failed, try with O_SYMLINK | O_NOFOLLOW
+                #[cfg(target_os = "macos")]
+                if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    fuse_debug!("    metadata_via_fd: retrying symlink with O_SYMLINK | O_NOFOLLOW...");
+                    let retry_fd = unsafe {
+                        libc::openat(self.source_fd, path_cstr.as_ptr(),
+                                   libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW)
+                    };
+                    if retry_fd >= 0 {
+                        fuse_debug!("    metadata_via_fd: retry succeeded, fd={}", retry_fd);
+                        let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
+                        let metadata = file.metadata()?;
+                        fuse_debug!("    metadata_via_fd: done (macOS via retry)");
+                        return Ok(metadata);
+                    }
+                }
+
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
 
@@ -652,20 +680,25 @@ impl SssFS {
             }
             fuse_debug!("    metadata_via_fd: fstatat succeeded");
 
-            // Determine if this is a directory from the stat result
+            // Determine file type from the stat result
             let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
-            fuse_debug!("    metadata_via_fd: is_dir={}", is_dir);
+            let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
+            fuse_debug!("    metadata_via_fd: is_dir={}, is_symlink={}", is_dir, is_symlink);
 
             // Open with appropriate flags based on file type
-            // Directories need O_DIRECTORY, files need O_RDONLY
-            // O_NOFOLLOW to not follow symlinks
-            let flags = if is_dir {
+            // For symlinks: use O_PATH | O_NOFOLLOW to open the symlink itself
+            //               without following it (avoids ELOOP for circular/broken symlinks)
+            // For directories: use O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+            // For regular files: use O_RDONLY | O_NOFOLLOW
+            let flags = if is_symlink {
+                libc::O_PATH | libc::O_NOFOLLOW
+            } else if is_dir {
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
             } else {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
-            fuse_debug!("    metadata_via_fd: calling openat...");
+            fuse_debug!("    metadata_via_fd: calling openat with flags={:#x}...", flags);
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
@@ -673,6 +706,23 @@ impl SssFS {
             if fd < 0 {
                 let err = std::io::Error::last_os_error();
                 fuse_debug!("    metadata_via_fd: openat failed: {}", err);
+
+                // If this is a symlink and openat failed with ELOOP, try O_PATH | O_NOFOLLOW
+                // as a fallback (in case the first attempt didn't use those flags)
+                if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    fuse_debug!("    metadata_via_fd: retrying symlink with O_PATH | O_NOFOLLOW...");
+                    let retry_fd = unsafe {
+                        libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW)
+                    };
+                    if retry_fd >= 0 {
+                        fuse_debug!("    metadata_via_fd: retry succeeded, fd={}", retry_fd);
+                        let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
+                        let metadata = file.metadata()?;
+                        fuse_debug!("    metadata_via_fd: done (via retry)");
+                        return Ok(metadata);
+                    }
+                }
+
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
             fuse_debug!("    metadata_via_fd: openat succeeded, fd={}", fd);

@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
 # Build sss for macOS Apple Silicon (ARM64) from Linux using osxcross
-# For use with fuse-t (no libfuse3 needed!)
+#
+# ⚠️  IMPORTANT: macOS FUSE SUPPORT IS NOT CURRENTLY AVAILABLE ⚠️
+#
+# The fuser crate (Rust FUSE library) is incompatible with macOS fuse-t.
+# While this script can build a binary that links against fuse-t, the
+# resulting binary will fail at runtime:
+#
+#   - mount2() returns immediately (non-blocking) instead of entering event loop
+#   - FUSE session disconnects after ~225ms (INIT → DESTROY)
+#   - Filesystem appears empty even when "mounted"
+#
+# Root cause: fuser crate expects blocking libfuse behavior, but fuse-t
+# uses a different API model. The crate would need significant modifications
+# to support macOS properly.
+#
+# Alternative: Use the VSCode extension for transparent secret editing
+# on macOS instead of FUSE mounting.
+#
+# This script is preserved for reference only.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OSXCROSS_DIR="$SCRIPT_DIR/cross/osxcross"
 
+echo "⚠️  WARNING: macOS FUSE support is not functional - see script header"
 echo "==> Cross-compiling sss for macOS Apple Silicon (aarch64-apple-darwin)"
-echo "==> Target FUSE implementation: fuse-t (no libfuse3 linking required)"
+echo "==> Target FUSE implementation: fuse-t (WILL NOT WORK - incompatible with fuser crate)"
 
 # Check if osxcross is set up
 if [ ! -d "$OSXCROSS_DIR/target" ]; then

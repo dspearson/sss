@@ -8,12 +8,132 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Security Hardening**: Strengthened key derivation and password protection
+  - Default KDF security level upgraded from `interactive` to `sensitive` (4 iterations, 256 MiB RAM)
+  - Configurable KDF levels: `sensitive` (default), `moderate`, `interactive`
+  - Global `--kdf-level` CLI flag for all commands
+  - `SSS_KDF_LEVEL` environment variable support
+  - User settings for KDF level via `~/.config/sss/settings.toml`
+- **System Keyring Integration**: Native OS credential storage
+  - macOS Keychain, Windows Credential Manager, Linux Secret Service (gnome-keyring, kwallet)
+  - Automatic keyring availability detection with graceful fallback
+  - `SSS_USE_KEYRING` environment variable to enable keyring storage
+  - User settings for keyring via configuration
+  - Keys stored with format: `STORED_IN_KEYRING` in TOML when using keyring
+- **Password Strength Analysis**: Real-time password security feedback
+  - Visual strength indicators with color coding (Very Weak to Very Strong)
+  - Character variety analysis (length, uppercase, lowercase, numbers, symbols)
+  - Pattern detection (repeated characters, sequential characters)
+  - Strength-based recommendations and warnings
+  - New `read_new_password_with_requirements()` function for enforcing minimum strength
+  - Automatic strength display during password creation
+- **Settings Commands for Security**:
+  - `sss settings set --kdf-level <LEVEL>`: Configure KDF security level
+  - `sss settings set --use-keyring <true|false>`: Enable/disable system keyring
+  - `sss settings show`: Display current KDF level and keyring status
+  - Keyring availability checking with helpful error messages
+- **Security Warnings**: Enhanced user feedback for security decisions
+  - Prominent warnings when storing keys without password protection
+  - Recommendations for password protection vs system keyring
+  - File path disclosure in warnings for easier troubleshooting
+  - Keyring unavailability warnings with platform-specific guidance
+- **Comprehensive Security Documentation**:
+  - `docs/SECURITY.md`: Complete threat model, security architecture, and best practices
+    - Detailed threat analysis (T1-T6) with mitigations
+    - Cryptographic architecture overview
+    - Key management hierarchy and storage options
+    - Security features (AEAD, memory safety, constant-time operations)
+    - Known limitations and security audit history
+  - `docs/CRYPTOGRAPHY.md`: In-depth cryptographic implementation details
+    - Algorithm specifications (XChaCha20-Poly1305, X25519, Argon2id, BLAKE2b)
+    - Nonce derivation mechanism explanation
+    - Key derivation flows and cost estimates
+    - Memory safety patterns and implementation details
+    - Code examples for complete encryption/decryption flows
+  - `docs/KEY_MANAGEMENT.md`: Practical key management guide
+    - Complete key lifecycle documentation
+    - Team key management workflows
+    - Backup and recovery procedures
+    - Security best practices for individuals, teams, and CI/CD
+    - Troubleshooting common issues
+- **Security Test Suites**: 50 new security-focused tests
+  - `tests/crypto_security_tests.rs`: 17 tests for cryptographic security
+    - Nonce uniqueness and determinism validation
+    - Decryption failure tests (wrong key, tampered ciphertext)
+    - KDF timing consistency checks
+    - Keypair and salt randomness verification
+  - `tests/kdf_security_tests.rs`: 20 tests for KDF security
+    - Parameter validation for all security levels
+    - Salt uniqueness testing (1000 salts)
+    - Password handling (empty, Unicode, long passwords)
+    - Output randomness and distribution checks
+  - `tests/keystore_integration_tests.rs`: 13 tests for key lifecycle
+    - Password-protected and passwordless key storage
+    - Passphrase changes and removal
+    - Multiple keys with different passwords
+    - Current key management and deletion
+- `SSS_PASSPHRASE` environment variable for non-interactive password entry
+  - Works with password-protected private keys
+  - Useful for automation and VS Code extension integration
+  - Replaces separate test mode environment variables
+- `SSS_PROJECT_OPEN` environment variable to bypass project-wide open permission checks
+  - Set to `true` or `1` to enable
+  - Allows `sss open --project` in automation contexts
+- `SSS_PROJECT_RENDER` environment variable to bypass project-wide render permission checks
+  - Set to `true` or `1` to enable
+  - Allows `sss render --project` in automation contexts
+- `sss keys set-passphrase <key-id>` command for passphrase management
+  - Add passphrase protection to unprotected keys
+  - Change existing passphrase
+  - Re-encrypts private key without generating new key
+- `sss keys remove-passphrase <key-id>` command to remove passphrase protection
+  - Converts password-protected key to unprotected storage
+  - Displays security warning about storing unencrypted keys
+- Multi-key matching fallback in project configuration loading
+  - Automatically tries all available keypairs when current key doesn't match project
+  - Displays helpful messages when matching alternative keys
+  - Provides clear error messages listing available project users when no keys match
+- Comprehensive test suite for multi-key matching scenarios
+- YAML-style multi-line value support in `.secrets` files
+  - Use pipe indicator syntax: `key: |` followed by indented lines
+  - Preserves empty lines within multi-line values
+  - Maintains relative indentation for nested structures (JSON, YAML, etc.)
+  - Backward compatible with existing single-line `key: value` format
+  - Supports quoted keys with multi-line values
+  - Ideal for SSH keys, certificates, database connection strings, and JSON configs
+- Configurable secrets file names and suffixes
+  - Project-level configuration via `.sss.toml`: `secrets_filename` and `secrets_suffix` fields
+  - Global user configuration via `~/.config/sss/settings.toml`: same fields
+  - Project config takes precedence over user config, which takes precedence over defaults
+  - Default filename: `"secrets"`, default suffix: `".secrets"`
+  - Examples: Use `".sealed"` suffix for `config.yaml.sealed` secrets files
+  - Or use custom filename like `"passwords"` for centralized secrets file
 - SECURITY.md for security policy and vulnerability disclosure
 - CONTRIBUTING.md for contribution guidelines
 - CHANGELOG.md for tracking version history
 
 ### Changed
+- **BREAKING (Behavioral)**: Default KDF security level changed from `interactive` to `sensitive`
+  - New keys generated with ~2 second derivation time (vs ~0.5 seconds)
+  - Provides stronger protection against brute-force attacks (256 MiB RAM, 4 iterations)
+  - Backward compatible: existing keys retain their original KDF parameters
+  - Can be overridden with `--kdf-level interactive` for faster generation
+- Enhanced `Keystore` to accept configurable KDF parameters and keyring preference
+  - Added `kdf_params` field to store KDF configuration
+  - Added `use_keyring` field for keyring integration
+  - Multiple constructors: `new()`, `new_with_kdf_params()`, `new_with_config_dir_and_kdf()`
+- Updated password confirmation flow to show strength indicators by default
+  - `read_password_with_confirmation()` now displays strength and warnings
+  - Backward compatible with explicit `read_password_with_confirmation_and_strength()`
+- Improved security warnings with clearer messaging and actionable recommendations
+  - File paths shown in warnings for better user guidance
+  - Platform-specific keyring installation instructions
+- Updated test helpers to use `interactive` KDF for faster test execution
+  - All security properties maintained, only affects test speed
 - Updated .gitignore to exclude build artifacts and temporary files
+- Unified test and production password handling to use `SSS_PASSPHRASE`
+- Enhanced `load_project_config_internal()` to support fallback key matching
+- Added `Clone` derive to `KeyPair` struct for multi-key matching support
 
 ### Fixed
 - Removed unused `extract_base_from_protocol` function in ninep_fs.rs
@@ -23,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Old backup directories (sss-old, sss-master)
 - Temporary build artifacts and documentation files
+- `SSS_TEST_MODE` and `SSS_TEST_PASSWORD` environment variables (replaced by `SSS_PASSPHRASE`)
 
 ## [1.1.1] - 2025-01-19
 

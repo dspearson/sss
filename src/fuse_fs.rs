@@ -10,8 +10,10 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH, Instant};
 
+use crate::filesystem_common::{has_encrypted_markers, has_any_markers};
+use crate::secrets::{FileSystemOps, SecretsCache, interpolate_secrets};
 use crate::Processor;
 
 const TTL: Duration = Duration::from_secs(1);
@@ -22,7 +24,10 @@ const ROOT_INO: u64 = 1;
 const SYNTHETIC_OVERLAY_DIR_INO: u64 = u64::MAX - 1;  // Passthrough directory with raw filesystem access
 
 // Custom ioctl command for ssse edit to request opened mode (with ⊕{} markers)
+// Only used on Linux - macOS/fuse-t doesn't support ioctl
+#[cfg(not(target_os = "macos"))]
 const SSS_IOC_OPENED_MODE: u32 = 0x5353_0001; // 'SS' magic + command 1
+#[cfg(not(target_os = "macos"))]
 const SSS_IOC_SEALED_MODE: u32 = 0x5353_0002; // 'SS' magic + command 2 - request sealed content (requires O_NONBLOCK)
 
 /// Inode information
@@ -87,15 +92,9 @@ impl FileOperations for SssOperations {
         )
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        let perm = metadata.permissions().mode() as u16;
-        if has_secrets {
-            // Force chmod 600 for files with secrets
-            0o600
-        } else {
-            perm
-        }
+        metadata.permissions().mode() as u16
     }
 }
 
@@ -161,6 +160,8 @@ pub struct SssFS {
     gid: u32,
     /// Processor for encryption/decryption operations
     processor: Processor,
+    /// Secrets cache for finding and loading .secrets files
+    secrets_cache: RwLock<SecretsCache>,
     /// Inode table: maps inode number to path information
     inode_table: RwLock<HashMap<u64, InodeEntry>>,
     /// Reverse lookup: path to inode number
@@ -177,6 +178,62 @@ pub struct SssFS {
     pinned_paths: Vec<PinnedPath>,
 }
 
+/// FD-based filesystem operations for FUSE in-place mounts
+///
+/// When FUSE is mounted over the source directory, normal filesystem operations
+/// like .exists() and fs::read() will route back through the FUSE mount, causing
+/// deadlock. This implementation uses fd-based operations (openat, faccessat) with
+/// source_fd to access the real filesystem underneath the mount.
+struct FdFileSystemOps {
+    source_fd: std::os::unix::io::RawFd,
+}
+
+impl FileSystemOps for FdFileSystemOps {
+    fn file_exists(&self, path: &Path) -> bool {
+        let path_bytes = path.as_os_str().as_bytes();
+        let path_cstr = match std::ffi::CString::new(path_bytes) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        let result = unsafe {
+            libc::faccessat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                libc::F_OK,
+                0,
+            )
+        };
+
+        result == 0
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        let path_bytes = path.as_os_str().as_bytes();
+        let path_cstr = std::ffi::CString::new(path_bytes)?;
+
+        let fd = unsafe {
+            libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
+        };
+
+        if fd < 0 {
+            return Err(anyhow!("Failed to open file {:?}", path));
+        }
+
+        // Read file contents
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let mut contents = Vec::new();
+        use std::io::Read;
+        std::io::Read::read_to_end(&mut file, &mut contents)?;
+        std::mem::forget(file); // Don't close fd automatically
+
+        // Close fd manually
+        unsafe { libc::close(fd); }
+
+        Ok(contents)
+    }
+}
+
 impl SssFS {
     /// Creates a new FUSE filesystem for transparent sss encryption/decryption.
     ///
@@ -185,8 +242,8 @@ impl SssFS {
     /// * `source_path` - Path to the directory containing files to be transparently processed
     /// * `processor` - Configured [`Processor`] instance for encryption/decryption operations
     /// * `mount_path` - Optional path to the mount point directory. If provided, a file descriptor
-    ///                  will be held open to this directory, allowing access via /proc/self/fd/<fd>
-    ///                  even after the FUSE filesystem is mounted over it.
+    ///   will be held open to this directory, allowing access via /proc/self/fd/<fd>
+    ///   even after the FUSE filesystem is mounted over it.
     ///
     /// # Returns
     ///
@@ -301,6 +358,9 @@ impl SssFS {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
 
+        // Create secrets cache from processor configuration
+        let secrets_cache = processor.get_secrets_cache().clone();
+
         Ok(Self {
             source_path,
             source_fd,
@@ -308,6 +368,7 @@ impl SssFS {
             uid,
             gid,
             processor,
+            secrets_cache: RwLock::new(secrets_cache),
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
             next_ino: RwLock::new(ROOT_INO + 1),
@@ -517,15 +578,7 @@ impl SssFS {
     }
 
     /// Check if a file has encrypted markers (should be processed)
-    fn has_encrypted_markers(content: &str) -> bool {
-        content.contains("⊠{")
-    }
-
-    /// Check if a file has any SSS markers (encrypted OR plaintext)
-    fn has_any_markers(content: &str) -> bool {
-        content.contains("⊠{") || content.contains("⊕{") ||
-        content.contains("[*{") || content.contains("o+{")
-    }
+    // Note: has_encrypted_markers() and has_any_markers() moved to filesystem_common module
 
     /// Check if a file at the given path contains encrypted markers
     fn file_has_secrets(&self, rel_path: &Path) -> bool {
@@ -536,7 +589,7 @@ impl SssFS {
                 match self.read_file_via_fd(rel_path) {
                     Ok(content) => {
                         if let Ok(s) = String::from_utf8(content) {
-                            Self::has_encrypted_markers(&s)
+                            has_encrypted_markers(&s)
                         } else {
                             false  // Not UTF-8, can't have text markers
                         }
@@ -559,81 +612,212 @@ impl SssFS {
     /// Read and render a file (decrypt and remove all markers)
     /// Get metadata using source_fd (works even if mounted over source)
     fn metadata_via_fd(&self, rel_path: &Path) -> Result<fs::Metadata> {
-        use std::os::unix::ffi::OsStrExt;
 
+        // On macOS with in-place mounts, path-based operations deadlock
+        // because they route through the FUSE mount. Use FD-based operations
+        // through source_fd which was opened before mounting.
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::ffi::OsStrExt;
+
+            if rel_path == Path::new(".") {
+                // For root directory, use fstat directly on source_fd
+                let file = unsafe { std::fs::File::from_raw_fd(self.source_fd) };
+                let metadata = file.metadata()?;
+                std::mem::forget(file); // Don't close source_fd
+                return Ok(metadata);
+            }
+
+            // For other paths, use fstatat relative to source_fd
+            // This should work because source_fd was opened before mounting
+            let path_bytes = rel_path.as_os_str().as_bytes();
+            let path_cstr = std::ffi::CString::new(path_bytes)?;
+
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
+            };
+
+            if result < 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(anyhow!("Failed to stat file: {}", err));
+            }
+
+
+            // Determine file type
+            let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+            let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
+
+            // Open with appropriate flags based on file type
+            // For symlinks: use O_SYMLINK if available (macOS) to open symlink itself
+            // For directories: use O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+            // For regular files: use O_RDONLY | O_NOFOLLOW
+            #[cfg(target_os = "macos")]
+            let flags = if is_symlink {
+                libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW
+            } else if is_dir {
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
+            } else {
+                libc::O_RDONLY | libc::O_NOFOLLOW
+            };
+
+            let fd = unsafe {
+                libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
+            };
+
+            if fd < 0 {
+                let err = std::io::Error::last_os_error();
+
+                // If this is a symlink and openat failed, try with O_SYMLINK | O_NOFOLLOW
+                #[cfg(target_os = "macos")]
+                if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    let retry_fd = unsafe {
+                        libc::openat(self.source_fd, path_cstr.as_ptr(),
+                                   libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW)
+                    };
+                    if retry_fd >= 0 {
+                        let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
+                        let metadata = file.metadata()?;
+                        return Ok(metadata);
+                    }
+                }
+
+                return Err(anyhow!("Failed to open file for metadata: {}", err));
+            }
+
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let metadata = file.metadata()?;
+            return Ok(metadata);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            use std::os::unix::ffi::OsStrExt;
+
+            let path_bytes = rel_path.as_os_str().as_bytes();
+            let path_cstr = std::ffi::CString::new(path_bytes)?;
+
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+
+            let result = unsafe {
+                libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
+            };
+
+            if result < 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(anyhow!("Failed to stat file: {}", err));
+            }
+
+            // Determine file type from the stat result
+            let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+            let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
+
+            // Open with appropriate flags based on file type
+            // For symlinks: use O_PATH | O_NOFOLLOW to open the symlink itself
+            //               without following it (avoids ELOOP for circular/broken symlinks)
+            // For directories: use O_RDONLY | O_DIRECTORY | O_NOFOLLOW
+            // For regular files: use O_RDONLY | O_NOFOLLOW
+            let flags = if is_symlink {
+                libc::O_PATH | libc::O_NOFOLLOW
+            } else if is_dir {
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
+            } else {
+                libc::O_RDONLY | libc::O_NOFOLLOW
+            };
+
+            let fd = unsafe {
+                libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
+            };
+
+            if fd < 0 {
+                let err = std::io::Error::last_os_error();
+
+                // If this is a symlink and openat failed with ELOOP, try O_PATH | O_NOFOLLOW
+                // as a fallback (in case the first attempt didn't use those flags)
+                if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    let retry_fd = unsafe {
+                        libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW)
+                    };
+                    if retry_fd >= 0 {
+                        let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
+                        let metadata = file.metadata()?;
+                        return Ok(metadata);
+                    }
+                }
+
+                return Err(anyhow!("Failed to open file for metadata: {}", err));
+            }
+
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let metadata = file.metadata()?;
+            Ok(metadata)
+        }
+    }
+
+    /// Check if a file exists using source_fd (works even if mounted over source)
+    fn file_exists_via_fd(&self, rel_path: &Path) -> bool {
         let path_bytes = rel_path.as_os_str().as_bytes();
-        let path_cstr = std::ffi::CString::new(path_bytes)?;
+        let path_cstr = match std::ffi::CString::new(path_bytes) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
 
-        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-
+        // Use faccessat to check if file exists without deadlocking
         let result = unsafe {
-            libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
+            libc::faccessat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                libc::F_OK,  // Check for existence
+                0,
+            )
         };
 
-        if result < 0 {
-            let err = std::io::Error::last_os_error();
-            return Err(anyhow!("Failed to stat file: {}", err));
-        }
-
-        // Determine if this is a directory from the stat result
-        let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
-
-        // Open with appropriate flags based on file type
-        // Directories need O_DIRECTORY, files need O_RDONLY
-        // O_NOFOLLOW to not follow symlinks
-        let flags = if is_dir {
-            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW
-        } else {
-            libc::O_RDONLY | libc::O_NOFOLLOW
-        };
-
-        let fd = unsafe {
-            libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
-        };
-
-        if fd < 0 {
-            let err = std::io::Error::last_os_error();
-            return Err(anyhow!("Failed to open file for metadata: {}", err));
-        }
-
-        let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        let metadata = file.metadata()?;
-        Ok(metadata)
+        result == 0
     }
 
     /// Read file using source_fd (works even if mounted over source)
     fn read_file_via_fd(&self, rel_path: &Path) -> Result<Vec<u8>> {
-        use std::os::unix::ffi::OsStrExt;
-
-
-        let path_bytes = rel_path.as_os_str().as_bytes();
-        let path_cstr = std::ffi::CString::new(path_bytes)?;
-
-        // Open file relative to source_fd
-        let fd = unsafe {
-            libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
-        };
-
-        if fd < 0 {
-            let err = std::io::Error::last_os_error();
-            return Err(anyhow!("Failed to open file: {}", err));
+        // On macOS, openat can deadlock from FUSE handlers
+        // Use full path instead
+        #[cfg(target_os = "macos")]
+        {
+            let full_path = self.source_path.join(rel_path);
+            let buffer = fs::read(&full_path)?;
+            return Ok(buffer);
         }
 
+        #[cfg(not(target_os = "macos"))]
+        {
+            use std::os::unix::ffi::OsStrExt;
 
-        // Read file contents
-        let mut buffer = Vec::new();
-        let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        use std::io::Read;
-        std::io::BufReader::new(file).read_to_end(&mut buffer)?;
+            let path_bytes = rel_path.as_os_str().as_bytes();
+            let path_cstr = std::ffi::CString::new(path_bytes)?;
 
-        Ok(buffer)
+            // Open file relative to source_fd
+            let fd = unsafe {
+                libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
+            };
+
+            if fd < 0 {
+                let err = std::io::Error::last_os_error();
+                return Err(anyhow!("Failed to open file: {}", err));
+            }
+
+            // Read file contents
+            let mut buffer = Vec::new();
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            use std::io::Read;
+            std::io::BufReader::new(file).read_to_end(&mut buffer)?;
+
+            Ok(buffer)
+        }
     }
 
     /// Generic file reading with optional processing
     /// Reduces duplication across read_and_render, read_and_open, and read_sealed
     fn read_and_process<F>(&self, path: &Path, process_fn: F) -> Result<Vec<u8>>
     where
-        F: FnOnce(&Self, String) -> Result<String>,
+        F: FnOnce(&Self, String, &Path) -> Result<String>,
     {
         // Get relative path from source root
         let rel_path = path.strip_prefix(&self.source_path)
@@ -642,28 +826,49 @@ impl SssFS {
         // Read file via fd
         let bytes = self.read_file_via_fd(rel_path)?;
 
-        // Try to convert to string
+        // Check if file has markers by scanning raw bytes for UTF-8 marker sequences
+        // This avoids String conversion for files without markers (preserves exact bytes)
+        use crate::filesystem_common::has_any_markers_bytes;
+        if !has_any_markers_bytes(&bytes) {
+            // No markers present, return raw bytes unchanged to preserve exact file content
+            return Ok(bytes);
+        }
+
+        // File has markers, convert to string for processing
         let content = match String::from_utf8(bytes.clone()) {
             Ok(c) => c,
             Err(_) => {
-                // Not a text file, return raw bytes
+                // Has marker-like bytes but not valid UTF-8, return raw bytes
                 return Ok(bytes);
             }
         };
 
-        // Apply processing function
-        let processed = process_fn(self, content)?;
+        // Apply processing function with relative path for proper secrets resolution
+        let processed = process_fn(self, content, rel_path)?;
         Ok(processed.into_bytes())
     }
 
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
-        self.read_and_process(path, |fs, content| {
-            // Only process if file has encrypted markers
-            if Self::has_encrypted_markers(&content) {
-                // Decrypt and render (remove all markers)
-                fs.processor.decrypt_to_raw(&content)
+        self.read_and_process(path, |fs, content, rel_path| {
+            // Process if file has any markers (sealed or opened)
+            if has_any_markers(&content) {
+                // First, interpolate secrets using unified function with fd-based operations (avoids deadlock)
+                let fd_ops = FdFileSystemOps {
+                    source_fd: fs.source_fd,
+                };
+                let mut secrets_cache = fs.secrets_cache.write();
+                let content_with_secrets = interpolate_secrets(
+                    &content,
+                    rel_path,
+                    &fs.source_path,
+                    &mut *secrets_cache,
+                    &fd_ops,
+                )?;
+
+                // Then decrypt and remove all markers
+                fs.processor.decrypt_to_raw(&content_with_secrets)
             } else {
-                // Return as-is for non-encrypted files
+                // Return as-is for non-marked files
                 Ok(content)
             }
         })
@@ -671,9 +876,9 @@ impl SssFS {
 
     /// Read and open a file (decrypt ⊠{} → ⊕{} but keep markers for ssse edit)
     fn read_and_open(&self, path: &Path) -> Result<Vec<u8>> {
-        self.read_and_process(path, |fs, content| {
+        self.read_and_process(path, |fs, content, _rel_path| {
             // Only process if file has encrypted markers
-            if Self::has_encrypted_markers(&content) {
+            if has_encrypted_markers(&content) {
                 // Decrypt to opened form (⊠{} → ⊕{})
                 fs.processor.decrypt_content(&content)
             } else {
@@ -749,21 +954,8 @@ impl SssFS {
         Ok(())
     }
 
-    /// Write opened content (with ⊕{} markers) directly to backing store
-    /// This is used for opened_mode writes where content already has markers
-    fn write_sealed_to_backing(&self, path: &Path, opened_content: &[u8]) -> Result<()> {
-        // Convert bytes to string
-        let opened_str = String::from_utf8(opened_content.to_vec())
-            .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
-
-        // Seal the opened content (⊕{} → ⊠{})
-        let sealed_content = self.processor.encrypt_content(&opened_str)?;
-
-        // Write to backing store via file descriptor
-        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
-        let path_cstr = CString::new(rel_path.as_os_str().as_bytes())?;
-
-        // Create temporary file via fd
+    /// Creates a temporary file path for atomic write operations
+    fn create_temp_file_path(&self, rel_path: &Path) -> Result<(PathBuf, CString)> {
         let temp_name = format!(".{}.tmp", rel_path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unnamed"));
@@ -771,6 +963,13 @@ impl SssFS {
             .unwrap_or_else(|| Path::new("."))
             .join(&temp_name);
         let temp_path_cstr = CString::new(temp_rel_path.as_os_str().as_bytes())?;
+        Ok((temp_rel_path, temp_path_cstr))
+    }
+
+    /// Atomically writes content via file descriptor using temp file + rename pattern
+    fn write_via_fd_atomic(&self, rel_path: &Path, content: &str) -> Result<()> {
+        let path_cstr = CString::new(rel_path.as_os_str().as_bytes())?;
+        let (_temp_path, temp_path_cstr) = self.create_temp_file_path(rel_path)?;
 
         // Write to temp file
         let temp_fd = unsafe {
@@ -789,22 +988,22 @@ impl SssFS {
         let write_result = unsafe {
             let bytes_written = libc::write(
                 temp_fd,
-                sealed_content.as_ptr() as *const _,
-                sealed_content.len(),
+                content.as_ptr() as *const _,
+                content.len(),
             );
             libc::close(temp_fd);
             bytes_written
         };
 
-        if write_result < 0 || write_result != sealed_content.len() as isize {
+        if write_result < 0 || write_result != content.len() as isize {
             // Clean up temp file
             unsafe {
                 libc::unlinkat(self.source_fd, temp_path_cstr.as_ptr(), 0);
             }
-            return Err(anyhow!("Failed to write sealed content"));
+            return Err(anyhow!("Failed to write content"));
         }
 
-        // Rename temp to target (atomic)
+        // Atomically rename temp to target
         let result = unsafe {
             libc::renameat(
                 self.source_fd,
@@ -825,54 +1024,46 @@ impl SssFS {
         Ok(())
     }
 
-    fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
+    /// Write opened content (with ⊕{} markers) directly to backing store
+    /// This is used for opened_mode writes where content already has markers
+    fn write_sealed_to_backing(&self, path: &Path, opened_content: &[u8]) -> Result<()> {
         // Convert bytes to string
-        let rendered_str = String::from_utf8(rendered_content.to_vec())
+        let opened_str = String::from_utf8(opened_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
-        // Get current sealed version - use original_sealed if provided (from file handle),
-        // otherwise read from backing store
-        let sealed_current = if let Some(original) = original_sealed {
-            original.clone()
-        } else {
-            // Read current sealed version FROM BACKING STORE (not through FUSE!)
-            let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
-            match self.read_file_via_fd(rel_path) {
-                Ok(content) => String::from_utf8(content)
-                    .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?,
-                Err(_) => {
-                    // File doesn't exist or can't be read, write as-is
-                    return self.write_raw_to_backing(path, rendered_content);
-                }
+        // Seal the opened content (⊕{} → ⊠{})
+        let sealed_content = self.processor.encrypt_content(&opened_str)?;
+
+        // Write to backing store via file descriptor
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        self.write_via_fd_atomic(rel_path, &sealed_content)
+    }
+
+    /// Gets current sealed content from parameter or backing store
+    fn get_current_sealed_content(&self, path: &Path, original_sealed: Option<&String>) -> Result<Option<String>> {
+        if let Some(original) = original_sealed {
+            return Ok(Some(original.clone()));
+        }
+
+        // Read current sealed version FROM BACKING STORE (not through FUSE!)
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        match self.read_file_via_fd(rel_path) {
+            Ok(content) => {
+                let sealed = String::from_utf8(content)
+                    .map_err(|_| anyhow!("Backing file is not valid UTF-8"))?;
+                Ok(Some(sealed))
             }
-        };
-
-        // Check if new content has plaintext markers that need sealing
-        let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
-
-        // If current version has no markers and new content has no plaintext markers,
-        // just write the rendered content as-is
-        if !Self::has_any_markers(&sealed_current) && !new_has_plaintext_markers {
-            return self.write_raw_to_backing(path, rendered_content);
+            Err(_) => Ok(None), // File doesn't exist or can't be read
         }
+    }
 
-        // If current has no markers but new has plaintext markers, seal them directly
-        if !Self::has_any_markers(&sealed_current) && new_has_plaintext_markers {
-            let sealed_new = self.processor.encrypt_content(&rendered_str)?;
-            return self.write_raw_to_backing(path, sealed_new.as_bytes());
-        }
+    /// Performs smart reconstruction using marker inference
+    fn perform_smart_reconstruction(&self, path: &Path, sealed_current: &str, rendered_str: &str) -> Result<String> {
+        // Open (decrypt/open) current version to get content with markers
+        let opened_current = self.processor.decrypt_content(sealed_current)?;
 
-        // Perform smart reconstruction:
-        // 1. Open (decrypt/open) current version to get content with markers
-        //    (Works for both ⊠{} encrypted and ⊕{} plaintext markers)
-        let opened_current = self.processor.decrypt_content(&sealed_current)?;
-
-        // 2. Render current version for comparison (strip all markers)
-        let rendered_current = self.processor.decrypt_to_raw(&sealed_current)?;
-
-        // 3. Use intelligent marker inference to reconstruct markers
-        //    This preserves marker placement even if content changed
-        let inference_result = crate::marker_inference::infer_markers(&opened_current, &rendered_str)
+        // Use intelligent marker inference to reconstruct markers
+        let inference_result = crate::marker_inference::infer_markers(&opened_current, rendered_str)
             .map_err(|e| anyhow!("Marker inference failed: {}", e))?;
 
         // Log any warnings from marker inference
@@ -883,13 +1074,37 @@ impl SssFS {
             }
         }
 
-        let reconstructed = inference_result.output;
+        Ok(inference_result.output)
+    }
 
-        // 4. Seal the reconstructed content (⊕{} → ⊠{})
-        let sealed_new = self.processor.encrypt_content(&reconstructed)?;
+    fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
+        // Convert bytes to string
+        let rendered_str = String::from_utf8(rendered_content.to_vec())
+            .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
-        // 5. Write to backing store (not through FUSE!)
-        self.write_raw_to_backing(path, sealed_new.as_bytes())
+        // Get current sealed version
+        let sealed_current = match self.get_current_sealed_content(path, original_sealed)? {
+            Some(content) => content,
+            None => return self.write_raw_to_backing(path, rendered_content), // New file, write as-is
+        };
+
+        // Check if new content has plaintext markers
+        let new_has_plaintext_markers = rendered_str.contains("⊕{") || rendered_str.contains("o+{");
+
+        // Simple case: no markers in either version
+        if !has_any_markers(&sealed_current) && !new_has_plaintext_markers {
+            return self.write_raw_to_backing(path, rendered_content);
+        }
+
+        // Normalize case: no current markers but new has plaintext markers
+        if !has_any_markers(&sealed_current) && new_has_plaintext_markers {
+            let normalized = rendered_str.replace("o+{", "⊕{");
+            return self.write_raw_to_backing(path, normalized.as_bytes());
+        }
+
+        // Smart reconstruction: use marker inference to preserve marker placement
+        let reconstructed = self.perform_smart_reconstruction(path, &sealed_current, &rendered_str)?;
+        self.write_raw_to_backing(path, reconstructed.as_bytes())
     }
 
 
@@ -914,13 +1129,11 @@ impl SssFS {
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&virtual_path);
 
         // Hide git-related files from FUSE view (but not in .overlay passthrough)
-        if pinned.virtual_prefix != Path::new("/.overlay") {
-            if let Some(name_str) = name.to_str() {
-                if Self::should_hide(name_str) {
+        if pinned.virtual_prefix != Path::new("/.overlay")
+            && let Some(name_str) = name.to_str()
+                && Self::should_hide(name_str) {
                     return Err(anyhow!("File hidden"));
                 }
-            }
-        }
 
         let rel_path = if source_rel_path.as_os_str().is_empty() {
             Path::new(".")
@@ -1002,31 +1215,52 @@ impl SssFS {
     fn open_dir_fd(&self, rel_path: &Path) -> Result<*mut libc::DIR> {
         use std::os::unix::ffi::OsStrExt;
 
-        let path_bytes = rel_path.as_os_str().as_bytes();
-        let path_cstr = std::ffi::CString::new(path_bytes)
-            .map_err(|_| anyhow!("Invalid path for CString"))?;
+        // macOS has issues with fdopendir() in FUSE contexts - it can hang
+        // Use direct opendir() with absolute path instead
+        #[cfg(target_os = "macos")]
+        {
+            let full_path = self.source_path.join(rel_path);
+            let path_cstr = std::ffi::CString::new(full_path.as_os_str().as_bytes())
+                .map_err(|_| anyhow!("Invalid path for CString"))?;
 
-        let dir_fd = unsafe {
-            libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
-        };
+            let dir_ptr = unsafe { libc::opendir(path_cstr.as_ptr()) };
+            if dir_ptr.is_null() {
+                return Err(anyhow!("opendir failed: {}", std::io::Error::last_os_error()));
+            }
 
-        if dir_fd < 0 {
-            return Err(anyhow!("openat failed: {}", std::io::Error::last_os_error()));
+            return Ok(dir_ptr);
         }
 
-        let dir_ptr = unsafe { libc::fdopendir(dir_fd) };
-        if dir_ptr.is_null() {
-            unsafe { libc::close(dir_fd); }
-            return Err(anyhow!("fdopendir failed"));
-        }
+        // Linux: use openat + fdopendir for proper FD-relative operations
+        #[cfg(target_os = "linux")]
+        {
+            let path_bytes = rel_path.as_os_str().as_bytes();
+            let path_cstr = std::ffi::CString::new(path_bytes)
+                .map_err(|_| anyhow!("Invalid path for CString"))?;
 
-        Ok(dir_ptr)
+            let dir_fd = unsafe {
+                libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
+            };
+
+            if dir_fd < 0 {
+                return Err(anyhow!("openat failed: {}", std::io::Error::last_os_error()));
+            }
+
+            let dir_ptr = unsafe { libc::fdopendir(dir_fd) };
+            if dir_ptr.is_null() {
+                unsafe { libc::close(dir_fd); }
+                return Err(anyhow!("fdopendir failed"));
+            }
+
+            Ok(dir_ptr)
+        }
     }
 
     /// Read all entries from an open directory using pinned path operations
     fn read_dir_entries_with_operations(&mut self, dir_ptr: *mut libc::DIR, parent_ino: u64, parent_path: &Path, operations: &dyn FileOperations)
         -> Vec<(u64, FileType, String)> {
         let mut items = Vec::new();
+        let mut _count = 0;
 
         unsafe {
             loop {
@@ -1046,6 +1280,7 @@ impl SssFS {
                 let name = std::ffi::CStr::from_ptr(dirent.d_name.as_ptr())
                     .to_string_lossy()
                     .to_string();
+
 
                 // Skip . and ..
                 if name == "." || name == ".." {
@@ -1067,6 +1302,7 @@ impl SssFS {
                 };
 
                 items.push((child_ino, file_type, name));
+                _count += 1;
             }
         }
 
@@ -1102,18 +1338,36 @@ impl SssFS {
         // Use translate_virtual_to_source to properly handle .overlay/ paths
         let (source_rel_path, _pinned) = self.translate_virtual_to_source(entry_path);
 
-        let result = if source_rel_path.as_os_str().is_empty() {
+        
+        if source_rel_path.as_os_str().is_empty() {
             std::borrow::Cow::Borrowed(Path::new("."))
         } else {
             std::borrow::Cow::Owned(source_rel_path)
-        };
-        result
+        }
     }
 }
 
 impl Filesystem for SssFS {
+    /// Initialize filesystem - called when FUSE connection is established
+    fn init(
+        &mut self,
+        _req: &Request<'_>,
+        _config: &mut fuser::KernelConfig,
+    ) -> Result<(), libc::c_int> {
+
+        for (_idx, _pinned) in self.pinned_paths.iter().enumerate() {
+        }
+
+        Ok(())
+    }
+
+    /// Destroy filesystem - called when FUSE connection is terminated
+    fn destroy(&mut self) {
+    }
+
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+        let _start = Instant::now();
         // Handle synthetic .overlay directory
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             // Get attributes from the actual source directory
@@ -1138,7 +1392,7 @@ impl Filesystem for SssFS {
                     };
                     reply.attr(&TTL, &attr);
                 }
-                Err(_) => {
+                Err(_e) => {
                     reply.error(libc::EIO);
                 }
             }
@@ -1146,17 +1400,17 @@ impl Filesystem for SssFS {
         }
 
         let entry = match self.get_inode(ino) {
-            Some(e) => e,
+            Some(e) => {
+                e
+            }
             None => {
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
-
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
-
 
         match self.metadata_via_fd(&source_rel_path) {
             Ok(metadata) => {
@@ -1210,7 +1464,7 @@ impl Filesystem for SssFS {
 
                 reply.attr(&TTL, &attr);
             }
-            Err(_) => {
+            Err(_e) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1218,6 +1472,7 @@ impl Filesystem for SssFS {
 
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        let _start = Instant::now();
 
         // Special case: looking up ".overlay" from root
         if parent == ROOT_INO && name == ".overlay" {
@@ -1270,7 +1525,7 @@ impl Filesystem for SssFS {
         let virtual_path = if is_opened_mode {
             parent_entry.path.join(name) // Keep .sss-opened suffix
         } else {
-            parent_entry.path.join(&actual_name)
+            parent_entry.path.join(actual_name)
         };
 
 
@@ -1279,14 +1534,12 @@ impl Filesystem for SssFS {
 
 
         // Check if should hide (only for normal SSS paths, not passthrough)
-        if pinned.virtual_prefix != Path::new("/.overlay") {
-            if let Some(name_str) = actual_name.to_str() {
-                if pinned.operations.should_hide(name_str) {
+        if pinned.virtual_prefix != Path::new("/.overlay")
+            && let Some(name_str) = actual_name.to_str()
+                && pinned.operations.should_hide(name_str) {
                     reply.error(libc::ENOENT);
                     return;
                 }
-            }
-        }
 
         // Get metadata
         match self.metadata_via_fd(&source_rel_path) {
@@ -1340,7 +1593,7 @@ impl Filesystem for SssFS {
                 let ttl = if is_passthrough { &TTL_ZERO } else { &TTL };
                 reply.entry(ttl, &attr, 0);
             }
-            Err(_) => {
+            Err(_e) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1355,6 +1608,7 @@ impl Filesystem for SssFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        let _start = Instant::now();
 
         // Handle .overlay/ - parent is synthetic, build entry manually
         let entry = if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1366,7 +1620,9 @@ impl Filesystem for SssFS {
         } else {
             // Get directory entry from inode table
             match self.get_inode(ino) {
-                Some(e) => e,
+                Some(e) => {
+                    e
+                },
                 None => {
                     reply.error(libc::ENOENT);
                     return;
@@ -1374,16 +1630,16 @@ impl Filesystem for SssFS {
             }
         };
 
-
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
         // Clone the operations Arc to avoid holding a borrow on self
         let operations = pinned.operations.clone();
 
-
         // Open directory via FD
         let dir_ptr = match self.open_dir_fd(&source_rel_path) {
-            Ok(p) => p,
+            Ok(p) => {
+                p
+            },
             Err(_e) => {
                 reply.error(libc::EIO);
                 return;
@@ -1409,6 +1665,7 @@ impl Filesystem for SssFS {
         unsafe { libc::closedir(dir_ptr); }
 
         // Send entries to FUSE
+        let _entry_count = items.len();
         for (i, item) in items.iter().enumerate().skip(offset as usize) {
             if reply.add(item.0, (i + 1) as i64, item.1, &item.2) {
                 break;
@@ -1420,6 +1677,7 @@ impl Filesystem for SssFS {
 
     /// Open a file
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+        let _start = Instant::now();
 
         // Block operations on .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1487,7 +1745,7 @@ impl Filesystem for SssFS {
             self.read_file_via_fd(rel_path)
                 .ok()
                 .and_then(|bytes| String::from_utf8(bytes).ok())
-                .filter(|s| Self::has_any_markers(s))
+                .filter(|s| has_any_markers(s))
         } else {
             None
         };
@@ -1608,6 +1866,8 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
+        let _start = Instant::now();
+
         // Get content from handle or fall back to direct read
         let handles = self.file_handles.read();
         let content = match handles.get(&fh) {
@@ -1664,11 +1924,12 @@ impl Filesystem for SssFS {
         };
 
         // Return requested slice
-        let start = offset as usize;
-        let end = std::cmp::min(start + size as usize, content.len());
+        let offset_usize = offset as usize;
+        let end = std::cmp::min(offset_usize + size as usize, content.len());
 
-        if start < content.len() {
-            reply.data(&content[start..end]);
+        if offset_usize < content.len() {
+            let _bytes_read = end - offset_usize;
+            reply.data(&content[offset_usize..end]);
         } else {
             reply.data(&[]);
         }
@@ -1687,6 +1948,7 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
+        let _start = Instant::now();
         // Block writes to .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EPERM);
@@ -1708,15 +1970,14 @@ impl Filesystem for SssFS {
         }
 
         // Block writes to .git/* at project root (unless in origin_mode passthrough via .overlay/)
-        if !handle.origin_mode {
-            if let Ok(rel_path) = handle.path.strip_prefix(&self.source_path) {
+        if !handle.origin_mode
+            && let Ok(rel_path) = handle.path.strip_prefix(&self.source_path) {
                 let path_str = rel_path.to_string_lossy();
                 if path_str.starts_with(".git/") || path_str == ".git" {
                     reply.error(libc::EPERM);
                     return;
                 }
             }
-        }
 
         // For passthrough files (origin_mode), write directly to disk without caching
         // Use the stored fd to avoid reopening on every write (which fixes race conditions)
@@ -1757,6 +2018,7 @@ impl Filesystem for SssFS {
         }
 
         // Non-passthrough files: use caching (for SSS processing)
+
         // Initialize or extend cached content
         let mut content = handle.cached_content.take().unwrap_or_else(Vec::new);
 
@@ -1786,6 +2048,7 @@ impl Filesystem for SssFS {
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
+        let _start = Instant::now();
         let mut handles = self.file_handles.write();
         if let Some(handle) = handles.remove(&fh) {
             // Close passthrough fd if present
@@ -1796,8 +2059,8 @@ impl Filesystem for SssFS {
             }
 
             // If file was written to, seal and write back
-            if handle.dirty && handle.writable {
-                if let Some(content) = handle.cached_content {
+            if handle.dirty && handle.writable
+                && let Some(content) = handle.cached_content {
                     // Check if this is an origin file (raw passthrough)
                     let write_result = if handle.origin_mode {
                         // Origin mode: write raw without any SSS processing
@@ -1807,7 +2070,7 @@ impl Filesystem for SssFS {
                         let content_str = String::from_utf8_lossy(&content);
 
                         // Check if content already has encrypted markers (⊠{})
-                        let is_already_sealed = Self::has_encrypted_markers(&content_str);
+                        let is_already_sealed = has_encrypted_markers(&content_str);
 
                         // Check if this file should be processed by sss or written raw
                         if !Self::should_process_with_sss(&handle.path) {
@@ -1838,12 +2101,15 @@ impl Filesystem for SssFS {
                     // Invalidate render cache
                     self.render_cache.write().remove(&handle.ino);
                 }
-            }
         }
         reply.ok();
     }
 
     /// Handle ioctl commands
+    ///
+    /// Note: ioctl is not supported on macOS with fuse-t. Use virtual file suffixes instead:
+    /// - file.txt.sss-opened → opened mode (⊕{} markers)
+    /// - file.txt.sss-sealed → sealed mode (⊠{} markers)
     fn ioctl(
         &mut self,
         _req: &Request,
@@ -1856,41 +2122,53 @@ impl Filesystem for SssFS {
         reply: fuser::ReplyIoctl,
     ) {
 
-        if cmd == SSS_IOC_OPENED_MODE {
-            // Enable opened mode for this file handle
-            let mut handles = self.file_handles.write();
-            if let Some(handle) = handles.get_mut(&fh) {
-                handle.opened_mode = true;
-                // Clear cached content - need to re-read with markers
-                handle.cached_content = None;
-                reply.ioctl(0, &[]);
-            } else {
-                reply.error(libc::EBADF);
-            }
-        } else if cmd == SSS_IOC_SEALED_MODE {
-            // Enable sealed mode - requires O_NONBLOCK was used
-            let mut handles = self.file_handles.write();
-            if let Some(handle) = handles.get_mut(&fh) {
-                if !handle.sealed_mode {
-                    reply.error(libc::EINVAL);
-                    return;
-                }
-
-                // O_NONBLOCK was used, now cache sealed content
-                match self.read_sealed(&handle.path) {
-                    Ok(content) => {
-                        handle.cached_content = Some(content);
-                        reply.ioctl(0, &[]);
-                    }
-                    Err(_e) => {
-                        reply.error(libc::EIO);
-                    }
-                }
-            } else {
-                reply.error(libc::EBADF);
-            }
-        } else {
+        // fuse-t on macOS doesn't support ioctl operations
+        // Users should use virtual file suffixes instead:
+        //   file.txt.sss-opened for opened mode
+        //   file.txt.sss-sealed for sealed mode
+        #[cfg(target_os = "macos")]
+        {
             reply.error(libc::ENOTTY);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if cmd == SSS_IOC_OPENED_MODE {
+                // Enable opened mode for this file handle
+                let mut handles = self.file_handles.write();
+                if let Some(handle) = handles.get_mut(&fh) {
+                    handle.opened_mode = true;
+                    // Clear cached content - need to re-read with markers
+                    handle.cached_content = None;
+                    reply.ioctl(0, &[]);
+                } else {
+                    reply.error(libc::EBADF);
+                }
+            } else if cmd == SSS_IOC_SEALED_MODE {
+                // Enable sealed mode - requires O_NONBLOCK was used
+                let mut handles = self.file_handles.write();
+                if let Some(handle) = handles.get_mut(&fh) {
+                    if !handle.sealed_mode {
+                        reply.error(libc::EINVAL);
+                        return;
+                    }
+
+                    // O_NONBLOCK was used, now cache sealed content
+                    match self.read_sealed(&handle.path) {
+                        Ok(content) => {
+                            handle.cached_content = Some(content);
+                            reply.ioctl(0, &[]);
+                        }
+                        Err(_e) => {
+                            reply.error(libc::EIO);
+                        }
+                    }
+                } else {
+                    reply.error(libc::EBADF);
+                }
+            } else {
+                reply.error(libc::ENOTTY);
+            }
         }
     }
 
@@ -2053,11 +2331,12 @@ impl Filesystem for SssFS {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
+        let _start = Instant::now();
 
         // For passthrough files with an fd, sync to flush mmap writes
         let handles = self.file_handles.read();
-        if let Some(handle) = handles.get(&fh) {
-            if let Some(fd) = handle.passthrough_fd {
+        if let Some(handle) = handles.get(&fh)
+            && let Some(fd) = handle.passthrough_fd {
                 let result = if datasync {
                     // macOS doesn't have fdatasync, use fsync or F_FULLFSYNC
                     #[cfg(target_os = "linux")]
@@ -2074,54 +2353,75 @@ impl Filesystem for SssFS {
                     return;
                 }
             }
-        }
 
         reply.ok();
     }
 
     /// Check file access permissions
     fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
+        let _start = Instant::now();
 
         // Handle synthetic directories
-        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.ok();
             return;
         }
 
-        let entry = match self.get_inode(ino) {
-            Some(e) => e,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
-
-        // Translate virtual path to source path
-        let (source_rel_path, _pinned) = self.translate_virtual_to_source(&entry.path);
-
-        // Use faccessat to check actual permissions
-        let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
-            Ok(p) => p,
-            Err(_) => {
-                reply.error(libc::EINVAL);
-                return;
-            }
-        };
-
-        // faccessat checks access permissions relative to source_fd
-        let result = unsafe {
-            libc::faccessat(
-                self.source_fd,
-                path_cstr.as_ptr(),
-                mask,
-                0, // flags
-            )
-        };
-
-        if result == 0 {
+        // On macOS, faccessat() can deadlock when called from within FUSE handlers
+        // because it may try to access through the FUSE mount itself.
+        // Since actual permission checks happen at open/read/write time anyway,
+        // we can safely return OK here.
+        #[cfg(target_os = "macos")]
+        {
             reply.ok();
-        } else {
-            reply.error(libc::EACCES);
+            return;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let entry = match self.get_inode(ino) {
+                Some(e) => {
+                    e
+                }
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Translate virtual path to source path
+            let (source_rel_path, _pinned) = self.translate_virtual_to_source(&entry.path);
+
+            // Use faccessat to check actual permissions
+            let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
+                Ok(p) => p,
+                Err(_) => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // faccessat checks access permissions relative to source_fd
+            let result = unsafe {
+                libc::faccessat(
+                    self.source_fd,
+                    path_cstr.as_ptr(),
+                    mask,
+                    0, // flags
+                )
+            };
+
+            if result == 0 {
+                reply.ok();
+            } else {
+                let errno = unsafe {
+                    #[cfg(target_os = "linux")]
+                    { *libc::__errno_location() }
+                    #[cfg(target_os = "macos")]
+                    { *libc::__error() }
+                };
+                reply.error(errno);
+            }
         }
     }
 
@@ -2134,6 +2434,7 @@ impl Filesystem for SssFS {
         _lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
+        let _start = Instant::now();
 
         // For passthrough files, sync to flush any mmap'd writes
         let handles = self.file_handles.read();
@@ -2776,7 +3077,7 @@ impl Filesystem for SssFS {
     /// Read symlink target
     fn readlink(&mut self, _req: &Request, ino: u64, reply: fuser::ReplyData) {
         // Block operations on .git synthetic directories
-        if ino == SYNTHETIC_OVERLAY_DIR_INO || ino == SYNTHETIC_OVERLAY_DIR_INO {
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EINVAL);
             return;
         }
@@ -2882,17 +3183,17 @@ mod tests {
 
     #[test]
     fn test_has_encrypted_markers_true() {
-        assert!(SssFS::has_encrypted_markers("password: ⊠{abc123}"));
-        assert!(SssFS::has_encrypted_markers("⊠{secret}"));
-        assert!(SssFS::has_encrypted_markers("prefix ⊠{data} suffix"));
+        assert!(has_encrypted_markers("password: ⊠{abc123}"));
+        assert!(has_encrypted_markers("⊠{secret}"));
+        assert!(has_encrypted_markers("prefix ⊠{data} suffix"));
     }
 
     #[test]
     fn test_has_encrypted_markers_false() {
-        assert!(!SssFS::has_encrypted_markers("password: plaintext"));
-        assert!(!SssFS::has_encrypted_markers("⊕{plaintext_marker}"));
-        assert!(!SssFS::has_encrypted_markers(""));
-        assert!(!SssFS::has_encrypted_markers("no markers here"));
+        assert!(!has_encrypted_markers("password: plaintext"));
+        assert!(!has_encrypted_markers("⊕{plaintext_marker}"));
+        assert!(!has_encrypted_markers(""));
+        assert!(!has_encrypted_markers("no markers here"));
     }
 
     #[test]

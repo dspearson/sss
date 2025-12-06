@@ -29,6 +29,7 @@ pub fn handle_project(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
         }
         Some(("remove", sub_matches)) => handle_project_remove(&mut config_manager, sub_matches)?,
         Some(("ignore", sub_matches)) => handle_project_ignore(&mut config_manager, sub_matches)?,
+        Some(("secrets-file", sub_matches)) => handle_project_secrets_file(sub_matches)?,
         None => {
             return Err(anyhow!(
                 "No subcommand specified. Use 'sss project --help' for usage information."
@@ -149,43 +150,134 @@ fn handle_project_remove(config_manager: &mut crate::config_manager::ConfigManag
     Ok(())
 }
 
-fn handle_project_ignore(config_manager: &mut crate::config_manager::ConfigManager, sub_matches: &ArgMatches) -> Result<()> {
-    let project_root = find_project_root()?;
+fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigManager, sub_matches: &ArgMatches) -> Result<()> {
+    use crate::constants::CONFIG_FILE_NAME;
+    use crate::project::ProjectConfig;
 
     match sub_matches.subcommand() {
         Some(("add", add_matches)) => {
-            let pattern = add_matches.get_one::<String>("pattern").unwrap();
-            config_manager.add_ignore_pattern(&project_root, pattern.clone())?;
-            config_manager.save_user_settings()?;
-            println!("Added ignore pattern '{}' for: {}", pattern, project_root.display());
+            let new_pattern = add_matches.get_one::<String>("pattern").unwrap();
+
+            // Load project config
+            let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            // Get existing patterns, add new one if not present
+            let mut patterns = config.parse_ignore_patterns();
+            if !patterns.contains(new_pattern) {
+                patterns.push(new_pattern.clone());
+
+                // Join patterns with spaces (gitignore-style on one line)
+                let patterns_str = patterns.join(" ");
+                config.set_ignore_patterns(patterns_str);
+                config.save_to_file(CONFIG_FILE_NAME)?;
+
+                println!("Added ignore pattern: {}", new_pattern);
+            } else {
+                println!("Pattern '{}' already exists in ignore list", new_pattern);
+            }
         }
         Some(("remove", remove_matches)) => {
-            let pattern = remove_matches.get_one::<String>("pattern").unwrap();
-            let removed = config_manager.remove_ignore_pattern(&project_root, pattern)?;
-            config_manager.save_user_settings()?;
+            let pattern_to_remove = remove_matches.get_one::<String>("pattern").unwrap();
 
-            if removed {
-                println!("Removed ignore pattern '{}' from: {}", pattern, project_root.display());
+            // Load project config
+            let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            // Get existing patterns and remove the specified one
+            let mut patterns = config.parse_ignore_patterns();
+            let original_len = patterns.len();
+            patterns.retain(|p| p != pattern_to_remove);
+
+            if patterns.len() < original_len {
+                // Pattern was removed
+                if patterns.is_empty() {
+                    config.clear_ignore_patterns();
+                } else {
+                    let patterns_str = patterns.join(" ");
+                    config.set_ignore_patterns(patterns_str);
+                }
+                config.save_to_file(CONFIG_FILE_NAME)?;
+                println!("Removed ignore pattern: {}", pattern_to_remove);
             } else {
-                println!("Pattern '{}' not found in ignore list", pattern);
+                println!("Pattern '{}' not found in ignore list", pattern_to_remove);
             }
         }
         Some(("list", _)) => {
-            let patterns = config_manager.get_ignore_patterns(&project_root)?;
+            // Load project config
+            let config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            let patterns = config.parse_ignore_patterns();
 
             if patterns.is_empty() {
-                println!("No ignore patterns configured for: {}", project_root.display());
+                println!("No ignore patterns configured");
+                println!();
+                println!("Hint: Add patterns with 'sss project ignore add <pattern>'");
+                println!("      Patterns use gitignore-style glob syntax");
             } else {
-                println!("Ignore patterns for: {}", project_root.display());
-                println!("==================");
+                println!("Ignore patterns (in .sss.toml):");
+                println!("================================");
                 for pattern in patterns {
                     println!("  {}", pattern);
                 }
+                println!();
+                println!("Raw: {}", config.get_ignore_patterns().unwrap_or(""));
             }
         }
         None => {
             return Err(anyhow!(
                 "No subcommand specified. Use 'sss project ignore --help' for usage information."
+            ));
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn handle_project_secrets_file(sub_matches: &ArgMatches) -> Result<()> {
+    use crate::constants::CONFIG_FILE_NAME;
+    use crate::project::ProjectConfig;
+
+    match sub_matches.subcommand() {
+        Some(("set", set_matches)) => {
+            let filename = set_matches.get_one::<String>("filename").unwrap();
+
+            // Load project config
+            let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            // Set the secrets filename
+            config.set_secrets_filename(filename.clone());
+            config.save_to_file(CONFIG_FILE_NAME)?;
+
+            println!("Set secrets filename to: {}", filename);
+            println!();
+            println!("Secrets will now be looked up from:");
+            println!("  1. <filename>.secrets (file-specific)");
+            println!("  2. {} (directory and parent directories)", filename);
+        }
+        Some(("show", _)) => {
+            // Load project config
+            let config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            let filename = config.get_secrets_filename();
+            if config.secrets_filename.is_some() {
+                println!("Secrets filename: {} (custom)", filename);
+            } else {
+                println!("Secrets filename: {} (default)", filename);
+            }
+        }
+        Some(("clear", _)) => {
+            // Load project config
+            let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+
+            // Clear the custom filename
+            config.clear_secrets_filename();
+            config.save_to_file(CONFIG_FILE_NAME)?;
+
+            println!("Cleared custom secrets filename");
+            println!("Using default: secrets");
+        }
+        None => {
+            return Err(anyhow!(
+                "No subcommand specified. Use 'sss project secrets-file --help' for usage information."
             ));
         }
         _ => unreachable!(),

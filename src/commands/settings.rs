@@ -58,8 +58,18 @@ fn handle_settings_show(config_manager: &crate::config_manager::ConfigManager) -
         "Auto-lock timeout: {} minutes",
         config_manager.get_auto_lock_timeout()
     );
+    println!("KDF security level: {}", config_manager.get_kdf_level(None));
+    println!("Use system keyring: {}", config_manager.use_system_keyring(None));
+
+    // Show secrets file configuration
+    println!("\nSecrets File Configuration:");
+    println!("---------------------------");
+    println!("Secrets filename: {}", config_manager.get_secrets_filename());
+    println!("Secrets suffix: {}", config_manager.get_secrets_suffix());
 
     // Show project info if available
+    println!("\nProject Information:");
+    println!("-------------------");
     if let Some(project_path) = config_manager.project_path() {
         println!("Project path: {}", project_path.display());
         match config_manager.get_project_users() {
@@ -101,9 +111,63 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
         println!("Set coloured output to: {}", coloured);
     }
 
+    if let Some(filename) = sub_matches.get_one::<String>("secrets-filename") {
+        if filename == "none" {
+            config_manager.set_secrets_filename(None);
+            println!("Cleared secrets filename (will use default: 'secrets')");
+        } else {
+            config_manager.set_secrets_filename(Some(filename.clone()));
+            println!("Set secrets filename to: {}", filename);
+        }
+    }
+
+    if let Some(suffix) = sub_matches.get_one::<String>("secrets-suffix") {
+        if suffix == "none" {
+            config_manager.set_secrets_suffix(None);
+            println!("Cleared secrets suffix (will use default: '.secrets')");
+        } else {
+            config_manager.set_secrets_suffix(Some(suffix.clone()));
+            println!("Set secrets suffix to: {}", suffix);
+        }
+    }
+
+    if let Some(kdf_level) = sub_matches.get_one::<String>("kdf-level") {
+        // Validate KDF level
+        use crate::kdf::KdfParams;
+        KdfParams::from_level(kdf_level)?;  // This validates the level
+
+        if kdf_level == "none" {
+            config_manager.set_kdf_level(None);
+            println!("Cleared KDF level (will use default: 'sensitive')");
+        } else {
+            config_manager.set_kdf_level(Some(kdf_level.clone()));
+            println!("Set KDF security level to: {}", kdf_level);
+            println!("\nNote: This only affects newly generated keys.");
+            println!("Existing keys will continue to use their original KDF parameters.");
+        }
+    }
+
+    if let Some(use_keyring) = sub_matches.get_one::<bool>("use-keyring") {
+        config_manager.set_use_system_keyring(*use_keyring);
+        if *use_keyring {
+            // Check if keyring is actually available
+            use crate::keyring_support;
+            if keyring_support::is_keyring_available() {
+                println!("Enabled system keyring for key storage");
+                println!("✓ System keyring is available");
+            } else {
+                eprintln!("\n⚠️  WARNING: System keyring is not available on this system!");
+                eprintln!("   Keys will still be stored in files.");
+                eprintln!("   On Linux, install gnome-keyring or kwallet.");
+            }
+        } else {
+            println!("Disabled system keyring (keys will be stored in files)");
+        }
+    }
+
     // Save settings
     config_manager.save_user_settings()?;
-    println!("Settings saved successfully");
+    println!("\nSettings saved successfully");
     Ok(())
 }
 

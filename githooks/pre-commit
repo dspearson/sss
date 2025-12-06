@@ -18,7 +18,7 @@ unless ($sss_available) {
 }
 
 # Check if we're in an sss repository
-my $in_sss_repo = system('sss status > /dev/null 2>&1') == 0;
+my $in_sss_repo = system('sss --non-interactive status > /dev/null 2>&1') == 0;
 unless ($in_sss_repo) {
     # Not in an sss repository, skip hook entirely
     exit 0;
@@ -45,7 +45,7 @@ foreach my $file (@staged_files) {
     next if $file =~ /githooks\/pre-commit$/;
 
     # Run sss seal on the file (normalizes markers and seals plaintext)
-    my $result = system("sss seal '$file' -x 2>&1");
+    my $result = system("sss --non-interactive seal '$file' -x 2>&1");
     if ($result == 0) {
         # Check if file was actually modified
         my $changed = `git diff '$file'`;
@@ -76,7 +76,7 @@ if ($failed_count > 0) {
 # STEP 2: Now check for security violations on the sealed versions
 print STDERR "Checking for security violations...\n";
 
-my @staged_files = `git diff --cached --name-only --diff-filter=AM`;
+@staged_files = `git diff --cached --name-only --diff-filter=AM`;
 chomp(@staged_files);
 
 my @security_violations;

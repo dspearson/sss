@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::error_helpers;
+
 // libsodium bindings
 use libsodium_sys as sodium;
 
@@ -33,7 +35,7 @@ fn validate_and_decode_base64(
     expected_len: usize,
     key_type: &str,
 ) -> Result<Vec<u8>> {
-    use base64::prelude::*;
+    
 
     if encoded.len() > crate::constants::MAX_BASE64_KEY_LENGTH {
         return Err(anyhow!(
@@ -51,9 +53,7 @@ fn validate_and_decode_base64(
         return Err(anyhow!("Invalid characters in Base64 encoded {}", key_type));
     }
 
-    let decoded = BASE64_STANDARD
-        .decode(encoded)
-        .map_err(|e| anyhow!("Failed to decode base64 {}: {}", key_type, e))?;
+    let decoded = error_helpers::decode_base64(encoded, key_type)?;
 
     if decoded.len() != expected_len {
         return Err(anyhow!(
@@ -174,7 +174,7 @@ impl SecretKey {
 }
 
 /// User's keypair (public + secret)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyPair {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
@@ -295,8 +295,7 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
         }
     }
 
-    let repo_key_b64 =
-        String::from_utf8(opened).map_err(|e| anyhow!("Invalid UTF-8 in opened key: {}", e))?;
+    let repo_key_b64 = error_helpers::utf8_from_bytes(opened, "opened key")?;
 
     RepositoryKey::from_base64(&repo_key_b64)
 }

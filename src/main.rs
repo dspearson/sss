@@ -200,6 +200,21 @@ fn create_cli_app() -> Command {
                 .help("Override config directory location")
                 .global(true),
         )
+        .arg(
+            Arg::new("non-interactive")
+                .long("non-interactive")
+                .help("Non-interactive mode: fail if passphrase not in SSS_PASSPHRASE environment variable")
+                .action(clap::ArgAction::SetTrue)
+                .global(true),
+        )
+        .arg(
+            Arg::new("kdf-level")
+                .long("kdf-level")
+                .value_name("LEVEL")
+                .help("KDF security level: sensitive (default, most secure), moderate (balanced), interactive (fastest)")
+                .value_parser(["sensitive", "moderate", "interactive", "high", "medium", "low", "fast", "balanced"])
+                .global(true),
+        )
         .subcommand(
             Command::new("init").about("Initialize a new project").arg(
                 Arg::new("username")
@@ -296,6 +311,24 @@ fn create_cli_app() -> Command {
                                 .long("dry-run")
                                 .help("Show what would be done without making changes")
                                 .action(clap::ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("set-passphrase")
+                        .about("Set or change passphrase for a key")
+                        .arg(
+                            Arg::new("key-id")
+                                .help("Key ID (or partial ID) to modify")
+                                .required(true),
+                        ),
+                )
+                .subcommand(
+                    Command::new("remove-passphrase")
+                        .about("Remove passphrase protection from a key")
+                        .arg(
+                            Arg::new("key-id")
+                                .help("Key ID (or partial ID) to modify")
+                                .required(true),
                         ),
                 ),
         )
@@ -394,6 +427,32 @@ fn create_cli_app() -> Command {
                                 .value_name("BOOL")
                                 .value_parser(clap::value_parser!(bool))
                                 .help("Enable/disable coloured output"),
+                        )
+                        .arg(
+                            Arg::new("secrets-filename")
+                                .long("secrets-filename")
+                                .value_name("FILENAME")
+                                .help("Set secrets filename (e.g., 'passwords', '.secrets'). Use 'none' for default"),
+                        )
+                        .arg(
+                            Arg::new("secrets-suffix")
+                                .long("secrets-suffix")
+                                .value_name("SUFFIX")
+                                .help("Set secrets file suffix (e.g., '.sealed', '.passwords'). Use 'none' for default"),
+                        )
+                        .arg(
+                            Arg::new("kdf-level")
+                                .long("kdf-level")
+                                .value_name("LEVEL")
+                                .value_parser(["sensitive", "moderate", "interactive", "high", "medium", "low", "fast", "balanced", "none"])
+                                .help("Set KDF security level for new keys: sensitive (default, most secure), moderate (balanced), interactive (fastest)"),
+                        )
+                        .arg(
+                            Arg::new("use-keyring")
+                                .long("use-keyring")
+                                .value_name("BOOL")
+                                .value_parser(clap::value_parser!(bool))
+                                .help("Enable/disable system keyring for key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)"),
                         ),
                 )
                 .subcommand(
@@ -503,6 +562,21 @@ fn create_cli_app() -> Command {
                                 ),
                         )
                         .subcommand(Command::new("list").about("Show all ignore patterns")),
+                )
+                .subcommand(
+                    Command::new("secrets-file")
+                        .about("Configure the secrets filename for this project")
+                        .subcommand(
+                            Command::new("set")
+                                .about("Set custom secrets filename")
+                                .arg(
+                                    Arg::new("filename")
+                                        .help("Filename to use instead of 'secrets' (e.g., '.env', 'config')")
+                                        .required(true),
+                                ),
+                        )
+                        .subcommand(Command::new("show").about("Show configured secrets filename"))
+                        .subcommand(Command::new("clear").about("Clear custom secrets filename (use default 'secrets')")),
                 ),
         )
         .subcommand(
@@ -516,7 +590,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -524,6 +598,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively seal all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -532,7 +613,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -540,6 +621,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively open all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -548,7 +636,7 @@ fn create_cli_app() -> Command {
                 .arg(
                     Arg::new("file")
                         .help("File to process (use '-' for stdin)")
-                        .required(true),
+                        .required_unless_present("project"),
                 )
                 .arg(
                     Arg::new("in-place")
@@ -556,6 +644,13 @@ fn create_cli_app() -> Command {
                         .long("in-place")
                         .help("Modify file in-place (default: output to stdout)")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("project")
+                        .long("project")
+                        .help("Recursively render all files in the project")
+                        .action(clap::ArgAction::SetTrue)
+                        .conflicts_with("file"),
                 ),
         )
         .subcommand(
@@ -576,16 +671,25 @@ fn create_cli_app() -> Command {
 fn main() -> Result<()> {
     // Special case: if called as "ssse", handle editor mode
     let args: Vec<String> = env::args().collect();
-    if let Some(program_name) = args[0].split('/').next_back() {
-        if program_name == "ssse" || program_name == "ssse.exe" {
+    if let Some(program_name) = args[0].split('/').next_back()
+        && (program_name == "ssse" || program_name == "ssse.exe") {
             if args.len() != 2 {
                 return Err(anyhow!("Usage: ssse <file>"));
             }
             let file_path = &args[1];
-            // Use actual system username instead of hardcoded "default"
-            let username = env::var("USER")
-                .or_else(|_| env::var("USERNAME"))
-                .unwrap_or_else(|_| "user".to_string());
+            // Get username with proper precedence: SSS_USER > config > USER
+            let username = env::var("SSS_USER")
+                .ok()
+                .or_else(|| {
+                    // Try to load config and get default username
+                    use sss::config_manager::ConfigManager;
+                    ConfigManager::new()
+                        .ok()
+                        .and_then(|cm| cm.get_default_username())
+                })
+                .or_else(|| env::var("USER").ok())
+                .or_else(|| env::var("USERNAME").ok())
+                .unwrap_or_else(|| "user".to_string());
 
             // Call edit command directly
             let edit_matches = create_cli_app()
@@ -595,9 +699,15 @@ fn main() -> Result<()> {
             }
             return Err(anyhow!("Failed to process editor mode"));
         }
-    }
 
     let matches = create_cli_app().get_matches();
+
+    // Set non-interactive mode if flag is present
+    if matches.get_flag("non-interactive") {
+        unsafe {
+            std::env::set_var("SSS_NONINTERACTIVE", "1");
+        }
+    }
 
     // Handle commands
     match matches.subcommand() {

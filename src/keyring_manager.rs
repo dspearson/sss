@@ -4,7 +4,8 @@ use std::path::Path;
 
 // Temporarily use old config for backwards compatibility
 use serde::{Deserialize, Serialize};
-use std::fs;
+
+use crate::{error_helpers, toml_helpers};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OldConfig {
@@ -21,15 +22,8 @@ struct OldHooksConfig {
 
 impl OldConfig {
     fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = fs::read_to_string(&path).map_err(|e| {
-            anyhow!(
-                "Failed to read config file {}: {}",
-                path.as_ref().display(),
-                e
-            )
-        })?;
-
-        toml::from_str(&content).map_err(|e| anyhow!("Failed to parse config file: {}", e))
+        let content = error_helpers::read_file_to_string(path.as_ref(), "config")?;
+        toml_helpers::parse_toml(&content, "old config")
     }
 
     fn get_key(&self) -> Result<Key> {

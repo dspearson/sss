@@ -20,7 +20,13 @@ fn load_processor_for_source(source_path: &Path) -> Result<(ProjectConfig, Proce
     let (config, repository_key, project_root) =
         crate::config::load_project_config_with_repository_key(&config_path)?;
 
-    let processor = crate::Processor::new_with_context(repository_key, project_root, config.created.clone())?;
+    let secrets_filename = config.get_secrets_filename().to_string();
+    let processor = crate::Processor::new_with_context_and_secrets_filename(
+        repository_key,
+        project_root,
+        config.created.clone(),
+        secrets_filename,
+    )?;
 
     Ok((config, processor))
 }
@@ -174,7 +180,9 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
             }
             Ok(())
         }
-        Err(e) => Err(anyhow!("Failed to mount filesystem: {}", e)),
+        Err(e) => {
+            Err(anyhow!("Failed to mount filesystem: {}", e))
+        }
     }
 }
 

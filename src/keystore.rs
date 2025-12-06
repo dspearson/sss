@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::crypto::{KeyPair, PublicKey, SecretKey};
-use crate::kdf::{DerivedKey, Salt};
+use crate::kdf::{DerivedKey, KdfParams, Salt};
+use crate::keyring_support;
 
 /// Stored keypair file format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,28 +20,43 @@ pub struct StoredKeyPair {
     pub salt: Option<String>,
     pub created_at: DateTime<Utc>,
     pub is_password_protected: bool,
+    /// Whether the secret key is stored in the system keyring instead of this file
+    #[serde(default)]
+    pub in_keyring: bool,
 }
 
 /// Simple file-based keystore using ~/.config/sss/keys/
 pub struct Keystore {
     keys_dir: PathBuf,
+    kdf_params: KdfParams,
+    use_keyring: bool,
 }
 
 impl Keystore {
-    /// Create a new keystore instance
+    /// Create a new keystore instance with default (sensitive) KDF parameters
     pub fn new() -> Result<Self> {
+        Self::new_with_kdf_params(KdfParams::sensitive(), false)
+    }
+
+    /// Create a new keystore instance with custom KDF parameters
+    pub fn new_with_kdf_params(kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         let keys_dir = Self::get_keys_directory()?;
-        Self::create_with_directory(keys_dir)
+        Self::create_with_directory(keys_dir, kdf_params, use_keyring)
     }
 
     /// Create a new keystore instance with custom config directory
     pub fn new_with_config_dir(config_dir: PathBuf) -> Result<Self> {
+        Self::new_with_config_dir_and_kdf(config_dir, KdfParams::sensitive(), false)
+    }
+
+    /// Create a new keystore instance with custom config directory and KDF parameters
+    pub fn new_with_config_dir_and_kdf(config_dir: PathBuf, kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         let keys_dir = config_dir.join("sss").join("keys");
-        Self::create_with_directory(keys_dir)
+        Self::create_with_directory(keys_dir, kdf_params, use_keyring)
     }
 
     /// Internal helper to create keystore with a specific directory
-    fn create_with_directory(keys_dir: PathBuf) -> Result<Self> {
+    fn create_with_directory(keys_dir: PathBuf, kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         // Ensure directory exists
         fs::create_dir_all(&keys_dir)?;
 
@@ -54,7 +70,15 @@ impl Keystore {
             fs::set_permissions(&keys_dir, perms)?;
         }
 
-        Ok(Self { keys_dir })
+        // Validate keyring availability if requested
+        if use_keyring && !keyring_support::is_keyring_available() {
+            eprintln!("⚠️  WARNING: System keyring requested but not available!");
+            eprintln!("   Falling back to file-based storage.");
+            eprintln!("   Keys will be stored without password protection.");
+            return Ok(Self { keys_dir, kdf_params, use_keyring: false });
+        }
+
+        Ok(Self { keys_dir, kdf_params, use_keyring })
     }
 
     /// Get the keys directory path
@@ -88,24 +112,55 @@ impl Keystore {
         let (encrypted_secret_key, salt, is_password_protected) = if let Some(password) = password {
             // Encrypt secret key with password-derived key
             let salt = Salt::new();
-            let derived_key = DerivedKey::derive(password, &salt)?;
+            let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)?;
 
             let secret_key_str = keypair.secret_key.to_base64();
             let encrypted_secret_key =
                 crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
             (encrypted_secret_key, Some(salt.to_base64()), true)
         } else {
-            // Store secret key as plaintext (base64 encoded)
+            // ⚠️  SECURITY WARNING: Storing secret key without password protection!
+            // The key will be base64 encoded but NOT encrypted.
+            //
+            // RISKS:
+            // - Anyone with filesystem access can read your private key
+            // - Backups, disk images, or cloud sync may expose the key
+            // - No protection if the file is accidentally shared
+            //
+            // RECOMMENDATIONS:
+            // 1. Use password protection (recommended for most users)
+            // 2. Use system keyring with SSS_USE_KEYRING=true (for headless systems)
+            // 3. Ensure ~/.config/sss/keys/ has restrictive permissions (0700)
+            eprintln!("\n⚠️  WARNING: Storing keypair WITHOUT password protection!");
+            eprintln!("   Your private key will be accessible to anyone who can read:");
+            eprintln!("   ~/.config/sss/keys/");
+            eprintln!("\n   Consider using:");
+            eprintln!("   - Password protection (recommended)");
+            eprintln!("   - System keyring (SSS_USE_KEYRING=true)");
+            eprintln!();
             (keypair.secret_key.to_base64(), None, false)
+        };
+
+        // Handle keyring storage if enabled and no password provided
+        let (final_encrypted_key, in_keyring) = if self.use_keyring && password.is_none() {
+            // Store in system keyring instead of file
+            let secret_key_b64 = keypair.secret_key.to_base64();
+            keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)?;
+            eprintln!("✓ Private key stored in system keyring");
+            // Store placeholder in file
+            ("STORED_IN_KEYRING".to_string(), true)
+        } else {
+            (encrypted_secret_key, false)
         };
 
         let stored_keypair = StoredKeyPair {
             uuid: key_id.clone(),
             public_key: keypair.public_key.to_base64(),
-            encrypted_secret_key,
+            encrypted_secret_key: final_encrypted_key,
             salt,
             created_at: Utc::now(),
             is_password_protected,
+            in_keyring,
         };
 
         // Write keypair to file
@@ -195,11 +250,10 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)?;
-            if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content) {
-                if let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
+            if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content)
+                && let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
                     keypairs.push(keypair);
                 }
-            }
         }
 
         // Sort by creation time (most recent first)
@@ -241,6 +295,98 @@ impl Keystore {
             if current_link.exists() {
                 fs::remove_file(&current_link)?;
             }
+        }
+
+        Ok(())
+    }
+
+    /// Set or change the passphrase for a keypair
+    ///
+    /// This can:
+    /// - Add a passphrase to a passwordless key
+    /// - Change the passphrase of a password-protected key
+    ///
+    /// # Arguments
+    /// * `key_id` - The ID of the key to modify
+    /// * `old_password` - Current password (None if key is not protected)
+    /// * `new_password` - New password to set
+    pub fn set_passphrase(
+        &self,
+        key_id: &str,
+        old_password: Option<&str>,
+        new_password: &str,
+    ) -> Result<()> {
+        // Load the keypair with the old password (if any)
+        let keypair = self.load_keypair(key_id, old_password)?;
+
+        // Load the stored keypair metadata to preserve other fields
+        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let content = fs::read_to_string(&key_file)?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Encrypt with new password
+        let salt = Salt::new();
+        let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)?;
+        let secret_key_str = keypair.secret_key.to_base64();
+        let encrypted_secret_key =
+            crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
+
+        // Update the stored keypair
+        stored.encrypted_secret_key = encrypted_secret_key;
+        stored.salt = Some(salt.to_base64());
+        stored.is_password_protected = true;
+
+        // Write back to file
+        let content = toml::to_string_pretty(&stored)?;
+        fs::write(&key_file, content)?;
+
+        // Set secure permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file)?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&key_file, perms)?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove passphrase protection from a keypair
+    ///
+    /// Converts a password-protected key to a passwordless key.
+    /// Warning: The private key will be stored unencrypted (only base64 encoded).
+    ///
+    /// # Arguments
+    /// * `key_id` - The ID of the key to modify
+    /// * `current_password` - Current password protecting the key
+    pub fn remove_passphrase(&self, key_id: &str, current_password: &str) -> Result<()> {
+        // Load the keypair with the current password
+        let keypair = self.load_keypair(key_id, Some(current_password))?;
+
+        // Load the stored keypair metadata
+        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let content = fs::read_to_string(&key_file)?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Store secret key as plaintext (base64 encoded)
+        stored.encrypted_secret_key = keypair.secret_key.to_base64();
+        stored.salt = None;
+        stored.is_password_protected = false;
+
+        // Write back to file
+        let content = toml::to_string_pretty(&stored)?;
+        fs::write(&key_file, content)?;
+
+        // Set secure permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file)?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&key_file, perms)?;
         }
 
         Ok(())
@@ -331,7 +477,11 @@ impl Keystore {
     ) -> Result<KeyPair> {
         let public_key = PublicKey::from_base64(&stored.public_key)?;
 
-        let secret_key = if stored.is_password_protected {
+        let secret_key = if stored.in_keyring {
+            // Retrieve from system keyring
+            let secret_key_b64 = keyring_support::get_key_from_keyring(&stored.uuid)?;
+            SecretKey::from_base64(&secret_key_b64)?
+        } else if stored.is_password_protected {
             let password =
                 password.ok_or_else(|| anyhow!("Password required for encrypted key"))?;
 
@@ -340,7 +490,7 @@ impl Keystore {
                 .as_ref()
                 .ok_or_else(|| anyhow!("Salt missing for password-protected key"))?;
             let salt = crate::kdf::Salt::from_base64(salt)?;
-            let derived_key = crate::kdf::DerivedKey::derive(password, &salt)?;
+            let derived_key = crate::kdf::DerivedKey::derive_with_params(password, &salt, &self.kdf_params)?;
 
             let encrypted_data =
                 base64::prelude::BASE64_STANDARD.decode(&stored.encrypted_secret_key)?;
@@ -360,6 +510,52 @@ impl Keystore {
     }
 }
 
+/// Get password/passphrase from SSS_PASSPHRASE environment variable or prompt user
+///
+/// This is the primary method for obtaining passphrases for password-protected keys.
+/// It checks the SSS_PASSPHRASE environment variable first (useful for automation and testing),
+/// then falls back to an interactive prompt if not set.
+///
+/// In non-interactive mode (SSS_NONINTERACTIVE=1 or --non-interactive flag), this function
+/// will fail if SSS_PASSPHRASE is not set, rather than prompting the user.
+///
+/// # Arguments
+/// * `prompt` - The prompt to show when environment variable is not set
+///
+/// # Returns
+/// * `Result<String>` - The password/passphrase
+///
+/// # Examples
+/// ```no_run
+/// use sss::keystore::get_passphrase_or_prompt;
+///
+/// // With environment variable set:
+/// // SSS_PASSPHRASE="my-secret" cargo run
+///
+/// // Or interactive prompt:
+/// let passphrase = get_passphrase_or_prompt("Enter passphrase: ").unwrap();
+///
+/// // Non-interactive mode (will fail if SSS_PASSPHRASE not set):
+/// // sss --non-interactive keys list
+/// ```
+pub fn get_passphrase_or_prompt(prompt: &str) -> Result<String> {
+    // Check SSS_PASSPHRASE environment variable first
+    if let Ok(passphrase) = std::env::var("SSS_PASSPHRASE") {
+        return Ok(passphrase);
+    }
+
+    // Check if we're in non-interactive mode
+    if std::env::var("SSS_NONINTERACTIVE").is_ok() {
+        return Err(anyhow!(
+            "Non-interactive mode enabled but SSS_PASSPHRASE environment variable is not set. \
+             Either set SSS_PASSPHRASE or remove --non-interactive flag."
+        ));
+    }
+
+    // Fall back to interactive prompt
+    rpassword::prompt_password(prompt).map_err(|e| anyhow!("Failed to read passphrase: {}", e))
+}
+
 impl Default for Keystore {
     fn default() -> Self {
         Self::new().expect("Failed to create keystore")
@@ -375,7 +571,11 @@ mod tests {
     fn create_temp_keystore() -> Result<(Keystore, TempDir)> {
         let temp_dir = TempDir::new()?;
         let keys_dir = temp_dir.path().to_path_buf();
-        let keystore = Keystore { keys_dir };
+        let keystore = Keystore {
+            keys_dir,
+            kdf_params: KdfParams::sensitive(),
+            use_keyring: false,
+        };
         Ok((keystore, temp_dir))
     }
 

@@ -170,12 +170,11 @@ impl PolicyManager {
         if let Some(blocked) = self.find_blocked_host(hostname) {
             // If block has project restrictions, check them
             if let Some(ref projects) = blocked.projects {
-                if let Some(ref project_path) = context.project_path {
-                    if projects.iter().any(|p| project_path.contains(p)) {
+                if let Some(ref project_path) = context.project_path
+                    && projects.iter().any(|p| project_path.contains(p)) {
                         // This host is blocked for this project
                         return PolicyDecision::Deny;
                     }
-                }
                 // Host is blocked but not for this project, continue evaluation
             } else {
                 // Host is blocked globally
@@ -187,11 +186,10 @@ impl PolicyManager {
         if let Some(policy) = self.find_host_policy(hostname) {
             // If policy has project restrictions, check them
             if let Some(ref projects) = policy.projects {
-                if let Some(ref project_path) = context.project_path {
-                    if projects.iter().any(|p| project_path.contains(p)) {
+                if let Some(ref project_path) = context.project_path
+                    && projects.iter().any(|p| project_path.contains(p)) {
                         return PolicyDecision::Allow;
                     }
-                }
                 // Host is allowed but project doesn't match
                 return PolicyDecision::AskUser;
             }

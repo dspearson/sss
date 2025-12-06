@@ -5,7 +5,8 @@ use std::path::Path;
 
 use crate::{
     commands::utils::{create_keystore, get_password_if_protected, get_system_username},
-    constants::{CONFIG_FILE_NAME, DEFAULT_USERNAME_FALLBACK, ERR_NO_PROJECT_CONFIG},
+    config::get_project_config_path,
+    constants::{DEFAULT_USERNAME_FALLBACK, ERR_NO_PROJECT_CONFIG},
     crypto::{open_repository_key, PublicKey},
     project::ProjectConfig,
 };
@@ -35,7 +36,8 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
 }
 
 fn handle_users_list() -> Result<()> {
-    let config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)
+    let config_path = get_project_config_path()?;
+    let config = ProjectConfig::load_from_file(&config_path)
         .map_err(|_| anyhow!(ERR_NO_PROJECT_CONFIG))?;
 
     let users = config.list_users();
@@ -76,7 +78,8 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     };
 
     // Load project config
-    let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)
+    let config_path = get_project_config_path()?;
+    let mut config = ProjectConfig::load_from_file(&config_path)
         .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
 
     // Get our keypair to decrypt the repository key
@@ -98,7 +101,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // Add the new user
     config.add_user(username, &public_key, &repository_key)?;
-    config.save_to_file(CONFIG_FILE_NAME)?;
+    config.save_to_file(&config_path)?;
 
     println!("Added user '{}' to project", username);
     println!("Public key: {}", public_key.to_base64());
@@ -109,7 +112,8 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     let username = sub_matches.get_one::<String>("username").unwrap();
 
     // Load project config
-    let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+    let config_path = get_project_config_path()?;
+    let mut config = ProjectConfig::load_from_file(&config_path)?;
 
     // Check if user exists
     if !config.users.contains_key(username) {
@@ -153,7 +157,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
 
     // We need to get the current repository key before removing the user
     // So we need to reload the original config
-    let original_config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
+    let original_config = ProjectConfig::load_from_file(&config_path)?;
     let sealed_key = original_config.get_sealed_key_for_user(&current_user)?;
     let current_repository_key =
         crate::crypto::open_repository_key(&sealed_key, &our_keypair)?;
@@ -169,7 +173,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
 
     let rotation_manager = RotationManager::new(options);
     let result = rotation_manager.rotate_repository_key(
-        &std::path::PathBuf::from(CONFIG_FILE_NAME),
+        &config_path,
         &current_repository_key,
         reason,
     )?;
@@ -182,7 +186,8 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
 fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
     let username = sub_matches.get_one::<String>("username").unwrap();
 
-    let config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)
+    let config_path = get_project_config_path()?;
+    let config = ProjectConfig::load_from_file(&config_path)
         .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
 
     if let Some(user_config) = config.users.get(username) {

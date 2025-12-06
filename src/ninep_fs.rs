@@ -70,6 +70,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 
+use crate::filesystem_common::has_encrypted_markers;
 use crate::Processor;
 
 /// Convert anyhow errors to rs9p IO errors
@@ -180,9 +181,7 @@ impl SssNinepFS {
     }
 
     /// Check if a file has encrypted markers
-    fn has_encrypted_markers(content: &str) -> bool {
-        content.contains("⊠{")
-    }
+    // Note: has_encrypted_markers() moved to filesystem_common module
 
     /// Read and render a file (decrypt and remove all markers)
     async fn read_and_render(&self, path: &Path) -> anyhow::Result<Vec<u8>> {
@@ -195,9 +194,10 @@ impl SssNinepFS {
         };
 
         // Only process if file has encrypted markers
-        if Self::has_encrypted_markers(&content) {
+        if has_encrypted_markers(&content) {
             let processor = self.processor.read().await;
-            let rendered = processor.decrypt_to_raw(&content)?;
+            // Use decrypt_to_raw_with_path for secrets interpolation
+            let rendered = processor.decrypt_to_raw_with_path(&content, path)?;
             Ok(rendered.into_bytes())
         } else {
             Ok(content.into_bytes())
@@ -213,7 +213,7 @@ impl SssNinepFS {
             Err(_) => return Ok(bytes),
         };
 
-        if Self::has_encrypted_markers(&content) {
+        if has_encrypted_markers(&content) {
             let processor = self.processor.read().await;
             let opened = processor.decrypt_content(&content)?;
             Ok(opened.into_bytes())
@@ -285,7 +285,7 @@ impl SssNinepFS {
         };
 
         // If no markers, just write rendered
-        if !Self::has_encrypted_markers(&sealed_current) {
+        if !has_encrypted_markers(&sealed_current) {
             return self.write_raw(path, rendered_content).await;
         }
 
@@ -514,7 +514,7 @@ impl Filesystem for SssNinepFS {
 
         // Process based on mode (if it's text content)
         let data = if let Ok(content_str) = String::from_utf8(buf.clone()) {
-            if Self::has_encrypted_markers(&content_str) {
+            if has_encrypted_markers(&content_str) {
                 match mode {
                     FileMode::Sealed => buf, // Return as-is
                     FileMode::Opened => {
@@ -526,10 +526,10 @@ impl Filesystem for SssNinepFS {
                             .unwrap_or(buf)
                     }
                     FileMode::Rendered => {
-                        // Fully decrypt and render
+                        // Fully decrypt and render with secrets interpolation
                         let processor = self.processor.read().await;
                         processor
-                            .decrypt_to_raw(&content_str)
+                            .decrypt_to_raw_with_path(&content_str, &path)
                             .map(|s| s.into_bytes())
                             .unwrap_or(buf)
                     }
@@ -624,7 +624,7 @@ impl Filesystem for SssNinepFS {
                     self.write_raw(&path, content).await
                 } else {
                     let content_str = String::from_utf8_lossy(content);
-                    let is_sealed = Self::has_encrypted_markers(&content_str);
+                    let is_sealed = has_encrypted_markers(&content_str);
 
                     // Check if sealed mode was used
                     if sealed_mode || (mode == FileMode::Sealed && is_sealed) {
@@ -846,19 +846,19 @@ mod tests {
 
     #[test]
     fn test_has_encrypted_markers_true() {
-        assert!(SssNinepFS::has_encrypted_markers("password: ⊠{abc123}"));
-        assert!(SssNinepFS::has_encrypted_markers("⊠{secret}"));
-        assert!(SssNinepFS::has_encrypted_markers("prefix ⊠{data} suffix"));
-        assert!(SssNinepFS::has_encrypted_markers("multiple ⊠{one} and ⊠{two}"));
+        assert!(has_encrypted_markers("password: ⊠{abc123}"));
+        assert!(has_encrypted_markers("⊠{secret}"));
+        assert!(has_encrypted_markers("prefix ⊠{data} suffix"));
+        assert!(has_encrypted_markers("multiple ⊠{one} and ⊠{two}"));
     }
 
     #[test]
     fn test_has_encrypted_markers_false() {
-        assert!(!SssNinepFS::has_encrypted_markers("password: plaintext"));
-        assert!(!SssNinepFS::has_encrypted_markers("⊕{plaintext_marker}"));
-        assert!(!SssNinepFS::has_encrypted_markers(""));
-        assert!(!SssNinepFS::has_encrypted_markers("no markers here"));
-        assert!(!SssNinepFS::has_encrypted_markers("o+{ascii_marker}"));
+        assert!(!has_encrypted_markers("password: plaintext"));
+        assert!(!has_encrypted_markers("⊕{plaintext_marker}"));
+        assert!(!has_encrypted_markers(""));
+        assert!(!has_encrypted_markers("no markers here"));
+        assert!(!has_encrypted_markers("o+{ascii_marker}"));
     }
 
     #[test]

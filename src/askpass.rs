@@ -82,14 +82,13 @@ fn find_helper_binary(name: &str) -> Result<String> {
     }
 
     // Try next to the current executable
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent() {
             let helper_path = dir.join(name);
             if helper_path.exists() {
                 return Ok(helper_path.to_string_lossy().to_string());
             }
         }
-    }
 
     Err(anyhow!("Helper binary not found: {}", name))
 }

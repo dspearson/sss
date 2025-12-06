@@ -161,6 +161,7 @@ pub fn validate_base64(input: &str, max_length: usize) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use serial_test::serial;
 
     #[test]
     fn test_validate_username() {
@@ -209,6 +210,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_validate_file_path() {
         let temp_dir = TempDir::new().unwrap();
         let temp_path = temp_dir.path();

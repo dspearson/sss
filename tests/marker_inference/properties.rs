@@ -3,38 +3,64 @@
 //! These tests verify invariants that should hold for all inputs.
 
 use proptest::prelude::*;
+use proptest::test_runner::Config;
 use sss::marker_inference::infer_markers;
+
+// Configure proptest to avoid file I/O contention in parallel test execution
+fn proptest_config() -> Config {
+    Config {
+        // Disable file persistence to avoid race conditions in parallel test execution
+        failure_persistence: None,
+        ..Config::default()
+    }
+}
 
 // Helper to parse markers and get rendered text
 fn get_rendered(text: &str) -> String {
-    // Simple marker removal for testing
+    // Simple marker removal for testing - handles both o+{...} and ⊕{...}
     let mut result = String::new();
-    let mut chars = text.chars().peekable();
+    let mut i = 0;
+    let bytes = text.as_bytes();
 
-    while let Some(ch) = chars.next() {
-        if ch == 'o' {
-            // Check for o+{
-            if chars.peek() == Some(&'+') {
-                chars.next(); // consume '+'
-                if chars.peek() == Some(&'{') {
-                    chars.next(); // consume '{'
-                    // Skip until }
-                    while let Some(c) = chars.next() {
-                        if c == '}' {
-                            break;
-                        }
-                        result.push(c);
-                    }
-                    continue;
-                }
+    while i < text.len() {
+        // Check for o+{
+        if i + 3 <= text.len() && &text[i..i+3] == "o+{" {
+            i += 3; // skip "o+{"
+            // Extract content until }
+            while i < text.len() && bytes[i] != b'}' {
+                result.push(bytes[i] as char);
+                i += 1;
             }
+            if i < text.len() {
+                i += 1; // skip '}'
+            }
+            continue;
         }
+
+        // Check for ⊕{ (3 bytes for ⊕ + 1 for {)
+        if i + "⊕{".len() <= text.len() && &text[i..i+"⊕{".len()] == "⊕{" {
+            i += "⊕{".len(); // skip "⊕{"
+            // Extract content until }
+            while i < text.len() && bytes[i] != b'}' {
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+            if i < text.len() {
+                i += 1; // skip '}'
+            }
+            continue;
+        }
+
+        // Regular character
+        let ch = text[i..].chars().next().unwrap();
         result.push(ch);
+        i += ch.len_utf8();
     }
     result
 }
 
 proptest! {
+    #![proptest_config(proptest_config())]
     /// Property: Applying inference twice should give the same result (idempotence)
     #[test]
     fn prop_idempotence(source in "[a-z ]{0,100}", edited in "[a-z ]{0,100}") {
@@ -86,7 +112,8 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Output should contain the marked content
-            prop_assert!(result.output.contains("⊕{") || result.output.contains(&content));
+            let has_marker = result.output.contains("⊕{") || result.output.contains(&content);
+            assert!(has_marker);
         }
     }
 
@@ -106,7 +133,7 @@ proptest! {
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Should have at least one marker
-            prop_assert!(result.output.contains("⊕{"));
+            assert!(result.output.contains("⊕{"));
         }
     }
 
@@ -129,21 +156,21 @@ proptest! {
         let source = "plain text";
         let edited = format!("plain o+{{{}}}",  content);
 
-        if let Ok(result) = infer_markers(&source, &edited) {
+        if let Ok(result) = infer_markers(source, &edited) {
             // User marker should be converted to canonical form
-            prop_assert!(result.output.contains(&format!("⊕{{{}}}", content)));
+            let expected = format!("⊕{{{}}}", content);
+            assert!(result.output.contains(&expected));
         }
     }
 
     /// Property: Deterministic output for same input
     #[test]
     fn prop_deterministic(source in "[a-z ]{0,100}", edited in "[a-z ]{0,100}") {
-        if let Ok(result1) = infer_markers(&source, &edited) {
-            if let Ok(result2) = infer_markers(&source, &edited) {
+        if let Ok(result1) = infer_markers(&source, &edited)
+            && let Ok(result2) = infer_markers(&source, &edited) {
                 prop_assert_eq!(result1.output, result2.output);
                 prop_assert_eq!(result1.warnings, result2.warnings);
             }
-        }
     }
 
     /// Property: Marker content length should not exceed edited text length
@@ -161,9 +188,10 @@ proptest! {
         let source = "o+{a}o+{b}";
         let edited = "axb";
 
-        if let Ok(result) = infer_markers(&source, &edited) {
+        if let Ok(result) = infer_markers(source, edited) {
             // x should merge with left marker (a)
-            prop_assert!(result.output.contains("⊕{ax}") || result.output.contains("⊕{a"));
+            let has_ax = result.output.contains("⊕{ax}") || result.output.contains("⊕{a");
+            assert!(has_ax);
         }
     }
 
@@ -193,8 +221,9 @@ proptest! {
         let source = "text o+\\{literal}";
         let edited = "text o+\\{literal}";
 
-        if let Ok(result) = infer_markers(&source, &edited) {
-            prop_assert!(result.output.contains("o+\\{literal}"));
+        if let Ok(result) = infer_markers(source, edited) {
+            let expected = "o+\\{literal}";
+            assert!(result.output.contains(expected));
         }
     }
 

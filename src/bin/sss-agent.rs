@@ -11,7 +11,7 @@ use sss::agent_protocol::{AgentRequest, AgentResponse, RequestType, ResponseStat
 use sss::askpass::{prompt_user, AskpassConfig};
 use sss::audit_log::{AuditEvent, AuditLogger, RateLimiter};
 use sss::crypto::{open_repository_key, KeyPair};
-use sss::keystore::Keystore;
+use sss::keystore::{get_passphrase_or_prompt, Keystore};
 
 /// SSS Agent - Key Management Daemon
 #[derive(Parser)]
@@ -251,8 +251,8 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
 fn load_keypair(key_id: Option<&str>) -> Result<KeyPair> {
     let keystore = Keystore::new()?;
 
-    // Prompt for passphrase
-    let passphrase = rpassword::prompt_password("Enter passphrase for SSS key: ")?;
+    // Get passphrase from SSS_PASSPHRASE environment variable or prompt
+    let passphrase = get_passphrase_or_prompt("Enter passphrase for SSS key: ")?;
 
     let keypair = if let Some(id) = key_id {
         keystore.load_keypair(id, Some(&passphrase))?

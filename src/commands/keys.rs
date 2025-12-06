@@ -62,17 +62,25 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         Some(("rotate", sub_matches)) => {
             handle_keys_rotate_command(main_matches, sub_matches)?;
         }
+        Some(("set-passphrase", sub_matches)) => {
+            handle_keys_set_passphrase(main_matches, sub_matches)?;
+        }
+        Some(("remove-passphrase", sub_matches)) => {
+            handle_keys_remove_passphrase(main_matches, sub_matches)?;
+        }
         None => {
             // No subcommand provided, show available subcommands
             return Err(anyhow!(
                 "No subcommand provided\n\n\
                 Available subcommands:\n\
-                  generate    Generate a new keypair\n\
-                  list        List your private keys\n\
-                  pubkey      Show your public key\n\
-                  current     Show or set current keypair\n\
-                  delete      Delete a keypair\n\
-                  rotate      Rotate repository encryption key\n\n\
+                  generate           Generate a new keypair\n\
+                  list               List your private keys\n\
+                  pubkey             Show your public key\n\
+                  current            Show or set current keypair\n\
+                  delete             Delete a keypair\n\
+                  set-passphrase     Set or change passphrase for a key\n\
+                  remove-passphrase  Remove passphrase protection from a key\n\
+                  rotate             Rotate repository encryption key\n\n\
                 Use 'sss keys <subcommand> --help' for more information on a subcommand."
             ));
         }
@@ -303,6 +311,141 @@ fn handle_keys_rotate_command(_main_matches: &ArgMatches, matches: &ArgMatches) 
     if dry_run {
         println!("This was a dry run. Use 'sss keys rotate' (without --dry-run) to perform the actual rotation.");
     }
+
+    Ok(())
+}
+
+fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let key_id_partial = sub_matches.get_one::<String>("key-id")
+        .ok_or_else(|| anyhow!("Key ID is required"))?;
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Find the full key ID from partial match
+    let keys = keystore.list_key_ids()?;
+    let key_match = keys.iter().find(|(id, _)| id.starts_with(key_id_partial));
+
+    let (key_id, stored) = match key_match {
+        Some(k) => k,
+        None => {
+            return Err(anyhow!(
+                "Key not found: {}\n\n\
+                Available keys:\n{}",
+                key_id_partial,
+                keys.iter()
+                    .map(|(id, s)| format!(
+                        "  {} (created: {}) {}",
+                        &id[..KEY_ID_DISPLAY_LENGTH],
+                        s.created_at.format("%Y-%m-%d"),
+                        if s.is_password_protected { "[protected]" } else { "" }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+    };
+
+    // Get old password if key is currently protected
+    let old_password = if stored.is_password_protected {
+        let pw = crate::keystore::get_passphrase_or_prompt(
+            "Enter current passphrase: "
+        )?;
+        Some(pw)
+    } else {
+        println!("Adding passphrase protection to unprotected key...");
+        None
+    };
+
+    // Get new password
+    let new_password = password::read_password_with_confirmation(
+        "Enter new passphrase: ",
+        "Confirm new passphrase: ",
+    )?;
+
+    if new_password.is_empty() {
+        return Err(anyhow!(
+            "Passphrase cannot be empty. Use 'sss keys remove-passphrase' to remove protection."
+        ));
+    }
+
+    // Set the new passphrase
+    keystore.set_passphrase(
+        key_id,
+        old_password.as_deref(),
+        new_password.as_str()?,
+    )?;
+
+    if stored.is_password_protected {
+        println!("✅ Passphrase changed successfully for key: {}", &key_id[..KEY_ID_DISPLAY_LENGTH]);
+    } else {
+        println!("✅ Passphrase protection added to key: {}", &key_id[..KEY_ID_DISPLAY_LENGTH]);
+    }
+
+    Ok(())
+}
+
+fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let key_id_partial = sub_matches.get_one::<String>("key-id")
+        .ok_or_else(|| anyhow!("Key ID is required"))?;
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Find the full key ID from partial match
+    let keys = keystore.list_key_ids()?;
+    let key_match = keys.iter().find(|(id, _)| id.starts_with(key_id_partial));
+
+    let (key_id, stored) = match key_match {
+        Some(k) => k,
+        None => {
+            return Err(anyhow!(
+                "Key not found: {}\n\n\
+                Available keys:\n{}",
+                key_id_partial,
+                keys.iter()
+                    .map(|(id, s)| format!(
+                        "  {} (created: {}) {}",
+                        &id[..KEY_ID_DISPLAY_LENGTH],
+                        s.created_at.format("%Y-%m-%d"),
+                        if s.is_password_protected { "[protected]" } else { "" }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+    };
+
+    // Check if key is actually protected
+    if !stored.is_password_protected {
+        return Err(anyhow!(
+            "Key {} is not password protected",
+            &key_id[..KEY_ID_DISPLAY_LENGTH]
+        ));
+    }
+
+    // Warn user about security implications
+    println!("⚠️  WARNING: This will store your private key unencrypted (only base64 encoded)!");
+    println!("Anyone with access to your keystore files will be able to read this key.");
+    print!("Type 'yes' to continue: ");
+    io::stdout().flush()?;
+
+    let mut confirmation = String::new();
+    io::stdin().read_line(&mut confirmation)?;
+
+    if confirmation.trim() != "yes" {
+        println!("Cancelled");
+        return Ok(());
+    }
+
+    // Get current password
+    let current_password = crate::keystore::get_passphrase_or_prompt(
+        "Enter current passphrase: "
+    )?;
+
+    // Remove passphrase protection
+    keystore.remove_passphrase(key_id, &current_password)?;
+
+    println!("✅ Passphrase protection removed from key: {}", &key_id[..KEY_ID_DISPLAY_LENGTH]);
+    println!("⚠️  Key is now stored unencrypted!");
 
     Ok(())
 }

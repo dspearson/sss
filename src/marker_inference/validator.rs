@@ -2,6 +2,10 @@
 //!
 //! Validate and escape invalid user-inserted markers in edited text.
 
+use super::marker_syntax::{
+    contains_nested_markers, detect_marker_start, find_unescaped_close, is_escaped_marker,
+    MarkerFormat,
+};
 use super::types::{UserMarker, ValidatedEdit};
 
 /// Validate user-inserted markers in edited text
@@ -17,70 +21,28 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
     let mut pos = 0;
 
     while pos < edited.len() {
-        // Check for escaped markers
-        if edited[pos..].starts_with("o+\\{") {
-            validated.push_str("o+\\{");
-            pos += 4;
-            continue;
-        } else if edited[pos..].starts_with("⊕\\{") {
-            validated.push_str("⊕\\{");
-            pos += "⊕\\{".len();
+        let remaining = &edited[pos..];
+
+        // Check for escaped markers first
+        if let Some((escaped, len)) = is_escaped_marker(remaining) {
+            validated.push_str(escaped);
+            pos += len;
             continue;
         }
 
         // Check for marker start
-        let is_oplus = edited[pos..].starts_with("o+{");
-        let is_circled = edited[pos..].starts_with("⊕{");
-
-        if is_oplus || is_circled {
-            let marker_start = pos;
-            let prefix_len = if is_oplus { 3 } else { "⊕{".len() };
-
-            if let Some(close_pos) = find_matching_close(&edited[pos + prefix_len..]) {
-                let content_start = pos + prefix_len;
-                let abs_close = content_start + close_pos;
-                let content = &edited[content_start..abs_close];
-
-                // Check for nested markers
-                if content.contains("o+{") || content.contains("⊕{") {
-                    // Nested markers - escape inner markers
-                    let escaped_content = content
-                        .replace("o+{", "o+\\{")
-                        .replace("⊕{", "⊕\\{");
-
-                    if is_oplus {
-                        validated.push_str("o+{");
-                    } else {
-                        validated.push_str("⊕{");
-                    }
-                    validated.push_str(&escaped_content);
-                    validated.push('}');
-                    pos = abs_close + 1;
-                    warnings.push(format!("Escaped nested marker at position {}", content_start));
-                } else {
-                    // Valid marker
-                    user_markers.push(UserMarker {
-                        start: validated.len(),
-                        end: validated.len() + prefix_len + content.len() + 1,
-                        content: content.to_string(),
-                    });
-                    validated.push_str(&edited[marker_start..abs_close + 1]);
-                    pos = abs_close + 1;
-                }
-            } else {
-                // Unclosed marker - escape it
-                if is_oplus {
-                    validated.push_str("o+\\{");
-                    pos += 3;
-                } else {
-                    validated.push_str("⊕\\{");
-                    pos += "⊕{".len();
-                }
-                warnings.push(format!("Escaped unclosed marker at position {}", marker_start));
-            }
+        if let Some(format) = detect_marker_start(remaining) {
+            pos = process_marker(
+                edited,
+                format,
+                pos,
+                &mut validated,
+                &mut user_markers,
+                &mut warnings,
+            );
         } else {
             // Regular character
-            let ch = edited[pos..].chars().next().unwrap();
+            let ch = remaining.chars().next().unwrap();
             validated.push(ch);
             pos += ch.len_utf8();
         }
@@ -93,20 +55,96 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
     }
 }
 
-/// Find the position of matching closing brace
-fn find_matching_close(text: &str) -> Option<usize> {
-    let mut pos = 0;
-    while pos < text.len() {
-        if text[pos..].starts_with("\\}") {
-            pos += 2;
-        } else if text[pos..].starts_with('}') {
-            return Some(pos);
+/// Process a detected marker (valid or invalid)
+fn process_marker(
+    edited: &str,
+    format: MarkerFormat,
+    pos: usize,
+    validated: &mut String,
+    user_markers: &mut Vec<UserMarker>,
+    warnings: &mut Vec<String>,
+) -> usize {
+    let marker_start = pos;
+    let prefix_len = format.prefix_len();
+    let content_start = pos + prefix_len;
+
+    if let Some(close_pos) = find_unescaped_close(&edited[content_start..]) {
+        let abs_close = content_start + close_pos;
+        let content = &edited[content_start..abs_close];
+
+        if contains_nested_markers(content) {
+            // Nested markers - escape and warn
+            handle_nested_user_marker(format, content, content_start, validated, warnings);
+            abs_close + 1
         } else {
-            let ch = text[pos..].chars().next().unwrap();
-            pos += ch.len_utf8();
+            // Valid marker - add to list
+            add_user_marker(
+                &edited[marker_start..abs_close + 1],
+                prefix_len,
+                content,
+                validated,
+                user_markers,
+            );
+            abs_close + 1
         }
+    } else {
+        // Unclosed marker - escape and warn
+        handle_unclosed_marker(format, marker_start, validated, warnings);
+        pos + prefix_len
     }
-    None
+}
+
+/// Handle a marker with nested markers by escaping the inner ones
+fn handle_nested_user_marker(
+    format: MarkerFormat,
+    content: &str,
+    content_start: usize,
+    validated: &mut String,
+    warnings: &mut Vec<String>,
+) {
+    let escaped_content = content.replace("o+{", "o+\\{").replace("⊕{", "⊕\\{");
+
+    validated.push_str(format.prefix());
+    validated.push_str(&escaped_content);
+    validated.push('}');
+    warnings.push(format!(
+        "Escaped nested marker at position {}",
+        content_start
+    ));
+}
+
+/// Handle an unclosed marker by escaping it
+fn handle_unclosed_marker(
+    format: MarkerFormat,
+    marker_start: usize,
+    validated: &mut String,
+    warnings: &mut Vec<String>,
+) {
+    validated.push_str(format.escaped());
+    warnings.push(format!(
+        "Escaped unclosed marker at position {}",
+        marker_start
+    ));
+}
+
+/// Add a valid user marker to the list
+fn add_user_marker(
+    _marker_text: &str,
+    _prefix_len: usize,
+    content: &str,
+    validated: &mut String,
+    user_markers: &mut Vec<UserMarker>,
+) {
+    // Record the position where content will be in the validated text
+    let marker_start = validated.len();
+    user_markers.push(UserMarker {
+        start: marker_start,
+        end: marker_start + content.len(), // Just the content, no marker syntax
+        content: content.to_string(),
+    });
+    // Only add the CONTENT to validated text, not the marker syntax
+    // The reconstructor will add ⊕{...} markers later
+    validated.push_str(content);
 }
 
 #[cfg(test)]
@@ -116,7 +154,8 @@ mod tests {
     #[test]
     fn test_valid_marker() {
         let result = validate_user_markers("text o+{secret} more");
-        assert_eq!(result.text, "text o+{secret} more");
+        // Marker syntax should be stripped, only content remains
+        assert_eq!(result.text, "text secret more");
         assert_eq!(result.user_markers.len(), 1);
         assert_eq!(result.user_markers[0].content, "secret");
         assert_eq!(result.warnings.len(), 0);

@@ -73,10 +73,12 @@ pub fn handle_serve9p(matches: &ArgMatches) -> Result<()> {
     };
 
     // Create processor with project timestamp and root
-    let processor = crate::Processor::new_with_context(
+    let secrets_filename = project_config.get_secrets_filename().to_string();
+    let processor = crate::Processor::new_with_context_and_secrets_filename(
         repo_key,
         directory.clone(),
         project_config.created.clone(),
+        secrets_filename,
     )?;
 
     // Print startup info

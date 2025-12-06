@@ -70,3 +70,16 @@ coordination/orchestration/*
 claude-flow
 # Removed Windows wrapper files per user request
 hive-mind-prompt-*.txt
+
+# macFUSE build artifacts (abandoned macOS FUSE support)
+Library/
+cross/
+osxcross/
+*macfuse*
+*MACFUSE*
+build-macos*.sh
+install-macos.sh
+docs/*FUSE*.md
+docs/*MACOS*.md
+*MACOS_BUILD*.md
+BUILD_FIX_SUMMARY.md

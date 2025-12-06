@@ -169,12 +169,124 @@ pub mod password {
     use super::SecureString;
     use std::io::{self, Write};
 
+    /// Password strength levels
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum PasswordStrength {
+        VeryWeak,
+        Weak,
+        Moderate,
+        Strong,
+        VeryStrong,
+    }
+
+    impl PasswordStrength {
+        /// Get a color code for terminal display
+        pub fn color_code(&self) -> &'static str {
+            match self {
+                PasswordStrength::VeryWeak => "\x1b[91m",   // Bright red
+                PasswordStrength::Weak => "\x1b[31m",       // Red
+                PasswordStrength::Moderate => "\x1b[33m",   // Yellow
+                PasswordStrength::Strong => "\x1b[32m",     // Green
+                PasswordStrength::VeryStrong => "\x1b[92m", // Bright green
+            }
+        }
+
+        /// Get a display name
+        pub fn display_name(&self) -> &'static str {
+            match self {
+                PasswordStrength::VeryWeak => "Very Weak",
+                PasswordStrength::Weak => "Weak",
+                PasswordStrength::Moderate => "Moderate",
+                PasswordStrength::Strong => "Strong",
+                PasswordStrength::VeryStrong => "Very Strong",
+            }
+        }
+
+        /// Get a recommendation message
+        pub fn recommendation(&self) -> Option<&'static str> {
+            match self {
+                PasswordStrength::VeryWeak => Some("Consider using at least 12 characters with mixed case, numbers, and symbols"),
+                PasswordStrength::Weak => Some("Add more character variety (uppercase, numbers, symbols)"),
+                PasswordStrength::Moderate => Some("Consider adding more characters for better security"),
+                PasswordStrength::Strong | PasswordStrength::VeryStrong => None,
+            }
+        }
+    }
+
+    /// Analyze password strength
+    pub fn analyze_password_strength(password: &str) -> PasswordStrength {
+        let len = password.len();
+        let has_lowercase = password.chars().any(|c| c.is_lowercase());
+        let has_uppercase = password.chars().any(|c| c.is_uppercase());
+        let has_digit = password.chars().any(|c| c.is_numeric());
+        let has_symbol = password.chars().any(|c| !c.is_alphanumeric());
+
+        let char_variety = [has_lowercase, has_uppercase, has_digit, has_symbol]
+            .iter()
+            .filter(|&&x| x)
+            .count();
+
+        // Calculate score based on length and character variety
+        let mut score: i32 = 0;
+
+        // Length scoring
+        if len >= 20 {
+            score += 4;
+        } else if len >= 16 {
+            score += 3;
+        } else if len >= 12 {
+            score += 2;
+        } else if len >= 8 {
+            score += 1;
+        }
+
+        // Character variety scoring
+        match char_variety {
+            4 => score += 4,
+            3 => score += 3,
+            2 => score += 2,
+            1 => score += 1,
+            _ => {}
+        }
+
+        // Check for common patterns (weak)
+        let has_repeated = password.chars().collect::<Vec<_>>().windows(3).any(|w| w[0] == w[1] && w[1] == w[2]);
+        let has_sequential = password.chars().collect::<Vec<_>>().windows(3).any(|w| {
+            (w[0] as u32 + 1 == w[1] as u32) && (w[1] as u32 + 1 == w[2] as u32)
+        });
+
+        if has_repeated || has_sequential {
+            score = score.saturating_sub(2);
+        }
+
+        // Map score to strength level
+        match score {
+            0..=2 => PasswordStrength::VeryWeak,
+            3..=4 => PasswordStrength::Weak,
+            5..=6 => PasswordStrength::Moderate,
+            7..=8 => PasswordStrength::Strong,
+            _ => PasswordStrength::VeryStrong,
+        }
+    }
+
+    /// Display password strength indicator
+    fn display_strength_indicator(strength: PasswordStrength) {
+        let color = strength.color_code();
+        let name = strength.display_name();
+        let reset = "\x1b[0m";
+
+        eprintln!("\nPassword strength: {}{}{}", color, name, reset);
+
+        if let Some(recommendation) = strength.recommendation() {
+            eprintln!("💡 Tip: {}", recommendation);
+        }
+    }
+
     /// Read a password securely from stdin with a prompt
     pub fn read_password(prompt: &str) -> Result<SecureString, io::Error> {
-        // Check for test mode
-        if std::env::var("SSS_TEST_MODE").is_ok() {
-            let test_password = std::env::var("SSS_TEST_PASSWORD").unwrap_or_default();
-            return Ok(SecureString::new(&test_password));
+        // Check for SSS_PASSPHRASE environment variable (used in production and tests)
+        if let Ok(passphrase) = std::env::var("SSS_PASSPHRASE") {
+            return Ok(SecureString::new(&passphrase));
         }
 
         print!("{}", prompt);
@@ -184,12 +296,36 @@ pub mod password {
         Ok(SecureString::new(&password))
     }
 
-    /// Read a password securely with confirmation
+    /// Read a password securely with confirmation and strength analysis
     pub fn read_password_with_confirmation(
         prompt: &str,
         confirm_prompt: &str,
     ) -> std::result::Result<SecureString, std::io::Error> {
+        read_password_with_confirmation_and_strength(prompt, confirm_prompt, true)
+    }
+
+    /// Read a password securely with confirmation, optionally showing strength
+    pub fn read_password_with_confirmation_and_strength(
+        prompt: &str,
+        confirm_prompt: &str,
+        show_strength: bool,
+    ) -> std::result::Result<SecureString, std::io::Error> {
         let password = read_password(prompt)?;
+
+        // Analyze and display strength for new passwords
+        if show_strength {
+            if let Ok(pwd_str) = password.as_str() {
+                let strength = analyze_password_strength(pwd_str);
+                display_strength_indicator(strength);
+
+                // Warn if password is too weak
+                if strength < PasswordStrength::Moderate {
+                    eprintln!("\n⚠️  WARNING: Weak passwords can be cracked with brute-force attacks.");
+                    eprintln!("   For production use, choose a strong password (12+ characters).");
+                }
+            }
+        }
+
         let confirm = read_password(confirm_prompt)?;
 
         match (password.as_str(), confirm.as_str()) {
@@ -202,6 +338,71 @@ pub mod password {
                 std::io::ErrorKind::InvalidData,
                 "Invalid UTF-8 in password",
             )),
+        }
+    }
+
+    /// Read a new password with strength requirements
+    ///
+    /// This function enforces minimum password strength and provides guidance.
+    /// Will loop until a password meeting minimum requirements is provided.
+    pub fn read_new_password_with_requirements(
+        min_strength: PasswordStrength,
+        allow_weak: bool,
+    ) -> std::result::Result<SecureString, std::io::Error> {
+        loop {
+            let password = read_password("Enter new password: ")?;
+
+            // Analyze strength
+            let strength = if let Ok(pwd_str) = password.as_str() {
+                analyze_password_strength(pwd_str)
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 in password",
+                ));
+            };
+
+            display_strength_indicator(strength);
+
+            // Check if meets minimum requirements
+            if strength < min_strength {
+                if allow_weak {
+                    eprintln!("\n⚠️  This password is weaker than recommended ({}).", min_strength.display_name());
+                    print!("Continue with this password anyway? [y/N]: ");
+                    io::stdout().flush()?;
+
+                    let mut response = String::new();
+                    io::stdin().read_line(&mut response)?;
+                    if !response.trim().eq_ignore_ascii_case("y") {
+                        eprintln!("\nPlease try again with a stronger password.");
+                        continue;
+                    }
+                } else {
+                    eprintln!("\n❌ Password must be at least {} strength.", min_strength.display_name());
+                    eprintln!("   Please try again.");
+                    continue;
+                }
+            }
+
+            // Confirm password
+            let confirm = read_password("\nConfirm password: ")?;
+
+            match (password.as_str(), confirm.as_str()) {
+                (Ok(_), Ok(c)) if password.constant_time_eq(c) => {
+                    eprintln!("✓ Password set successfully\n");
+                    return Ok(password);
+                }
+                (Ok(_), Ok(_)) => {
+                    eprintln!("\n❌ Passwords do not match. Please try again.\n");
+                    continue;
+                }
+                (Err(_), _) | (_, Err(_)) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid UTF-8 in password",
+                    ));
+                }
+            }
         }
     }
 }

@@ -68,22 +68,27 @@ impl Default for Salt {
 pub struct DerivedKey([u8; KEY_SIZE]);
 
 impl DerivedKey {
-    /// Derive a key from a passphrase and salt using Argon2id
+    /// Derive a key from a passphrase and salt using Argon2id with default (sensitive) parameters
     pub fn derive(passphrase: &str, salt: &Salt) -> Result<Self> {
+        Self::derive_with_params(passphrase, salt, &KdfParams::sensitive())
+    }
+
+    /// Derive a key from a passphrase and salt using Argon2id with custom parameters
+    pub fn derive_with_params(passphrase: &str, salt: &Salt, params: &KdfParams) -> Result<Self> {
         ensure_sodium_init();
 
         let mut key = [0u8; KEY_SIZE];
 
         unsafe {
             let ret = sodium::crypto_pwhash(
-                key.as_mut_ptr(),                                    // output key
-                KEY_SIZE as u64,                                     // key length
-                passphrase.as_ptr() as *const i8,                    // passphrase
-                passphrase.len() as u64,                             // passphrase length
-                salt.0.as_ptr(),                                     // salt
-                sodium::crypto_pwhash_OPSLIMIT_INTERACTIVE as u64,   // ops limit (interactive)
-                sodium::crypto_pwhash_MEMLIMIT_INTERACTIVE as usize, // memory limit
-                sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,         // algorithm (Argon2id)
+                key.as_mut_ptr(),                          // output key
+                KEY_SIZE as u64,                           // key length
+                passphrase.as_ptr() as *const libc::c_char, // passphrase
+                passphrase.len() as u64,                   // passphrase length
+                salt.0.as_ptr(),                           // salt
+                params.ops_limit,                          // ops limit (from params)
+                params.mem_limit,                          // memory limit (from params)
+                params.algorithm,                          // algorithm (Argon2id)
             );
 
             if ret != 0 {
@@ -136,7 +141,10 @@ impl Default for KdfParams {
 }
 
 impl KdfParams {
-    /// Sensitive parameters (higher security, slower)
+    /// Sensitive parameters (higher security, slower) - Recommended for key protection
+    /// - Iterations: ~4
+    /// - Memory: 256 MiB
+    /// - Time: ~2 seconds on modern CPUs
     pub fn sensitive() -> Self {
         Self {
             ops_limit: sodium::crypto_pwhash_OPSLIMIT_SENSITIVE as u64,
@@ -145,9 +153,37 @@ impl KdfParams {
         }
     }
 
-    /// Interactive parameters (balanced, default)
+    /// Moderate parameters (balanced security and performance)
+    /// - Iterations: ~3
+    /// - Memory: 128 MiB
+    /// - Time: ~1 second on modern CPUs
+    pub fn moderate() -> Self {
+        Self {
+            ops_limit: sodium::crypto_pwhash_OPSLIMIT_MODERATE as u64,
+            mem_limit: sodium::crypto_pwhash_MEMLIMIT_MODERATE as usize,
+            algorithm: sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
+        }
+    }
+
+    /// Interactive parameters (lowest security, fastest) - Not recommended for production
+    /// - Iterations: ~2
+    /// - Memory: 64 MiB
+    /// - Time: ~0.5 seconds on modern CPUs
     pub fn interactive() -> Self {
         Self::default()
+    }
+
+    /// Parse KDF level from string
+    pub fn from_level(level: &str) -> Result<Self> {
+        match level.to_lowercase().as_str() {
+            "sensitive" | "high" => Ok(Self::sensitive()),
+            "moderate" | "medium" | "balanced" => Ok(Self::moderate()),
+            "interactive" | "low" | "fast" => Ok(Self::interactive()),
+            _ => Err(anyhow!(
+                "Invalid KDF level '{}'. Valid options: sensitive, moderate, interactive",
+                level
+            )),
+        }
     }
 }
 

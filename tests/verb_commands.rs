@@ -1,6 +1,7 @@
 use std::env;
 use std::path::Path;
 use tempfile::TempDir;
+use serial_test::serial;
 
 use sss::{
     crypto::{KeyPair, RepositoryKey},
@@ -36,6 +37,7 @@ fn setup_test_project() -> (TempDir, String, RepositoryKey) {
 }
 
 #[test]
+#[serial]
 fn test_processor_seal_operation() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -51,6 +53,7 @@ fn test_processor_seal_operation() {
 }
 
 #[test]
+#[serial]
 fn test_processor_open_operation() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -68,6 +71,7 @@ fn test_processor_open_operation() {
 }
 
 #[test]
+#[serial]
 fn test_processor_render_operation() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -86,6 +90,7 @@ fn test_processor_render_operation() {
 }
 
 #[test]
+#[serial]
 fn test_seal_open_roundtrip() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -109,6 +114,7 @@ fn test_seal_open_roundtrip() {
 }
 
 #[test]
+#[serial]
 fn test_multiple_secrets_in_content() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -143,6 +149,7 @@ api:
 }
 
 #[test]
+#[serial]
 fn test_empty_content() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -153,6 +160,7 @@ fn test_empty_content() {
 }
 
 #[test]
+#[serial]
 fn test_content_without_markers() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -163,6 +171,7 @@ fn test_content_without_markers() {
 }
 
 #[test]
+#[serial]
 fn test_mixed_encrypted_and_plain() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -180,6 +189,7 @@ fn test_mixed_encrypted_and_plain() {
 }
 
 #[test]
+#[serial]
 fn test_unicode_content_in_secrets() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -195,6 +205,7 @@ fn test_unicode_content_in_secrets() {
 }
 
 #[test]
+#[serial]
 fn test_newlines_in_secrets() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -211,6 +222,7 @@ fn test_newlines_in_secrets() {
 }
 
 #[test]
+#[serial]
 fn test_special_characters_in_secrets() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -225,6 +237,7 @@ fn test_special_characters_in_secrets() {
 }
 
 #[test]
+#[serial]
 fn test_processor_toggle_behavior() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -251,6 +264,7 @@ fn test_processor_toggle_behavior() {
 }
 
 #[test]
+#[serial]
 fn test_different_nonces_produce_different_ciphertexts() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -280,6 +294,7 @@ fn test_different_nonces_produce_different_ciphertexts() {
 }
 
 #[test]
+#[serial]
 fn test_ascii_marker_conversion() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -295,6 +310,7 @@ fn test_ascii_marker_conversion() {
 }
 
 #[test]
+#[serial]
 fn test_large_secret() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -313,6 +329,7 @@ fn test_large_secret() {
 }
 
 #[test]
+#[serial]
 fn test_seal_leaves_encrypted_content_unchanged() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -331,6 +348,7 @@ fn test_seal_leaves_encrypted_content_unchanged() {
 }
 
 #[test]
+#[serial]
 fn test_open_leaves_plaintext_markers_unchanged() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -346,6 +364,7 @@ fn test_open_leaves_plaintext_markers_unchanged() {
 }
 
 #[test]
+#[serial]
 fn test_seal_and_open_are_independent() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -375,6 +394,7 @@ fn test_seal_and_open_are_independent() {
 // end-to-end integration test suite.
 
 #[test]
+#[serial]
 fn test_nested_braces_in_json() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -395,6 +415,7 @@ fn test_nested_braces_in_json() {
 }
 
 #[test]
+#[serial]
 fn test_nested_braces_in_yaml() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -413,6 +434,7 @@ fn test_nested_braces_in_yaml() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_interpolation_angle_bracket_normalization() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -428,6 +450,7 @@ fn test_secrets_interpolation_angle_bracket_normalization() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_interpolation_marker() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -443,6 +466,7 @@ fn test_secrets_interpolation_marker() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_file_whole_encryption_dotsecretsfile() {
     use std::path::Path;
 
@@ -476,6 +500,7 @@ fn test_secrets_file_whole_encryption_dotsecretsfile() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_file_whole_encryption_named_secrets() {
     use std::path::Path;
 
@@ -506,6 +531,7 @@ fn test_secrets_file_whole_encryption_named_secrets() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_file_vs_regular_file() {
     use std::path::Path;
 
@@ -550,6 +576,7 @@ fn test_secrets_file_vs_regular_file() {
 }
 
 #[test]
+#[serial]
 fn test_multiple_nested_markers_in_content() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -584,6 +611,7 @@ config:
 }
 
 #[test]
+#[serial]
 fn test_empty_braces_in_markers() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -601,6 +629,7 @@ fn test_empty_braces_in_markers() {
 }
 
 #[test]
+#[serial]
 fn test_deeply_nested_braces() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
@@ -618,6 +647,7 @@ fn test_deeply_nested_braces() {
 }
 
 #[test]
+#[serial]
 fn test_secrets_file_posix_newline_and_idempotent_seal() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");

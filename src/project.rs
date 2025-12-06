@@ -6,6 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey};
+use crate::{error_helpers, toml_helpers};
 
 /// A user's configuration in the project
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,6 +44,21 @@ pub struct ProjectConfig {
     #[serde(default, skip_serializing_if = "RotationMetadata::is_empty")]
     pub rotation: RotationMetadata,
 
+    /// Custom secrets filename (defaults to "secrets" if not set)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets_filename: Option<String>,
+
+    /// Custom secrets file suffix (defaults to ".secrets" if not set)
+    /// Example: ".sealed" would make "config.yaml.sealed" a valid secrets file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets_suffix: Option<String>,
+
+    /// Gitignore-style patterns for files to ignore in project-wide operations
+    /// Multiple patterns separated by spaces or commas
+    /// Example: "*.log build/ temp*.txt"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<String>,
+
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -64,6 +80,9 @@ impl Default for ProjectConfig {
             users: HashMap::new(),
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
+            secrets_filename: None,
+            secrets_suffix: None,
+            ignore: None,
             key: None,
         }
     }
@@ -127,6 +146,9 @@ impl ProjectConfig {
             users,
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
+            secrets_filename: None,
+            secrets_suffix: None,
+            ignore: None,
             key: None,
         })
     }
@@ -141,13 +163,12 @@ impl ProjectConfig {
             )
         })?;
 
-        toml::from_str(&content).map_err(|e| anyhow!("Failed to parse project config file: {}", e))
+        toml_helpers::parse_toml(&content, "project")
     }
 
     /// Save project configuration to file
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| anyhow!("Failed to serialise project config: {}", e))?;
+        let content = toml_helpers::serialize_toml(self, "project config")?;
 
         fs::write(&path, content).map_err(|e| {
             anyhow!(
@@ -188,7 +209,7 @@ impl ProjectConfig {
         let user_config = self
             .users
             .get(username)
-            .ok_or_else(|| anyhow!("User '{}' not found in project", username))?;
+            .ok_or_else(|| error_helpers::user_not_found_error(username))?;
 
         Ok(user_config.sealed_key.clone())
     }
@@ -208,7 +229,7 @@ impl ProjectConfig {
         let user_config = self
             .users
             .get(username)
-            .ok_or_else(|| anyhow!("User '{}' not found in project", username))?;
+            .ok_or_else(|| error_helpers::user_not_found_error(username))?;
 
         PublicKey::from_base64(&user_config.public)
     }
@@ -310,6 +331,51 @@ impl ProjectConfig {
                 self.rotation.rotation_count, last_rotation, reason
             )
         }
+    }
+
+    /// Get the secrets filename (defaults to "secrets" if not configured)
+    pub fn get_secrets_filename(&self) -> &str {
+        self.secrets_filename.as_deref().unwrap_or("secrets")
+    }
+
+    /// Set the secrets filename
+    pub fn set_secrets_filename(&mut self, filename: String) {
+        self.secrets_filename = Some(filename);
+    }
+
+    /// Clear the secrets filename (use default)
+    pub fn clear_secrets_filename(&mut self) {
+        self.secrets_filename = None;
+    }
+
+    /// Get the ignore patterns as a single string
+    pub fn get_ignore_patterns(&self) -> Option<&str> {
+        self.ignore.as_deref()
+    }
+
+    /// Parse ignore patterns into a vector of individual patterns
+    /// Splits on whitespace and commas, filters out empty strings
+    pub fn parse_ignore_patterns(&self) -> Vec<String> {
+        self.ignore
+            .as_ref()
+            .map(|patterns| {
+                patterns
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Set the ignore patterns (gitignore-style, space or comma separated)
+    pub fn set_ignore_patterns(&mut self, patterns: String) {
+        self.ignore = Some(patterns);
+    }
+
+    /// Clear the ignore patterns
+    pub fn clear_ignore_patterns(&mut self) {
+        self.ignore = None;
     }
 }
 

@@ -1,5 +1,5 @@
 # Dockerfile for building SSS on RHEL 8 / Rocky Linux 8
-FROM rockylinux:8
+FROM rockylinux:8.4
 
 # Enable EPEL repository (required for libsodium)
 RUN dnf install -y epel-release && dnf clean all

@@ -32,6 +32,10 @@ pub struct UserSettings {
     pub keystore: KeystoreSettings,
     /// UI preferences
     pub ui: UiSettings,
+    /// Default secrets filename (e.g., "secrets", ".secrets", "passwords")
+    pub secrets_filename: Option<String>,
+    /// Default secrets file suffix (e.g., ".secrets", ".sealed", ".passwords")
+    pub secrets_suffix: Option<String>,
 }
 
 /// Per-project settings and permissions
@@ -57,6 +61,10 @@ pub struct KeystoreSettings {
     pub cache_password: Option<bool>,
     /// Maximum key retention count
     pub max_keys: Option<u32>,
+    /// KDF security level (interactive, moderate, sensitive)
+    pub kdf_level: Option<String>,
+    /// Use system keyring for passwordless key storage
+    pub use_system_keyring: Option<bool>,
 }
 
 /// UI and output preferences
@@ -125,6 +133,12 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Get the default username from user settings (without precedence logic)
+    /// Returns None if no default username is configured
+    pub fn get_default_username(&self) -> Option<String> {
+        self.user_settings.default_username.clone()
+    }
+
     /// Get the effective username (with precedence)
     pub fn get_username(&self, cli_override: Option<&str>) -> Result<String> {
         // CLI override has highest precedence
@@ -179,6 +193,53 @@ impl ConfigManager {
             .keystore
             .auto_lock_minutes
             .unwrap_or(self.system_settings.default_keystore_timeout)
+    }
+
+    /// Get KDF security level with precedence: CLI > ENV > Config > Default (sensitive)
+    pub fn get_kdf_level(&self, cli_override: Option<&str>) -> String {
+        // CLI override has highest precedence
+        if let Some(level) = cli_override {
+            return level.to_string();
+        }
+
+        // Environment variable
+        if let Ok(level) = std::env::var("SSS_KDF_LEVEL") {
+            return level;
+        }
+
+        // User settings
+        if let Some(level) = &self.user_settings.keystore.kdf_level {
+            return level.clone();
+        }
+
+        // Default to sensitive for better security
+        "sensitive".to_string()
+    }
+
+    /// Check if system keyring should be used with precedence: CLI > ENV > Config > Default (false)
+    pub fn use_system_keyring(&self, cli_override: Option<bool>) -> bool {
+        // CLI override has highest precedence
+        if let Some(use_keyring) = cli_override {
+            return use_keyring;
+        }
+
+        // Environment variable
+        if let Ok(val) = std::env::var("SSS_USE_KEYRING") {
+            return val.to_lowercase() == "true" || val == "1";
+        }
+
+        // User settings
+        self.user_settings.keystore.use_system_keyring.unwrap_or(false)
+    }
+
+    /// Set KDF security level
+    pub fn set_kdf_level(&mut self, level: Option<String>) {
+        self.user_settings.keystore.kdf_level = level;
+    }
+
+    /// Set system keyring preference
+    pub fn set_use_system_keyring(&mut self, use_keyring: bool) {
+        self.user_settings.keystore.use_system_keyring = Some(use_keyring);
     }
 
     /// Get UI preferences
@@ -351,12 +412,11 @@ impl ConfigManager {
     /// Remove an ignore pattern from a project
     pub fn remove_ignore_pattern(&mut self, project_path: &Path, pattern: &str) -> Result<bool> {
         let path_str = project_path.to_string_lossy().to_string();
-        if let Some(settings) = self.user_settings.projects.get_mut(&path_str) {
-            if let Some(pos) = settings.ignore_patterns.iter().position(|p| p == pattern) {
+        if let Some(settings) = self.user_settings.projects.get_mut(&path_str)
+            && let Some(pos) = settings.ignore_patterns.iter().position(|p| p == pattern) {
                 settings.ignore_patterns.remove(pos);
                 return Ok(true);
             }
-        }
         Ok(false)
     }
 
@@ -369,6 +429,54 @@ impl ConfigManager {
             .get(&path_str)
             .map(|s| s.ignore_patterns.clone())
             .unwrap_or_default())
+    }
+
+    /// Get the effective secrets filename with precedence:
+    /// Project config > User settings > Default ("secrets")
+    pub fn get_secrets_filename(&self) -> String {
+        // Check project config first
+        if let Some(ref config) = self.project_config {
+            if let Some(ref filename) = config.secrets_filename {
+                return filename.clone();
+            }
+        }
+
+        // Check user settings
+        if let Some(ref filename) = self.user_settings.secrets_filename {
+            return filename.clone();
+        }
+
+        // Default
+        "secrets".to_string()
+    }
+
+    /// Get the effective secrets file suffix with precedence:
+    /// Project config > User settings > Default (".secrets")
+    pub fn get_secrets_suffix(&self) -> String {
+        // Check project config first
+        if let Some(ref config) = self.project_config {
+            if let Some(ref suffix) = config.secrets_suffix {
+                return suffix.clone();
+            }
+        }
+
+        // Check user settings
+        if let Some(ref suffix) = self.user_settings.secrets_suffix {
+            return suffix.clone();
+        }
+
+        // Default
+        ".secrets".to_string()
+    }
+
+    /// Set the secrets filename in user settings
+    pub fn set_secrets_filename(&mut self, filename: Option<String>) {
+        self.user_settings.secrets_filename = filename;
+    }
+
+    /// Set the secrets suffix in user settings
+    pub fn set_secrets_suffix(&mut self, suffix: Option<String>) {
+        self.user_settings.secrets_suffix = suffix;
     }
 }
 

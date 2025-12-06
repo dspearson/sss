@@ -1,18 +1,17 @@
-use std::env;
 use std::path::Path;
 use std::process::Command;
 
 fn main() {
-    // Handle macOS FUSE linking
-    let target = env::var("TARGET").unwrap_or_default();
-    if target.contains("apple-darwin") {
-        // During cross-compilation, add search path for libfuse3 in the SDK
-        if env::var("CROSS_COMPILE").is_ok() || env::var("CC_aarch64_apple_darwin").is_ok() {
-            let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
-            let lib_path = format!("{}/cross/osxcross/target/SDK/MacOSX14.5.sdk/usr/local/lib", manifest_dir);
-            println!("cargo:rustc-link-search=native={}", lib_path);
-        }
-    }
+    // Note: We do NOT add libfuse3 search paths for macOS cross-compilation.
+    //
+    // Why? Because:
+    // 1. fuse-t (recommended) doesn't use libfuse3 at all
+    // 2. The fuser crate is pure Rust and doesn't link against libfuse
+    // 3. FUSE detection happens at runtime, not build time
+    // 4. Adding libfuse3 paths causes linker errors during cross-compilation
+    //
+    // The fuser crate will automatically detect and use whatever FUSE
+    // implementation is available on the target macOS system (fuse-t or macFUSE).
 
     // Always check for rust-9p, even if ninep feature isn't enabled
     // This prevents chicken-and-egg problem with cargo dependency resolution

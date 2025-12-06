@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
+use serial_test::serial;
 
 /// Test helper to set up a temporary directory as current working directory
 fn with_temp_dir<F>(test: F)
@@ -19,6 +20,7 @@ where
 }
 
 #[test]
+#[serial]
 fn test_validation_module_integration() {
     use sss::validation::{validate_base64, validate_file_path, validate_username};
 

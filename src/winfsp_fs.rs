@@ -11,6 +11,7 @@ use winfsp::filesystem::{
 use winfsp::host::{FileSystemHost, VolumeParams};
 use winapi::um::winnt::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
 
+use crate::filesystem_common::has_encrypted_markers;
 use crate::Processor;
 
 // Sealed mode protocol constants
@@ -123,9 +124,7 @@ impl SssWinFsp {
     }
 
     /// Check if a file has encrypted markers (should be processed)
-    fn has_encrypted_markers(content: &str) -> bool {
-        content.contains("⊠{")
-    }
+    // Note: has_encrypted_markers() moved to filesystem_common module
 
     /// Check if a file/directory should be hidden from view
     fn should_hide(name: &str) -> bool {
@@ -232,7 +231,7 @@ impl SssWinFsp {
         };
 
         // Only process if file has encrypted markers
-        if Self::has_encrypted_markers(&content) {
+        if has_encrypted_markers(&content) {
             // Decrypt and render (remove all markers)
             let rendered = self.processor.decrypt_to_raw(&content)?;
             Ok(rendered.into_bytes())
@@ -251,7 +250,7 @@ impl SssWinFsp {
             Err(_) => return Ok(bytes),
         };
 
-        if Self::has_encrypted_markers(&content) {
+        if has_encrypted_markers(&content) {
             let opened = self.processor.decrypt_content(&content)?;
             Ok(opened.into_bytes())
         } else {
@@ -328,7 +327,7 @@ impl SssWinFsp {
         };
 
         // If current version has no markers, just write the rendered content
-        if !Self::has_encrypted_markers(&sealed_current) {
+        if !has_encrypted_markers(&sealed_current) {
             return self.write_raw_to_backing(path, rendered_content);
         }
 
@@ -673,7 +672,7 @@ impl FileSystemContext for SssWinFsp {
             if handle.dirty && handle.writable {
                 if let Some(content) = handle.cached_content {
                     let content_str = String::from_utf8_lossy(&content);
-                    let is_already_sealed = Self::has_encrypted_markers(&content_str);
+                    let is_already_sealed = has_encrypted_markers(&content_str);
 
                     let write_result = if !Self::should_process_with_sss(&handle.path) {
                         // Temp files: write raw
@@ -932,8 +931,8 @@ mod tests {
 
     #[test]
     fn test_has_encrypted_markers() {
-        assert!(SssWinFsp::has_encrypted_markers("password: ⊠{abc123}"));
-        assert!(!SssWinFsp::has_encrypted_markers("password: plaintext"));
+        assert!(has_encrypted_markers("password: ⊠{abc123}"));
+        assert!(!has_encrypted_markers("password: plaintext"));
     }
 
     #[test]

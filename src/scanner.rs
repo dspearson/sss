@@ -82,21 +82,19 @@ impl FileScanner {
 
             if path.is_dir() {
                 // Check if this directory should be ignored
-                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    if self.ignored_dirs.contains(dir_name) {
+                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
+                    && self.ignored_dirs.contains(dir_name) {
                         continue;
                     }
-                }
 
                 // Recursively scan subdirectory
                 self.scan_directory_recursive(&path, results)?;
             } else if path.is_file() {
                 // Check if file should be scanned
-                if self.should_scan_file(&path) {
-                    if let Ok(true) = self.file_contains_patterns(&path) {
+                if self.should_scan_file(&path)
+                    && let Ok(true) = self.file_contains_patterns(&path) {
                         results.push(path);
                     }
-                }
             }
         }
 
@@ -198,11 +196,10 @@ impl FileScanner {
 
             if path.is_dir() {
                 // Check if this directory should be ignored
-                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    if self.ignored_dirs.contains(dir_name) {
+                if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
+                    && self.ignored_dirs.contains(dir_name) {
                         continue;
                     }
-                }
 
                 // Recursively scan subdirectory
                 self.scan_with_stats_recursive(&path, total_files, scanned_files, results)?;

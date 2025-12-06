@@ -261,17 +261,275 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
 
 /// Handle 'seal' command - encrypt plaintext markers
 pub fn handle_seal(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    // Check if --project flag is set
+    if sub_matches.get_flag("project") {
+        return process_project_recursively("seal");
+    }
+
     process_file_or_stdin(sub_matches, "seal")
 }
 
 /// Handle 'open' command - decrypt ciphertext to plaintext markers
 pub fn handle_open(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    // Check if --project flag is set
+    if sub_matches.get_flag("project") {
+        return process_project_recursively("open");
+    }
+
     process_file_or_stdin(sub_matches, "open")
 }
 
 /// Handle 'render' command - decrypt to raw text (remove all markers)
 pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    // Check if --project flag is set
+    if sub_matches.get_flag("project") {
+        return process_project_recursively("render");
+    }
+
     process_file_or_stdin(sub_matches, "render")
+}
+
+/// Build a GlobSet from ignore patterns in the project config
+/// Returns None if no patterns are configured or if building fails
+fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globset::GlobSet> {
+    use globset::{Glob, GlobSetBuilder};
+
+    let patterns = config.parse_ignore_patterns();
+    if patterns.is_empty() {
+        return None;
+    }
+
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        match Glob::new(&pattern) {
+            Ok(glob) => {
+                builder.add(glob);
+            }
+            Err(e) => {
+                eprintln!("Warning: Invalid ignore pattern '{}': {}", pattern, e);
+            }
+        }
+    }
+
+    match builder.build() {
+        Ok(globset) => Some(globset),
+        Err(e) => {
+            eprintln!("Warning: Failed to build ignore pattern matcher: {}", e);
+            None
+        }
+    }
+}
+
+/// Recursively process all files in the project with the given operation
+/// IMPORTANT: Does not follow symlinks outside the project boundary
+fn process_project_recursively(operation: &str) -> Result<()> {
+    use std::fs;
+    use walkdir::WalkDir;
+
+    // Find the project root (where .sss.toml is)
+    let project_root = crate::config::find_project_root()?;
+
+    // Check permissions for project-wide operations (unless bypassed by environment variable)
+    let bypass_open = std::env::var("SSS_PROJECT_OPEN").is_ok_and(|v| v == "true" || v == "1");
+    let bypass_render = std::env::var("SSS_PROJECT_RENDER").is_ok_and(|v| v == "true" || v == "1");
+
+    if !bypass_open && !bypass_render {
+        // Load config manager to check permissions
+        let config_manager = crate::config_manager::ConfigManager::new()?;
+
+        match operation {
+            "open" => {
+                if !config_manager.is_project_open_enabled(&project_root)? {
+                    return Err(anyhow!(
+                        "Automatic project-wide opening is disabled.\n\
+                        To enable, run: sss project enable open\n\
+                        Or use: SSS_PROJECT_OPEN=true sss open --project"
+                    ));
+                }
+            }
+            "render" => {
+                if !config_manager.is_project_render_enabled(&project_root)? {
+                    return Err(anyhow!(
+                        "Automatic project-wide rendering is disabled.\n\
+                        To enable, run: sss project enable render\n\
+                        Or use: SSS_PROJECT_RENDER=true sss render --project"
+                    ));
+                }
+            }
+            _ => {} // seal and other operations don't require permission
+        }
+    }
+
+    // Canonicalize the project root to get absolute path for boundary checking
+    let canonical_project_root = fs::canonicalize(&project_root)
+        .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;
+
+    // Load project config and processor
+    let (config, processor, _) = utils::create_processor_from_project_config()?;
+
+    // Build the ignore pattern matcher from project config
+    let ignore_globset = build_ignore_globset(&config);
+
+    let mut processed_count = 0;
+    let mut error_count = 0;
+
+    let operation_verb = match operation {
+        "seal" => "Sealed",
+        "open" => "Opened",
+        "render" => "Rendered",
+        _ => "Processed",
+    };
+
+    // Walk the project directory
+    for entry in WalkDir::new(&project_root)
+        .follow_links(false)  // Don't follow symlinks at all during traversal
+        .into_iter()
+        .filter_entry(|e| {
+            // Skip hidden directories and files (except .sss.toml)
+            let name = e.file_name().to_string_lossy();
+            if name.starts_with('.') && name != ".sss.toml" {
+                return false;
+            }
+
+            // Skip common non-text directories
+            if e.file_type().is_dir() {
+                let skip_dirs = ["target", "node_modules", ".git", "dist", "build"];
+                return !skip_dirs.contains(&name.as_ref());
+            }
+
+            // Check against ignore patterns from project config
+            if let Some(ref globset) = ignore_globset {
+                // Get path relative to project root for matching
+                if let Ok(rel_path) = e.path().strip_prefix(&project_root) {
+                    if globset.is_match(rel_path) {
+                        return false;
+                    }
+                }
+            }
+
+            true
+        })
+    {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Warning: Error accessing entry: {}", e);
+                error_count += 1;
+                continue;
+            }
+        };
+
+        // Only process files
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+
+        // Additional safety: Check if the entry is a symlink and resolve it
+        // to ensure it stays within project boundaries
+        if entry.path_is_symlink() {
+            match fs::canonicalize(path) {
+                Ok(target) => {
+                    // Check if symlink target is outside project root
+                    if !target.starts_with(&canonical_project_root) {
+                        continue;
+                    }
+                }
+                Err(_) => {
+                    // Cannot resolve symlink, skip it
+                    continue;
+                }
+            }
+        }
+
+        // Skip binary files
+        if is_binary_file(path)? {
+            continue;
+        }
+
+        // Skip files that don't have any markers
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => {
+                // Likely binary or unreadable
+                continue;
+            }
+        };
+
+        // Check if file has any SSS markers
+        if !has_sss_markers(&content) {
+            continue;
+        }
+
+        // Process the file in-place
+        match process_file_in_place(path, &processor, operation) {
+            Ok(changed) => {
+                if changed {
+                    println!("{}: {}", operation_verb, path.display());
+                    processed_count += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error processing {}: {}", path.display(), e);
+                error_count += 1;
+            }
+        }
+    }
+
+    if processed_count > 0 {
+        println!("\n{} {} file(s)", operation_verb, processed_count);
+    }
+
+    if error_count > 0 {
+        return Err(anyhow!("Failed to {} {} file(s)", operation, error_count));
+    }
+
+    Ok(())
+}
+
+/// Check if a file has any SSS markers
+fn has_sss_markers(content: &str) -> bool {
+    content.contains("⊠{") || content.contains("⊕{") ||
+    content.contains("o+{") || content.contains("⊲{") ||
+    content.contains("<{")
+}
+
+/// Process a single file in-place with the given operation, returns true if file was modified
+fn process_file_in_place(path: &Path, processor: &crate::processor::core::Processor, operation: &str) -> Result<bool> {
+    use std::fs;
+
+    let original_content = fs::read_to_string(path)?;
+
+    let processed_content = match operation {
+        "seal" => processor.seal_content_with_path(&original_content, path)?,
+        "open" => processor.open_content_with_path(&original_content, path)?,
+        "render" => processor.decrypt_to_raw_with_path(&original_content, path)?,
+        _ => return Err(anyhow!("Unknown operation: {}", operation)),
+    };
+
+    // Check if content actually changed
+    if processed_content == original_content {
+        return Ok(false);
+    }
+
+    // Write the processed content back
+    fs::write(path, processed_content)?;
+
+    Ok(true)
+}
+
+/// Check if a file appears to be binary
+fn is_binary_file(path: &Path) -> Result<bool> {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut file = File::open(path)?;
+    let mut buffer = [0u8; 8192];
+    let bytes_read = file.read(&mut buffer)?;
+
+    // Check for null bytes in first 8KB (common binary indicator)
+    Ok(buffer[..bytes_read].contains(&0))
 }
 
 /// Handle 'edit' command - edit file with automatic encrypt/decrypt
@@ -436,7 +694,13 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     let file_dir = file_path.parent().ok_or_else(|| anyhow!("File has no parent directory"))?;
     let config_path = crate::config::get_project_config_path_from(file_dir)?;
     let (config, repository_key, project_root) = load_project_config_with_repository_key(config_path)?;
-    let processor = Processor::new_with_context(repository_key, project_root, config.created.clone())?;
+    let secrets_filename = config.get_secrets_filename().to_string();
+    let processor = Processor::new_with_context_and_secrets_filename(
+        repository_key,
+        project_root,
+        config.created.clone(),
+        secrets_filename,
+    )?;
 
     // Dispatch to appropriate handler based on mount type
     if is_fuse_mount(&file_path).unwrap_or(false) {

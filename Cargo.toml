@@ -1,6 +1,6 @@
 [package]
 name = "sss"
-version = "1.1.4"
+version = "1.1.8"
 edition = "2024"
 license = "ISC"
 authors = ["Dominic Pearson <dsp@technoanimal.net"]
@@ -8,7 +8,6 @@ authors = ["Dominic Pearson <dsp@technoanimal.net"]
 [features]
 default = []
 fuse = ["dep:fuser", "dep:parking_lot"]
-macfuse = ["fuse"]  # macFUSE support on macOS (uses same dependencies as Linux FUSE)
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
 ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
 
@@ -60,6 +59,8 @@ similar = "2.3"
 aho-corasick = "1.1"
 thiserror = "1.0"
 libc = "0.2.177"
+walkdir = "2.4"
+globset = "0.4"
 rs9p = { package = "rust-9p", path = "vendor/rust-9p", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-stream = { version = "0.1", features = ["fs"], optional = true }
@@ -70,6 +71,7 @@ nix = { version = "0.26", optional = true }
 tempfile = "3.21.0"
 proptest = "1.5"
 criterion = "0.5"
+serial_test = "3.0"
 
 [[bench]]
 name = "marker_inference"

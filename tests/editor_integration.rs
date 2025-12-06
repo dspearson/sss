@@ -77,8 +77,7 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
     cmd.arg("--edit"); // ssse behavior
     cmd.arg("test.txt");
     cmd.current_dir(work_dir);
-    cmd.env("SSS_TEST_MODE", "1");
-    cmd.env("SSS_TEST_PASSWORD", "");
+    cmd.env("SSS_PASSPHRASE", "");
 
     let output = cmd.output()?;
 
@@ -113,9 +112,8 @@ fn run_sss_in_dir(
     cmd.args(args);
     cmd.current_dir(work_dir);
 
-    // Set environment variables for test mode
-    cmd.env("SSS_TEST_MODE", "1");
-    cmd.env("SSS_TEST_PASSWORD", "");
+    // Set SSS_PASSPHRASE for non-interactive password handling in tests
+    cmd.env("SSS_PASSPHRASE", "");
 
     Ok(cmd.output()?)
 }

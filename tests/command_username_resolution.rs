@@ -9,6 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+use serial_test::serial;
 use sss::config_manager::ConfigManager;
 use sss::crypto::KeyPair;
 use sss::keystore::Keystore;
@@ -24,7 +25,7 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn new(key: &str, value: &str) -> Self {
         let old_value = env::var(key).ok();
-        env::set_var(key, value);
+        unsafe { env::set_var(key, value); }
         Self {
             key: key.to_string(),
             old_value,
@@ -35,8 +36,8 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         match &self.old_value {
-            Some(val) => env::set_var(&self.key, val),
-            None => env::remove_var(&self.key),
+            Some(val) => unsafe { env::set_var(&self.key, val); },
+            None => unsafe { env::remove_var(&self.key); },
         }
     }
 }
@@ -49,16 +50,55 @@ struct TestEnv {
     config_dir: PathBuf,
     config_manager: ConfigManager,
     keystore: Keystore,
+    _sss_user_guard: Option<SssUserGuard>,
+}
+
+/// Guard to temporarily clear SSS_USER environment variable during tests
+struct SssUserGuard {
+    old_value: Option<String>,
+}
+
+impl SssUserGuard {
+    fn new() -> Self {
+        let old_value = env::var("SSS_USER").ok();
+        unsafe { env::remove_var("SSS_USER"); }
+        Self { old_value }
+    }
+}
+
+impl Drop for SssUserGuard {
+    fn drop(&mut self) {
+        if let Some(val) = &self.old_value {
+            unsafe { env::set_var("SSS_USER", val); }
+        }
+    }
 }
 
 impl TestEnv {
     fn new() -> anyhow::Result<Self> {
+        Self::new_impl(false)
+    }
+
+    /// Create test environment with optional SSS_USER clearing
+    /// Set clear_sss_user=true for tests that need pure config-based resolution
+    fn new_with_clear_sss_user() -> anyhow::Result<Self> {
+        Self::new_impl(true)
+    }
+
+    fn new_impl(clear_sss_user: bool) -> anyhow::Result<Self> {
         let temp_dir = TempDir::new()?;
         let project_dir = temp_dir.path().join("project");
         let config_dir = temp_dir.path().join("config");
 
         fs::create_dir_all(&project_dir)?;
         fs::create_dir_all(&config_dir)?;
+
+        // Optionally clear SSS_USER to ensure tests use config-based username
+        let sss_user_guard = if clear_sss_user {
+            Some(SssUserGuard::new())
+        } else {
+            None
+        };
 
         let config_manager = ConfigManager::new_with_config_dir(config_dir.clone())?;
         let keystore = Keystore::new_with_config_dir(config_dir.clone())?;
@@ -69,6 +109,7 @@ impl TestEnv {
             config_dir,
             config_manager,
             keystore,
+            _sss_user_guard: sss_user_guard,
         })
     }
 
@@ -98,8 +139,9 @@ impl TestEnv {
 }
 
 #[test]
+#[serial]
 fn test_users_add_respects_configured_username() -> anyhow::Result<()> {
-    let mut env = TestEnv::new()?;
+    let mut env = TestEnv::new_with_clear_sss_user()?;
 
     // Set up initial user with hostname suffix (simulating the bug scenario)
     let primary_user = "openshift_tvhpmgm-vjmp002";
@@ -195,8 +237,9 @@ fn test_file_operations_respect_configured_username() -> anyhow::Result<()> {
 }
 
 #[test]
+#[serial]
 fn test_init_command_respects_configured_username() -> anyhow::Result<()> {
-    let mut env = TestEnv::new()?;
+    let mut env = TestEnv::new_with_clear_sss_user()?;
 
     // Set configured username
     let configured_user = "configured_user_abc";
@@ -245,6 +288,7 @@ fn test_username_precedence_cli_over_settings() -> anyhow::Result<()> {
 }
 
 #[test]
+#[serial]
 fn test_username_precedence_env_over_settings() -> anyhow::Result<()> {
     let mut env = TestEnv::new()?;
 
@@ -265,8 +309,9 @@ fn test_username_precedence_env_over_settings() -> anyhow::Result<()> {
 }
 
 #[test]
+#[serial]
 fn test_username_with_hostname_suffix_works() -> anyhow::Result<()> {
-    let mut env = TestEnv::new()?;
+    let mut env = TestEnv::new_with_clear_sss_user()?;
 
     // This is the exact scenario from the bug report
     let username_with_host = "openshift_tvhpmgm-vjmp002";
@@ -303,8 +348,9 @@ fn test_username_with_hostname_suffix_works() -> anyhow::Result<()> {
 }
 
 #[test]
+#[serial]
 fn test_users_remove_respects_configured_username() -> anyhow::Result<()> {
-    let mut env = TestEnv::new()?;
+    let mut env = TestEnv::new_with_clear_sss_user()?;
 
     // Set up project with two users
     let user1 = "user_one";
@@ -343,10 +389,11 @@ fn test_users_remove_respects_configured_username() -> anyhow::Result<()> {
 }
 
 #[test]
+#[serial]
 fn test_multiple_users_with_different_configs() -> anyhow::Result<()> {
     // Create separate environments for two users
-    let mut env1 = TestEnv::new()?;
-    let mut env2 = TestEnv::new()?;
+    let mut env1 = TestEnv::new_with_clear_sss_user()?;
+    let mut env2 = TestEnv::new_with_clear_sss_user()?;
 
     // Set different usernames
     let user1 = "alice_host1";
@@ -397,7 +444,7 @@ fn test_settings_persist_across_restarts() -> anyhow::Result<()> {
     // Second session: load username
     {
         let manager = ConfigManager::new_with_config_dir(config_dir)?;
-        env::remove_var("SSS_USER"); // Ensure we're not using env var
+        unsafe { env::remove_var("SSS_USER"); } // Ensure we're not using env var
         let resolved = manager.get_username(None)?;
         assert_eq!(
             resolved, username,
@@ -433,7 +480,7 @@ fn test_system_username_fallback_still_works() -> anyhow::Result<()> {
 
     // Don't set any username in settings
     // Don't set SSS_USER
-    env::remove_var("SSS_USER");
+    unsafe { env::remove_var("SSS_USER"); }
 
     // Should fall back to system username
     let result = env.get_username_from_config_manager();

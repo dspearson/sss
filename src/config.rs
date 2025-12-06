@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::PublicKey;
 use crate::keyring_manager::KeyringManager;
+use crate::keystore::get_passphrase_or_prompt;
 use crate::project::ProjectConfig;
 
 // Re-export for backwards compatibility
@@ -111,8 +112,8 @@ fn load_keypair_with_password_retry() -> Result<crate::crypto::KeyPair> {
     match keystore.get_current_keypair(None) {
         Ok(keypair) => Ok(keypair),
         Err(_) => {
-            // Try with password
-            let password = rpassword::prompt_password(
+            // Try with password from SSS_PASSPHRASE environment variable or prompt
+            let password = get_passphrase_or_prompt(
                 "Enter your passphrase (or press Enter if none): ",
             )?;
             let password_opt = if password.is_empty() {
@@ -170,19 +171,57 @@ fn load_project_config_internal<P: AsRef<Path>>(
             let config = ProjectConfig::load_from_file(&actual_config_path)?;
             config.validate()?;
 
-            // Load user's keypair with password retry logic
-            let user_keypair = load_keypair_with_password_retry()?;
+            let keystore = crate::keystore::Keystore::new()?;
 
-            // Find user by matching public key
-            let username = config.find_user_by_public_key(&user_keypair.public_key)
-                .ok_or_else(|| anyhow!(
-                    "Your public key is not authorized for this project.\nAvailable users: {}\nYour key: {}",
-                    config.list_users().join(", "),
-                    user_keypair.public_key.to_base64()
-                ))?;
+            // Try current keypair first
+            let user_keypair = load_keypair_with_password_retry()?;
+            let mut username_opt = config.find_user_by_public_key(&user_keypair.public_key);
+            let mut matched_keypair = user_keypair.clone();
+
+            // If current keypair doesn't match, try all available keypairs
+            if username_opt.is_none() {
+                eprintln!("Current keypair not found in project, trying other available keys...");
+
+                // Get password once for all keypairs
+                let password = crate::keystore::get_passphrase_or_prompt(
+                    "Enter passphrase to check all keys (or press Enter if none): ",
+                )?;
+                let password_opt = if password.is_empty() {
+                    None
+                } else {
+                    Some(password.as_str())
+                };
+
+                // Try all keypairs
+                if let Ok(all_keypairs) = keystore.get_all_keypairs(password_opt) {
+                    for keypair in all_keypairs {
+                        if let Some(username) = config.find_user_by_public_key(&keypair.public_key) {
+                            eprintln!("✓ Found matching key for user: {}", username);
+                            username_opt = Some(username);
+                            matched_keypair = keypair;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // If still no match, error out
+            let username = username_opt.ok_or_else(|| anyhow!(
+                "None of your keypairs are authorized for this project.\n\
+                Available users: {}\n\
+                Your current key: {}\n\n\
+                Tip: You may need to:\n\
+                  1. Ask a project admin to add your key: sss user add <username> <your-pubkey>\n\
+                  2. Or switch to a different keypair: sss keys current <key-id>",
+                config.list_users().join(", "),
+                user_keypair.public_key.to_base64()
+            ))?;
 
             // Get the sealed repository key for this user
             let sealed_key = config.get_sealed_key_for_user(&username)?;
+
+            // Use the matched keypair for unsealing
+            let user_keypair = matched_keypair;
 
             // Try to use agent if requested and available
             let repository_key = if use_agent && crate::agent::is_agent_available() {

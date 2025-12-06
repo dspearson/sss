@@ -298,6 +298,37 @@ fn process_project_recursively(operation: &str) -> Result<()> {
     // Find the project root (where .sss.toml is)
     let project_root = crate::config::find_project_root()?;
 
+    // Check permissions for project-wide operations (unless bypassed by environment variable)
+    let bypass_open = std::env::var("SSS_PROJECT_OPEN").is_ok_and(|v| v == "true" || v == "1");
+    let bypass_render = std::env::var("SSS_PROJECT_RENDER").is_ok_and(|v| v == "true" || v == "1");
+
+    if !bypass_open && !bypass_render {
+        // Load config manager to check permissions
+        let config_manager = crate::config_manager::ConfigManager::new()?;
+
+        match operation {
+            "open" => {
+                if !config_manager.is_project_open_enabled(&project_root)? {
+                    return Err(anyhow!(
+                        "Automatic project-wide opening is disabled.\n\
+                        To enable, run: sss project enable open\n\
+                        Or use: SSS_PROJECT_OPEN=true sss open --project"
+                    ));
+                }
+            }
+            "render" => {
+                if !config_manager.is_project_render_enabled(&project_root)? {
+                    return Err(anyhow!(
+                        "Automatic project-wide rendering is disabled.\n\
+                        To enable, run: sss project enable render\n\
+                        Or use: SSS_PROJECT_RENDER=true sss render --project"
+                    ));
+                }
+            }
+            _ => {} // seal and other operations don't require permission
+        }
+    }
+
     // Canonicalize the project root to get absolute path for boundary checking
     let canonical_project_root = fs::canonicalize(&project_root)
         .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;

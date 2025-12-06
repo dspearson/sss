@@ -70,10 +70,10 @@ export RUSTFLAGS="-L $SDK_FUSE_LIB -C link-arg=-Wl,-weak-lpthread"
 
 # Set up pkg-config to find both libsodium and fuse3
 # This prevents pkg-config from adding wrong system library paths
-export PKG_CONFIG_PATH="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig:$SCRIPT_DIR/cross/fuse-pkgconfig"
-export PKG_CONFIG_LIBDIR="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig:$SCRIPT_DIR/cross/fuse-pkgconfig"
+export PKG_CONFIG_PATH="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig" #:$SCRIPT_DIR/cross/fuse-pkgconfig"
+export PKG_CONFIG_LIBDIR="$SCRIPT_DIR/cross/libsodium-install/lib/pkgconfig" #:$SCRIPT_DIR/cross/fuse-pkgconfig"
 
-cargo build --release --target aarch64-apple-darwin --features fuse
+cargo build --release --target aarch64-apple-darwin
 
 # Fix libsodium path to point to Homebrew location on target macOS
 echo ""

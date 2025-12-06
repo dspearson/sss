@@ -174,7 +174,7 @@ impl SecretKey {
 }
 
 /// User's keypair (public + secret)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyPair {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,

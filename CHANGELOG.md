@@ -8,12 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `SSS_PASSPHRASE` environment variable for non-interactive password entry
+  - Works with password-protected private keys
+  - Useful for automation and VS Code extension integration
+  - Replaces separate test mode environment variables
+- `SSS_PROJECT_OPEN` environment variable to bypass project-wide open permission checks
+  - Set to `true` or `1` to enable
+  - Allows `sss open --project` in automation contexts
+- `SSS_PROJECT_RENDER` environment variable to bypass project-wide render permission checks
+  - Set to `true` or `1` to enable
+  - Allows `sss render --project` in automation contexts
+- `sss keys set-passphrase <key-id>` command for passphrase management
+  - Add passphrase protection to unprotected keys
+  - Change existing passphrase
+  - Re-encrypts private key without generating new key
+- `sss keys remove-passphrase <key-id>` command to remove passphrase protection
+  - Converts password-protected key to unprotected storage
+  - Displays security warning about storing unencrypted keys
+- Multi-key matching fallback in project configuration loading
+  - Automatically tries all available keypairs when current key doesn't match project
+  - Displays helpful messages when matching alternative keys
+  - Provides clear error messages listing available project users when no keys match
+- Comprehensive test suite for multi-key matching scenarios
 - SECURITY.md for security policy and vulnerability disclosure
 - CONTRIBUTING.md for contribution guidelines
 - CHANGELOG.md for tracking version history
 
 ### Changed
 - Updated .gitignore to exclude build artifacts and temporary files
+- Unified test and production password handling to use `SSS_PASSPHRASE`
+- Enhanced `load_project_config_internal()` to support fallback key matching
+- Added `Clone` derive to `KeyPair` struct for multi-key matching support
 
 ### Fixed
 - Removed unused `extract_base_from_protocol` function in ninep_fs.rs
@@ -23,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Old backup directories (sss-old, sss-master)
 - Temporary build artifacts and documentation files
+- `SSS_TEST_MODE` and `SSS_TEST_PASSWORD` environment variables (replaced by `SSS_PASSPHRASE`)
 
 ## [1.1.1] - 2025-01-19
 

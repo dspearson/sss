@@ -156,6 +156,10 @@ sss project enable open            # Enable auto-open for this project
 sss project disable render         # Disable auto-render
 sss project disable open           # Disable auto-open
 
+# Bypass permissions with environment variables (for automation/VS Code extensions)
+SSS_PROJECT_OPEN=true sss open --project     # Bypass open permission check
+SSS_PROJECT_RENDER=true sss render --project # Bypass render permission check
+
 # Ignore patterns for project-wide operations
 sss project ignore add <pattern>   # Add glob pattern to ignore list
 sss project ignore remove <pattern> # Remove pattern
@@ -175,6 +179,10 @@ sss keys list
 sss keys pubkey                    # Your public key
 sss keys pubkey --fingerprint      # SHA256 fingerprint with visual randomart
 sss keys pubkey --user <username>  # Another user's public key from project
+
+# Passphrase management
+sss keys set-passphrase <key-id>      # Add or change passphrase for a key
+sss keys remove-passphrase <key-id>   # Remove passphrase protection (WARNING: stores key unencrypted)
 
 # Show or set current keypair
 sss keys current [key-id]
@@ -295,6 +303,9 @@ Configuration precedence (highest to lowest):
 - `EDITOR`: Preferred text editor for `ssse`
 - `VISUAL`: Alternative text editor
 - `SSS_USER`: Default username (overrides config file setting)
+- `SSS_PASSPHRASE`: Passphrase for password-protected keys (avoids interactive prompts)
+- `SSS_PROJECT_OPEN`: Set to `true` or `1` to bypass project-wide open permission checks
+- `SSS_PROJECT_RENDER`: Set to `true` or `1` to bypass project-wide render permission checks
 
 ## Examples
 

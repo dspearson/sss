@@ -297,6 +297,24 @@ fn create_cli_app() -> Command {
                                 .help("Show what would be done without making changes")
                                 .action(clap::ArgAction::SetTrue),
                         ),
+                )
+                .subcommand(
+                    Command::new("set-passphrase")
+                        .about("Set or change passphrase for a key")
+                        .arg(
+                            Arg::new("key-id")
+                                .help("Key ID (or partial ID) to modify")
+                                .required(true),
+                        ),
+                )
+                .subcommand(
+                    Command::new("remove-passphrase")
+                        .about("Remove passphrase protection from a key")
+                        .arg(
+                            Arg::new("key-id")
+                                .help("Key ID (or partial ID) to modify")
+                                .required(true),
+                        ),
                 ),
         )
         .subcommand(

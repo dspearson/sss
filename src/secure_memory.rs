@@ -171,10 +171,9 @@ pub mod password {
 
     /// Read a password securely from stdin with a prompt
     pub fn read_password(prompt: &str) -> Result<SecureString, io::Error> {
-        // Check for test mode
-        if std::env::var("SSS_TEST_MODE").is_ok() {
-            let test_password = std::env::var("SSS_TEST_PASSWORD").unwrap_or_default();
-            return Ok(SecureString::new(&test_password));
+        // Check for SSS_PASSPHRASE environment variable (used in production and tests)
+        if let Ok(passphrase) = std::env::var("SSS_PASSPHRASE") {
+            return Ok(SecureString::new(&passphrase));
         }
 
         print!("{}", prompt);

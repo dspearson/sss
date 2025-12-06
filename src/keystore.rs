@@ -245,6 +245,98 @@ impl Keystore {
         Ok(())
     }
 
+    /// Set or change the passphrase for a keypair
+    ///
+    /// This can:
+    /// - Add a passphrase to a passwordless key
+    /// - Change the passphrase of a password-protected key
+    ///
+    /// # Arguments
+    /// * `key_id` - The ID of the key to modify
+    /// * `old_password` - Current password (None if key is not protected)
+    /// * `new_password` - New password to set
+    pub fn set_passphrase(
+        &self,
+        key_id: &str,
+        old_password: Option<&str>,
+        new_password: &str,
+    ) -> Result<()> {
+        // Load the keypair with the old password (if any)
+        let keypair = self.load_keypair(key_id, old_password)?;
+
+        // Load the stored keypair metadata to preserve other fields
+        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let content = fs::read_to_string(&key_file)?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Encrypt with new password
+        let salt = Salt::new();
+        let derived_key = DerivedKey::derive(new_password, &salt)?;
+        let secret_key_str = keypair.secret_key.to_base64();
+        let encrypted_secret_key =
+            crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
+
+        // Update the stored keypair
+        stored.encrypted_secret_key = encrypted_secret_key;
+        stored.salt = Some(salt.to_base64());
+        stored.is_password_protected = true;
+
+        // Write back to file
+        let content = toml::to_string_pretty(&stored)?;
+        fs::write(&key_file, content)?;
+
+        // Set secure permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file)?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&key_file, perms)?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove passphrase protection from a keypair
+    ///
+    /// Converts a password-protected key to a passwordless key.
+    /// Warning: The private key will be stored unencrypted (only base64 encoded).
+    ///
+    /// # Arguments
+    /// * `key_id` - The ID of the key to modify
+    /// * `current_password` - Current password protecting the key
+    pub fn remove_passphrase(&self, key_id: &str, current_password: &str) -> Result<()> {
+        // Load the keypair with the current password
+        let keypair = self.load_keypair(key_id, Some(current_password))?;
+
+        // Load the stored keypair metadata
+        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let content = fs::read_to_string(&key_file)?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Store secret key as plaintext (base64 encoded)
+        stored.encrypted_secret_key = keypair.secret_key.to_base64();
+        stored.salt = None;
+        stored.is_password_protected = false;
+
+        // Write back to file
+        let content = toml::to_string_pretty(&stored)?;
+        fs::write(&key_file, content)?;
+
+        // Set secure permissions
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file)?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&key_file, perms)?;
+        }
+
+        Ok(())
+    }
+
     /// Get the current key ID
     pub fn get_current_key_id(&self) -> Result<String> {
         self.read_current_key_id()
@@ -357,6 +449,38 @@ impl Keystore {
             secret_key,
         })
     }
+}
+
+/// Get password/passphrase from SSS_PASSPHRASE environment variable or prompt user
+///
+/// This is the primary method for obtaining passphrases for password-protected keys.
+/// It checks the SSS_PASSPHRASE environment variable first (useful for automation and testing),
+/// then falls back to an interactive prompt if not set.
+///
+/// # Arguments
+/// * `prompt` - The prompt to show when environment variable is not set
+///
+/// # Returns
+/// * `Result<String>` - The password/passphrase
+///
+/// # Examples
+/// ```no_run
+/// use sss::keystore::get_passphrase_or_prompt;
+///
+/// // With environment variable set:
+/// // SSS_PASSPHRASE="my-secret" cargo run
+///
+/// // Or interactive prompt:
+/// let passphrase = get_passphrase_or_prompt("Enter passphrase: ").unwrap();
+/// ```
+pub fn get_passphrase_or_prompt(prompt: &str) -> Result<String> {
+    // Check SSS_PASSPHRASE environment variable first
+    if let Ok(passphrase) = std::env::var("SSS_PASSPHRASE") {
+        return Ok(passphrase);
+    }
+
+    // Fall back to interactive prompt
+    rpassword::prompt_password(prompt).map_err(|e| anyhow!("Failed to read passphrase: {}", e))
 }
 
 impl Default for Keystore {

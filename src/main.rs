@@ -200,6 +200,21 @@ fn create_cli_app() -> Command {
                 .help("Override config directory location")
                 .global(true),
         )
+        .arg(
+            Arg::new("non-interactive")
+                .long("non-interactive")
+                .help("Non-interactive mode: fail if passphrase not in SSS_PASSPHRASE environment variable")
+                .action(clap::ArgAction::SetTrue)
+                .global(true),
+        )
+        .arg(
+            Arg::new("kdf-level")
+                .long("kdf-level")
+                .value_name("LEVEL")
+                .help("KDF security level: sensitive (default, most secure), moderate (balanced), interactive (fastest)")
+                .value_parser(["sensitive", "moderate", "interactive", "high", "medium", "low", "fast", "balanced"])
+                .global(true),
+        )
         .subcommand(
             Command::new("init").about("Initialize a new project").arg(
                 Arg::new("username")
@@ -412,6 +427,32 @@ fn create_cli_app() -> Command {
                                 .value_name("BOOL")
                                 .value_parser(clap::value_parser!(bool))
                                 .help("Enable/disable coloured output"),
+                        )
+                        .arg(
+                            Arg::new("secrets-filename")
+                                .long("secrets-filename")
+                                .value_name("FILENAME")
+                                .help("Set secrets filename (e.g., 'passwords', '.secrets'). Use 'none' for default"),
+                        )
+                        .arg(
+                            Arg::new("secrets-suffix")
+                                .long("secrets-suffix")
+                                .value_name("SUFFIX")
+                                .help("Set secrets file suffix (e.g., '.sealed', '.passwords'). Use 'none' for default"),
+                        )
+                        .arg(
+                            Arg::new("kdf-level")
+                                .long("kdf-level")
+                                .value_name("LEVEL")
+                                .value_parser(["sensitive", "moderate", "interactive", "high", "medium", "low", "fast", "balanced", "none"])
+                                .help("Set KDF security level for new keys: sensitive (default, most secure), moderate (balanced), interactive (fastest)"),
+                        )
+                        .arg(
+                            Arg::new("use-keyring")
+                                .long("use-keyring")
+                                .value_name("BOOL")
+                                .value_parser(clap::value_parser!(bool))
+                                .help("Enable/disable system keyring for key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)"),
                         ),
                 )
                 .subcommand(
@@ -660,6 +701,13 @@ fn main() -> Result<()> {
         }
 
     let matches = create_cli_app().get_matches();
+
+    // Set non-interactive mode if flag is present
+    if matches.get_flag("non-interactive") {
+        unsafe {
+            std::env::set_var("SSS_NONINTERACTIVE", "1");
+        }
+    }
 
     // Handle commands
     match matches.subcommand() {

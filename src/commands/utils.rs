@@ -15,21 +15,34 @@ use crate::{
         ERR_NO_KEYPAIR_INIT, ERR_NO_PROJECT_CONFIG,
     },
     crypto::KeyPair,
+    kdf::KdfParams,
     keystore::Keystore,
     processor::Processor,
     project::ProjectConfig,
     secure_memory::password,
 };
 
-/// Create keystore instance based on global confdir parameter
+/// Create keystore instance based on global confdir parameter and KDF configuration
 ///
 /// This function checks if a custom config directory was provided via the --confdir
-/// flag and creates a keystore instance accordingly.
+/// flag and creates a keystore instance accordingly. It also loads the KDF level
+/// from configuration (respecting CLI > ENV > Config precedence).
 pub fn create_keystore(matches: &ArgMatches) -> Result<Keystore> {
+    // Load config manager to get KDF level
+    let config_manager = create_config_manager(matches)?;
+
+    // Get KDF level from config (checks CLI args, ENV vars, and user settings)
+    // Note: CLI flag for --kdf-level would be checked here if it exists in matches
+    let kdf_level = config_manager.get_kdf_level(matches.get_one::<String>("kdf-level").map(|s| s.as_str()));
+    let kdf_params = KdfParams::from_level(&kdf_level)?;
+
+    // Get keyring preference
+    let use_keyring = config_manager.use_system_keyring(None);
+
     if let Some(confdir) = matches.get_one::<String>("confdir") {
-        Keystore::new_with_config_dir(PathBuf::from(confdir))
+        Keystore::new_with_config_dir_and_kdf(PathBuf::from(confdir), kdf_params, use_keyring)
     } else {
-        Keystore::new()
+        Keystore::new_with_kdf_params(kdf_params, use_keyring)
     }
 }
 
@@ -418,7 +431,8 @@ added = "2025-01-01T00:00:00Z"
     #[test]
     fn test_create_keystore_default() {
         let app = Command::new("test")
-            .arg(clap::Arg::new("confdir").long("confdir").value_name("DIR"));
+            .arg(clap::Arg::new("confdir").long("confdir").value_name("DIR"))
+            .arg(clap::Arg::new("kdf-level").long("kdf-level").value_name("LEVEL"));
         let matches = app.get_matches_from(vec!["test"]);
 
         // Should create with default config dir (confdir not provided)
@@ -431,7 +445,8 @@ added = "2025-01-01T00:00:00Z"
         let temp_dir = TempDir::new().unwrap();
 
         let app = Command::new("test")
-            .arg(clap::Arg::new("confdir").long("confdir").value_name("DIR"));
+            .arg(clap::Arg::new("confdir").long("confdir").value_name("DIR"))
+            .arg(clap::Arg::new("kdf-level").long("kdf-level").value_name("LEVEL"));
 
         let matches = app.get_matches_from(vec![
             "test",

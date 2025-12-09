@@ -23,6 +23,7 @@ pub mod winfsp_fs;
 pub mod ninep_fs;
 pub mod kdf;
 pub mod keyring_manager;
+pub mod keyring_support;
 pub mod keystore;
 pub mod marker_inference;
 pub mod merge;

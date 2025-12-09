@@ -9,11 +9,11 @@ if ! command -v sss &> /dev/null; then
 fi
 
 # Check if we're in an sss repository
-if ! sss status &> /dev/null; then
+if ! sss --non-interactive status &> /dev/null; then
     exit 0
 fi
 
 # Try to render project files (requires auto-render permission)
-sss render --project 2>&1 || true
+sss --non-interactive render --project 2>&1 || true
 
 exit 0

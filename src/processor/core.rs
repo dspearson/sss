@@ -240,15 +240,25 @@ impl Processor {
     }
 
     pub fn new(repository_key: RepositoryKey) -> Result<Self> {
-        Self::new_with_secrets_filename(repository_key, "secrets".to_string())
+        Self::new_with_secrets_config(repository_key, "secrets".to_string(), ".secrets".to_string())
     }
 
     /// Create a new processor with custom secrets filename
     pub fn new_with_secrets_filename(repository_key: RepositoryKey, secrets_filename: String) -> Result<Self> {
+        Self::new_with_secrets_config(repository_key, secrets_filename, ".secrets".to_string())
+    }
+
+    /// Create a new processor with custom secrets filename and suffix
+    pub fn new_with_secrets_config(
+        repository_key: RepositoryKey,
+        secrets_filename: String,
+        secrets_suffix: String,
+    ) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_config(
                 repository_key.clone(),
                 secrets_filename,
+                secrets_suffix,
             )),
             repository_key,
             project_root: None,
@@ -262,11 +272,12 @@ impl Processor {
         project_root: PathBuf,
         project_created: String,
     ) -> Result<Self> {
-        Self::new_with_context_and_secrets_filename(
+        Self::new_with_context_and_secrets_config(
             repository_key,
             project_root,
             project_created,
             "secrets".to_string(),
+            ".secrets".to_string(),
         )
     }
 
@@ -277,10 +288,28 @@ impl Processor {
         project_created: String,
         secrets_filename: String,
     ) -> Result<Self> {
+        Self::new_with_context_and_secrets_config(
+            repository_key,
+            project_root,
+            project_created,
+            secrets_filename,
+            ".secrets".to_string(),
+        )
+    }
+
+    /// Create a new processor with project metadata and custom secrets filename and suffix
+    pub fn new_with_context_and_secrets_config(
+        repository_key: RepositoryKey,
+        project_root: PathBuf,
+        project_created: String,
+        secrets_filename: String,
+        secrets_suffix: String,
+    ) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_config(
                 repository_key.clone(),
                 secrets_filename,
+                secrets_suffix,
             )),
             repository_key,
             project_root: Some(project_root),
@@ -290,7 +319,12 @@ impl Processor {
 
     /// Create a new processor with a specified project root for secrets lookup
     pub fn new_with_project_root(repository_key: RepositoryKey, project_root: PathBuf) -> Result<Self> {
-        Self::new_with_project_root_and_secrets_filename(repository_key, project_root, "secrets".to_string())
+        Self::new_with_project_root_and_secrets_config(
+            repository_key,
+            project_root,
+            "secrets".to_string(),
+            ".secrets".to_string(),
+        )
     }
 
     /// Create a new processor with a specified project root and custom secrets filename
@@ -299,10 +333,26 @@ impl Processor {
         project_root: PathBuf,
         secrets_filename: String,
     ) -> Result<Self> {
+        Self::new_with_project_root_and_secrets_config(
+            repository_key,
+            project_root,
+            secrets_filename,
+            ".secrets".to_string(),
+        )
+    }
+
+    /// Create a new processor with a specified project root and custom secrets filename and suffix
+    pub fn new_with_project_root_and_secrets_config(
+        repository_key: RepositoryKey,
+        project_root: PathBuf,
+        secrets_filename: String,
+        secrets_suffix: String,
+    ) -> Result<Self> {
         Ok(Self {
-            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_filename(
+            secrets_cache: CacheWrapper::new(SecretsCache::with_repository_key_and_config(
                 repository_key.clone(),
                 secrets_filename,
+                secrets_suffix,
             )),
             repository_key,
             project_root: Some(project_root),
@@ -338,12 +388,12 @@ impl Processor {
             Ok(decrypted)
         } else {
             // Content is plaintext, encrypt it
-            self.encrypt_secrets_file_content(content)
+            self.encrypt_secrets_file_content(content, "<secrets-file>")
         }
     }
 
-    /// Encrypt entire .secrets file content with encrypted marker (uses random nonces)
-    fn encrypt_secrets_file_content(&self, content: &str) -> Result<String> {
+    /// Encrypt entire .secrets file content with encrypted marker (uses deterministic nonces)
+    fn encrypt_secrets_file_content(&self, content: &str, file_path: &str) -> Result<String> {
         let trimmed = content.trim();
 
         // Check if already encrypted (idempotent seal)
@@ -352,8 +402,18 @@ impl Processor {
             return Ok(format!("{}\n", trimmed));
         }
 
-        // Not encrypted yet, encrypt the content
-        let encrypted = encrypt_to_base64(content, &self.repository_key)?;
+        // Not encrypted yet, encrypt the content with deterministic nonce
+        let encrypted = if !self.project_created.is_empty() {
+            encrypt_to_base64_deterministic(
+                content,
+                &self.repository_key,
+                &self.project_created,
+                file_path,
+            )?
+        } else {
+            // Fall back to random nonce if no project context
+            encrypt_to_base64(content, &self.repository_key)?
+        };
         // Add trailing newline for POSIX compliance
         Ok(format!("⊠{{{}}}\n", encrypted))
     }
@@ -376,8 +436,14 @@ impl Processor {
     /// Explicitly seal (encrypt) content - used by seal command
     pub fn seal_content_with_path(&self, content: &str, file_path: &Path) -> Result<String> {
         if Self::is_secrets_file(file_path) {
-            // For .secrets files, encrypt entire content
-            self.encrypt_secrets_file_content(content)
+            // For .secrets files, encrypt entire content with file path for deterministic nonce
+            // Use path as-is if file doesn't exist yet (for tests)
+            let relative_path = if file_path.exists() {
+                self.make_relative_path(file_path)?
+            } else {
+                file_path.to_string_lossy().to_string()
+            };
+            self.encrypt_secrets_file_content(content, &relative_path)
         } else {
             // For regular files, encrypt markers with deterministic nonces
             self.encrypt_content_with_path(content, file_path.to_str().unwrap_or("<path>"))
@@ -964,8 +1030,8 @@ mod tests {
         let test_file = project_root.join("myconfig.txt");
         std::fs::write(&test_file, "").unwrap();
 
-        // Create a file-specific secrets file
-        let file_secrets = project_root.join("myconfig.secrets");
+        // Create a file-specific secrets file (suffix is appended, not replacing extension)
+        let file_secrets = project_root.join("myconfig.txt.secrets");
         let mut file = std::fs::File::create(&file_secrets).unwrap();
         writeln!(file, "token: file_specific_token").unwrap();
         drop(file);

@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.1.5
+Version:        1.1.7
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -43,7 +43,7 @@ Features:
 
 %build
 # Build in release mode with FUSE support only (excludes 9P)
-cargo build --release --locked --features fuse
+cargo build --release --features fuse
 
 %install
 # Create necessary directories

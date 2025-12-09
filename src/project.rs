@@ -48,6 +48,11 @@ pub struct ProjectConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets_filename: Option<String>,
 
+    /// Custom secrets file suffix (defaults to ".secrets" if not set)
+    /// Example: ".sealed" would make "config.yaml.sealed" a valid secrets file
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secrets_suffix: Option<String>,
+
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -70,6 +75,7 @@ impl Default for ProjectConfig {
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
             secrets_filename: None,
+            secrets_suffix: None,
             key: None,
         }
     }
@@ -134,6 +140,7 @@ impl ProjectConfig {
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
             secrets_filename: None,
+            secrets_suffix: None,
             key: None,
         })
     }

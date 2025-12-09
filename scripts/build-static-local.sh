@@ -70,11 +70,20 @@ if [[ "$PLATFORM" == "macos" ]]; then
     export SODIUM_LIB_DIR="$PROJECT_ROOT/target/libsodium-static/lib"
     export SODIUM_SHARED=0
 
+    # Override cargo linker settings to use system clang
+    export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=clang
+    export CARGO_TARGET_AARCH64_APPLE_DARWIN_AR=ar
+
     # Build
     cargo build --release
 
     echo ""
-    echo "🔍 Step 3: Verifying static linking..."
+    echo "🔪 Step 3: Stripping debug symbols..."
+    strip target/release/sss
+    echo "✅ Binary stripped"
+
+    echo ""
+    echo "🔍 Step 4: Verifying static linking..."
     echo "Dynamic dependencies:"
     otool -L target/release/sss
     echo ""
@@ -114,7 +123,12 @@ elif [[ "$PLATFORM" == "linux" ]]; then
         cargo build --release --target x86_64-unknown-linux-musl
 
     echo ""
-    echo "🔍 Step 3: Verifying static linking..."
+    echo "🔪 Step 3: Stripping debug symbols..."
+    strip target/x86_64-unknown-linux-musl/release/sss
+    echo "✅ Binary stripped"
+
+    echo ""
+    echo "🔍 Step 4: Verifying static linking..."
     echo "Dynamic dependencies:"
     ldd target/x86_64-unknown-linux-musl/release/sss || echo "(statically linked - no dependencies)"
 

@@ -15,17 +15,6 @@ use std::time::{Duration, UNIX_EPOCH, Instant};
 use crate::filesystem_common::{has_encrypted_markers, has_any_markers};
 use crate::Processor;
 
-// Debug logging macro with timestamp and thread ID
-macro_rules! fuse_debug {
-    ($($arg:tt)*) => {
-        {
-            let thread_id = std::thread::current().id();
-            let pid = std::process::id();
-            eprintln!("[FUSE DEBUG {:?} PID:{}] {}", thread_id, pid, format!($($arg)*));
-        }
-    };
-}
-
 const TTL: Duration = Duration::from_secs(1);
 const TTL_ZERO: Duration = Duration::from_secs(0);  // No caching for passthrough files
 const ROOT_INO: u64 = 1;
@@ -102,15 +91,9 @@ impl FileOperations for SssOperations {
         )
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        let perm = metadata.permissions().mode() as u16;
-        if has_secrets {
-            // Force chmod 600 for files with secrets
-            0o600
-        } else {
-            perm
-        }
+        metadata.permissions().mode() as u16
     }
 }
 
@@ -566,7 +549,6 @@ impl SssFS {
     /// Read and render a file (decrypt and remove all markers)
     /// Get metadata using source_fd (works even if mounted over source)
     fn metadata_via_fd(&self, rel_path: &Path) -> Result<fs::Metadata> {
-        fuse_debug!("    metadata_via_fd: path={:?}", rel_path);
 
         // On macOS with in-place mounts, path-based operations deadlock
         // because they route through the FUSE mount. Use FD-based operations
@@ -577,38 +559,31 @@ impl SssFS {
 
             if rel_path == Path::new(".") {
                 // For root directory, use fstat directly on source_fd
-                fuse_debug!("    metadata_via_fd: macOS - using fstat on source_fd for root");
                 let file = unsafe { std::fs::File::from_raw_fd(self.source_fd) };
                 let metadata = file.metadata()?;
                 std::mem::forget(file); // Don't close source_fd
-                fuse_debug!("    metadata_via_fd: done (macOS fstat)");
                 return Ok(metadata);
             }
 
             // For other paths, use fstatat relative to source_fd
             // This should work because source_fd was opened before mounting
-            fuse_debug!("    metadata_via_fd: macOS - using fstatat via source_fd");
             let path_bytes = rel_path.as_os_str().as_bytes();
             let path_cstr = std::ffi::CString::new(path_bytes)?;
 
             let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-            fuse_debug!("    metadata_via_fd: calling fstatat...");
             let result = unsafe {
                 libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
             };
 
             if result < 0 {
                 let err = std::io::Error::last_os_error();
-                fuse_debug!("    metadata_via_fd: fstatat failed: {}", err);
                 return Err(anyhow!("Failed to stat file: {}", err));
             }
 
-            fuse_debug!("    metadata_via_fd: fstatat succeeded");
 
             // Determine file type
             let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
             let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
-            fuse_debug!("    metadata_via_fd: is_dir={}, is_symlink={}", is_dir, is_symlink);
 
             // Open with appropriate flags based on file type
             // For symlinks: use O_SYMLINK if available (macOS) to open symlink itself
@@ -623,28 +598,23 @@ impl SssFS {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
-            fuse_debug!("    metadata_via_fd: calling openat with flags={:#x}...", flags);
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
 
             if fd < 0 {
                 let err = std::io::Error::last_os_error();
-                fuse_debug!("    metadata_via_fd: openat failed: {}", err);
 
                 // If this is a symlink and openat failed, try with O_SYMLINK | O_NOFOLLOW
                 #[cfg(target_os = "macos")]
                 if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
-                    fuse_debug!("    metadata_via_fd: retrying symlink with O_SYMLINK | O_NOFOLLOW...");
                     let retry_fd = unsafe {
                         libc::openat(self.source_fd, path_cstr.as_ptr(),
                                    libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW)
                     };
                     if retry_fd >= 0 {
-                        fuse_debug!("    metadata_via_fd: retry succeeded, fd={}", retry_fd);
                         let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
                         let metadata = file.metadata()?;
-                        fuse_debug!("    metadata_via_fd: done (macOS via retry)");
                         return Ok(metadata);
                     }
                 }
@@ -652,10 +622,8 @@ impl SssFS {
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
 
-            fuse_debug!("    metadata_via_fd: openat succeeded, getting metadata");
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             let metadata = file.metadata()?;
-            fuse_debug!("    metadata_via_fd: done (macOS via source_fd)");
             return Ok(metadata);
         }
 
@@ -666,7 +634,6 @@ impl SssFS {
             let path_bytes = rel_path.as_os_str().as_bytes();
             let path_cstr = std::ffi::CString::new(path_bytes)?;
 
-            fuse_debug!("    metadata_via_fd: calling fstatat...");
             let mut stat: libc::stat = unsafe { std::mem::zeroed() };
 
             let result = unsafe {
@@ -675,15 +642,12 @@ impl SssFS {
 
             if result < 0 {
                 let err = std::io::Error::last_os_error();
-                fuse_debug!("    metadata_via_fd: fstatat failed: {}", err);
                 return Err(anyhow!("Failed to stat file: {}", err));
             }
-            fuse_debug!("    metadata_via_fd: fstatat succeeded");
 
             // Determine file type from the stat result
             let is_dir = (stat.st_mode & libc::S_IFMT) == libc::S_IFDIR;
             let is_symlink = (stat.st_mode & libc::S_IFMT) == libc::S_IFLNK;
-            fuse_debug!("    metadata_via_fd: is_dir={}, is_symlink={}", is_dir, is_symlink);
 
             // Open with appropriate flags based on file type
             // For symlinks: use O_PATH | O_NOFOLLOW to open the symlink itself
@@ -698,39 +662,31 @@ impl SssFS {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
-            fuse_debug!("    metadata_via_fd: calling openat with flags={:#x}...", flags);
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
 
             if fd < 0 {
                 let err = std::io::Error::last_os_error();
-                fuse_debug!("    metadata_via_fd: openat failed: {}", err);
 
                 // If this is a symlink and openat failed with ELOOP, try O_PATH | O_NOFOLLOW
                 // as a fallback (in case the first attempt didn't use those flags)
                 if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
-                    fuse_debug!("    metadata_via_fd: retrying symlink with O_PATH | O_NOFOLLOW...");
                     let retry_fd = unsafe {
                         libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW)
                     };
                     if retry_fd >= 0 {
-                        fuse_debug!("    metadata_via_fd: retry succeeded, fd={}", retry_fd);
                         let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
                         let metadata = file.metadata()?;
-                        fuse_debug!("    metadata_via_fd: done (via retry)");
                         return Ok(metadata);
                     }
                 }
 
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
-            fuse_debug!("    metadata_via_fd: openat succeeded, fd={}", fd);
 
-            fuse_debug!("    metadata_via_fd: calling file.metadata()...");
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             let metadata = file.metadata()?;
-            fuse_debug!("    metadata_via_fd: done");
             Ok(metadata)
         }
     }
@@ -807,11 +763,22 @@ impl SssFS {
         // Read file via fd
         let bytes = self.read_file_via_fd(rel_path)?;
 
-        // Try to convert to string
+        // Check if file has markers by scanning raw bytes for UTF-8 marker sequences
+        // This avoids String conversion for files without markers (preserves exact bytes)
+        let has_markers = bytes.windows(2).any(|w| {
+            matches!(w, b"\xe2\x8a" | b"[*" | b"o+" | b"<{")  // ⊠, ⊕, ⊲, [*, o+, <{
+        });
+
+        if !has_markers {
+            // No markers present, return raw bytes unchanged to preserve exact file content
+            return Ok(bytes);
+        }
+
+        // File has markers, convert to string for processing
         let content = match String::from_utf8(bytes.clone()) {
             Ok(c) => c,
             Err(_) => {
-                // Not a text file, return raw bytes
+                // Has marker-like bytes but not valid UTF-8, return raw bytes
                 return Ok(bytes);
             }
         };
@@ -1320,12 +1287,10 @@ impl SssFS {
     /// Read all entries from an open directory using pinned path operations
     fn read_dir_entries_with_operations(&mut self, dir_ptr: *mut libc::DIR, parent_ino: u64, parent_path: &Path, operations: &dyn FileOperations)
         -> Vec<(u64, FileType, String)> {
-        fuse_debug!("    read_dir_entries: starting, parent_path={:?}", parent_path);
         let mut items = Vec::new();
-        let mut count = 0;
+        let mut _count = 0;
 
         unsafe {
-            fuse_debug!("    read_dir_entries: entering readdir loop");
             loop {
                 // Reset errno before readdir
                 #[cfg(target_os = "linux")]
@@ -1333,12 +1298,9 @@ impl SssFS {
                 #[cfg(target_os = "macos")]
                 { *libc::__error() = 0; }
 
-                fuse_debug!("    read_dir_entries: calling libc::readdir (iteration {})", count);
                 let entry_ptr = libc::readdir(dir_ptr);
-                fuse_debug!("    read_dir_entries: readdir returned {:p}", entry_ptr);
 
                 if entry_ptr.is_null() {
-                    fuse_debug!("    read_dir_entries: readdir returned null, breaking");
                     break;
                 }
 
@@ -1347,17 +1309,14 @@ impl SssFS {
                     .to_string_lossy()
                     .to_string();
 
-                fuse_debug!("    read_dir_entries: got entry '{}'", name);
 
                 // Skip . and ..
                 if name == "." || name == ".." {
-                    fuse_debug!("    read_dir_entries: skipping '{}' (dot entry)", name);
                     continue;
                 }
 
                 // Use operations from pinned path for hiding logic
                 if operations.should_hide(&name) {
-                    fuse_debug!("    read_dir_entries: hiding '{}'", name);
                     continue;
                 }
 
@@ -1370,13 +1329,11 @@ impl SssFS {
                     FileType::RegularFile
                 };
 
-                fuse_debug!("    read_dir_entries: adding '{}' (ino={}, type={:?})", name, child_ino, file_type);
                 items.push((child_ino, file_type, name));
-                count += 1;
+                _count += 1;
             }
         }
 
-        fuse_debug!("    read_dir_entries: done, found {} items", items.len());
         items
     }
 
@@ -1425,41 +1382,22 @@ impl Filesystem for SssFS {
         _req: &Request<'_>,
         _config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
-        fuse_debug!("========== FUSE INIT CALLED ==========");
-        fuse_debug!("FUSE filesystem initialization starting");
-        fuse_debug!("Source path: {:?}", self.source_path);
-        fuse_debug!("Source FD: {}", self.source_fd);
-        fuse_debug!("Mount FD: {:?}", self.mount_fd);
-        fuse_debug!("UID: {}, GID: {}", self.uid, self.gid);
-        fuse_debug!("Pinned paths count: {}", self.pinned_paths.len());
 
-        for (idx, pinned) in self.pinned_paths.iter().enumerate() {
-            fuse_debug!("  Pinned[{}]: {:?} -> {:?}", idx, pinned.virtual_prefix, pinned.source_path);
+        for (_idx, _pinned) in self.pinned_paths.iter().enumerate() {
         }
 
-        fuse_debug!("FUSE init completed successfully");
-        fuse_debug!("========================================");
         Ok(())
     }
 
     /// Destroy filesystem - called when FUSE connection is terminated
     fn destroy(&mut self) {
-        fuse_debug!("========== FUSE DESTROY CALLED ==========");
-        fuse_debug!("FUSE filesystem cleanup starting");
-        fuse_debug!("Open file handles: {}", self.file_handles.read().len());
-        fuse_debug!("Allocated inodes: {}", self.inode_table.read().len());
-        fuse_debug!("Render cache entries: {}", self.render_cache.read().len());
-        fuse_debug!("FUSE filesystem cleanup completed");
-        fuse_debug!("=========================================");
     }
 
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        let start = Instant::now();
-        fuse_debug!("→ getattr(ino={})", ino);
+        let _start = Instant::now();
         // Handle synthetic .overlay directory
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
-            fuse_debug!("  getattr: synthetic .overlay directory");
             // Get attributes from the actual source directory
             match self.metadata_via_fd(Path::new(".")) {
                 Ok(metadata) => {
@@ -1480,11 +1418,9 @@ impl Filesystem for SssFS {
                         blksize: 512,
                         flags: 0,
                     };
-                    fuse_debug!("← getattr(ino={}) = OK [{:.2?}]", ino, start.elapsed());
                     reply.attr(&TTL, &attr);
                 }
-                Err(e) => {
-                    fuse_debug!("← getattr(ino={}) = EIO (metadata error: {}) [{:.2?}]", ino, e, start.elapsed());
+                Err(_e) => {
                     reply.error(libc::EIO);
                 }
             }
@@ -1493,45 +1429,34 @@ impl Filesystem for SssFS {
 
         let entry = match self.get_inode(ino) {
             Some(e) => {
-                fuse_debug!("  getattr: inode {} -> path {:?}", ino, e.path);
                 e
             }
             None => {
-                fuse_debug!("← getattr(ino={}) = ENOENT (inode not found) [{:.2?}]", ino, start.elapsed());
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
-        fuse_debug!("  getattr: translating virtual to source path...");
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
-        fuse_debug!("  getattr: source_rel_path={:?}", source_rel_path);
 
-        fuse_debug!("  getattr: calling metadata_via_fd...");
         match self.metadata_via_fd(&source_rel_path) {
             Ok(metadata) => {
-                fuse_debug!("  getattr: metadata_via_fd succeeded, is_file={}, is_dir={}", metadata.is_file(), metadata.is_dir());
                 let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
-                fuse_debug!("  getattr: is_passthrough={}", is_passthrough);
 
                 let _is_opened_mode = entry.path.to_str()
                     .map(|s| s.ends_with(".sss-opened"))
                     .unwrap_or(false);
 
                 // Compute size override for rendered/opened modes (passthrough = no override)
-                fuse_debug!("  getattr: computing size override...");
                 let size_override = if is_passthrough {
                     None
                 } else {
                     self.compute_size_override(ino, &metadata)
                 };
-                fuse_debug!("  getattr: size_override={:?}", size_override);
 
-                fuse_debug!("  getattr: checking for secrets...");
                 let has_secrets = metadata.is_file() && !is_passthrough &&
                     self.file_has_secrets(&source_rel_path);
-                fuse_debug!("  getattr: has_secrets={}", has_secrets);
 
                 // Use operations to get permissions
                 let perm = pinned.operations.get_permissions(&metadata, has_secrets);
@@ -1565,11 +1490,9 @@ impl Filesystem for SssFS {
                     flags: 0,
                 };
 
-                fuse_debug!("← getattr(ino={}) = OK (size={}) [{:.2?}]", ino, attr.size, start.elapsed());
                 reply.attr(&TTL, &attr);
             }
-            Err(e) => {
-                fuse_debug!("← getattr(ino={}) = ENOENT (metadata error: {}) [{:.2?}]", ino, e, start.elapsed());
+            Err(_e) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1577,12 +1500,10 @@ impl Filesystem for SssFS {
 
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let start = Instant::now();
-        fuse_debug!("→ lookup(parent={}, name={:?})", parent, name);
+        let _start = Instant::now();
 
         // Special case: looking up ".overlay" from root
         if parent == ROOT_INO && name == ".overlay" {
-            fuse_debug!("  lookup: .overlay synthetic directory from root");
             let attr = FileAttr {
                 ino: SYNTHETIC_OVERLAY_DIR_INO,
                 size: 0,
@@ -1600,7 +1521,6 @@ impl Filesystem for SssFS {
                 blksize: 512,
                 flags: 0,
             };
-            fuse_debug!("← lookup(parent={}, name={:?}) = OK (synthetic .overlay) [{:.2?}]", parent, name, start.elapsed());
             reply.entry(&TTL, &attr, 0);
             return;
         }
@@ -1699,11 +1619,9 @@ impl Filesystem for SssFS {
                 // Use zero TTL for passthrough files to disable kernel caching
                 // This prevents stale negative lookups after rename operations
                 let ttl = if is_passthrough { &TTL_ZERO } else { &TTL };
-                fuse_debug!("← lookup(parent={}, name={:?}) = OK (ino={}, size={}) [{:.2?}]", parent, name, ino, attr.size, start.elapsed());
                 reply.entry(ttl, &attr, 0);
             }
-            Err(e) => {
-                fuse_debug!("← lookup(parent={}, name={:?}) = ENOENT (metadata error: {}) [{:.2?}]", parent, name, e, start.elapsed());
+            Err(_e) => {
                 reply.error(libc::ENOENT);
             }
         }
@@ -1718,12 +1636,10 @@ impl Filesystem for SssFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ readdir(ino={}, offset={})", ino, offset);
+        let _start = Instant::now();
 
         // Handle .overlay/ - parent is synthetic, build entry manually
         let entry = if ino == SYNTHETIC_OVERLAY_DIR_INO {
-            fuse_debug!("  readdir: synthetic .overlay directory");
             InodeEntry {
                 _ino: SYNTHETIC_OVERLAY_DIR_INO,
                 path: PathBuf::from("/.overlay"),
@@ -1733,49 +1649,39 @@ impl Filesystem for SssFS {
             // Get directory entry from inode table
             match self.get_inode(ino) {
                 Some(e) => {
-                    fuse_debug!("  readdir: inode {} -> path {:?}", ino, e.path);
                     e
                 },
                 None => {
-                    fuse_debug!("  readdir: inode {} not found", ino);
                     reply.error(libc::ENOENT);
                     return;
                 }
             }
         };
 
-        fuse_debug!("  readdir: translating path {:?}", entry.path);
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
-        fuse_debug!("  readdir: source_rel_path={:?}", source_rel_path);
         // Clone the operations Arc to avoid holding a borrow on self
         let operations = pinned.operations.clone();
 
-        fuse_debug!("  readdir: opening directory via FD...");
         // Open directory via FD
         let dir_ptr = match self.open_dir_fd(&source_rel_path) {
             Ok(p) => {
-                fuse_debug!("  readdir: directory opened successfully, dir_ptr={:p}", p);
                 p
             },
-            Err(e) => {
-                fuse_debug!("  readdir: failed to open directory: {}", e);
+            Err(_e) => {
                 reply.error(libc::EIO);
                 return;
             }
         };
 
-        fuse_debug!("  readdir: building initial entry list");
         // Build entry list: . and .. first
         let mut items = vec![
             (ino, FileType::Directory, ".".to_string()),
             (entry.parent, FileType::Directory, "..".to_string()),
         ];
 
-        fuse_debug!("  readdir: calling read_dir_entries_with_operations...");
         // Read directory entries - use pinned path operations for filtering
         let entries = self.read_dir_entries_with_operations(dir_ptr, ino, &entry.path, &*operations);
-        fuse_debug!("  readdir: read {} entries from directory", entries.len());
         items.extend(entries);
 
         // If this is the root directory, add synthetic .overlay directory
@@ -1787,21 +1693,19 @@ impl Filesystem for SssFS {
         unsafe { libc::closedir(dir_ptr); }
 
         // Send entries to FUSE
-        let entry_count = items.len();
+        let _entry_count = items.len();
         for (i, item) in items.iter().enumerate().skip(offset as usize) {
             if reply.add(item.0, (i + 1) as i64, item.1, &item.2) {
                 break;
             }
         }
 
-        fuse_debug!("← readdir(ino={}) = OK ({} entries) [{:.2?}]", ino, entry_count, start.elapsed());
         reply.ok();
     }
 
     /// Open a file
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        let start = Instant::now();
-        fuse_debug!("→ open(ino={}, flags=0x{:x})", ino, flags);
+        let _start = Instant::now();
 
         // Block operations on .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1975,7 +1879,6 @@ impl Filesystem for SssFS {
             0
         };
 
-        fuse_debug!("← open(ino={}) = OK (fh={}) [{:.2?}]", ino, fh, start.elapsed());
         reply.opened(fh, flags);
     }
 
@@ -1991,8 +1894,7 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyData,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ read(ino={}, fh={}, offset={}, size={})", ino, fh, offset, size);
+        let _start = Instant::now();
 
         // Get content from handle or fall back to direct read
         let handles = self.file_handles.read();
@@ -2054,11 +1956,9 @@ impl Filesystem for SssFS {
         let end = std::cmp::min(offset_usize + size as usize, content.len());
 
         if offset_usize < content.len() {
-            let bytes_read = end - offset_usize;
-            fuse_debug!("← read(ino={}, fh={}) = OK ({} bytes) [{:.2?}]", ino, fh, bytes_read, start.elapsed());
+            let _bytes_read = end - offset_usize;
             reply.data(&content[offset_usize..end]);
         } else {
-            fuse_debug!("← read(ino={}, fh={}) = OK (0 bytes, EOF) [{:.2?}]", ino, fh, start.elapsed());
             reply.data(&[]);
         }
     }
@@ -2076,8 +1976,7 @@ impl Filesystem for SssFS {
         _lock: Option<u64>,
         reply: ReplyWrite,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ write(ino={}, fh={}, offset={}, size={})", ino, fh, offset, data.len());
+        let _start = Instant::now();
         // Block writes to .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EPERM);
@@ -2163,7 +2062,6 @@ impl Filesystem for SssFS {
         handle.cached_content = Some(content);
         handle.dirty = true;
 
-        fuse_debug!("← write(ino={}, fh={}) = OK ({} bytes) [{:.2?}]", ino, fh, data.len(), start.elapsed());
         reply.written(data.len() as u32);
     }
 
@@ -2178,8 +2076,7 @@ impl Filesystem for SssFS {
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ release(fh={})", fh);
+        let _start = Instant::now();
         let mut handles = self.file_handles.write();
         if let Some(handle) = handles.remove(&fh) {
             // Close passthrough fd if present
@@ -2233,7 +2130,6 @@ impl Filesystem for SssFS {
                     self.render_cache.write().remove(&handle.ino);
                 }
         }
-        fuse_debug!("← release(fh={}) = OK [{:.2?}]", fh, start.elapsed());
         reply.ok();
     }
 
@@ -2253,7 +2149,6 @@ impl Filesystem for SssFS {
         _out_size: u32,
         reply: fuser::ReplyIoctl,
     ) {
-        fuse_debug!("→ ioctl(fh={}, cmd=0x{:x})", fh, cmd);
 
         // fuse-t on macOS doesn't support ioctl operations
         // Users should use virtual file suffixes instead:
@@ -2261,8 +2156,6 @@ impl Filesystem for SssFS {
         //   file.txt.sss-sealed for sealed mode
         #[cfg(target_os = "macos")]
         {
-            fuse_debug!("← ioctl(fh={}) = ENOTTY (ioctl not supported on macOS/fuse-t)", fh);
-            fuse_debug!("   Use virtual suffixes instead: .sss-opened or .sss-sealed");
             reply.error(libc::ENOTTY);
         }
 
@@ -2302,7 +2195,6 @@ impl Filesystem for SssFS {
                     reply.error(libc::EBADF);
                 }
             } else {
-                fuse_debug!("← ioctl(fh={}) = ENOTTY (unknown command)", fh);
                 reply.error(libc::ENOTTY);
             }
         }
@@ -2467,8 +2359,7 @@ impl Filesystem for SssFS {
         datasync: bool,
         reply: fuser::ReplyEmpty,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ fsync(fh={}, datasync={})", fh, datasync);
+        let _start = Instant::now();
 
         // For passthrough files with an fd, sync to flush mmap writes
         let handles = self.file_handles.read();
@@ -2486,24 +2377,20 @@ impl Filesystem for SssFS {
 
                 if result < 0 {
                     let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                    fuse_debug!("← fsync(fh={}) = error (errno={}) [{:.2?}]", fh, errno, start.elapsed());
                     reply.error(errno);
                     return;
                 }
             }
 
-        fuse_debug!("← fsync(fh={}) = OK [{:.2?}]", fh, start.elapsed());
         reply.ok();
     }
 
     /// Check file access permissions
     fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
-        let start = Instant::now();
-        fuse_debug!("→ access(ino={}, mask=0x{:x})", ino, mask);
+        let _start = Instant::now();
 
         // Handle synthetic directories
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
-            fuse_debug!("  access: synthetic overlay dir, returning OK");
             reply.ok();
             return;
         }
@@ -2514,44 +2401,34 @@ impl Filesystem for SssFS {
         // we can safely return OK here.
         #[cfg(target_os = "macos")]
         {
-            fuse_debug!("← access(ino={}) = OK (macOS: skipping faccessat) [{:.2?}]", ino, start.elapsed());
             reply.ok();
             return;
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            fuse_debug!("  access: getting inode entry...");
             let entry = match self.get_inode(ino) {
                 Some(e) => {
-                    fuse_debug!("  access: got inode entry, path={:?}", e.path);
                     e
                 }
                 None => {
-                    fuse_debug!("  access: inode not found, returning ENOENT");
                     reply.error(libc::ENOENT);
                     return;
                 }
             };
 
-            fuse_debug!("  access: translating virtual path...");
             // Translate virtual path to source path
             let (source_rel_path, _pinned) = self.translate_virtual_to_source(&entry.path);
-            fuse_debug!("  access: source_rel_path={:?}", source_rel_path);
 
-            fuse_debug!("  access: creating CString...");
             // Use faccessat to check actual permissions
             let path_cstr = match CString::new(source_rel_path.as_os_str().as_bytes()) {
                 Ok(p) => p,
                 Err(_) => {
-                    fuse_debug!("  access: CString error, returning EINVAL");
                     reply.error(libc::EINVAL);
                     return;
                 }
             };
 
-            fuse_debug!("  access: calling faccessat(fd={}, path={:?}, mask=0x{:x})...",
-                       self.source_fd, source_rel_path, mask);
             // faccessat checks access permissions relative to source_fd
             let result = unsafe {
                 libc::faccessat(
@@ -2561,10 +2438,8 @@ impl Filesystem for SssFS {
                     0, // flags
                 )
             };
-            fuse_debug!("  access: faccessat returned {}", result);
 
             if result == 0 {
-                fuse_debug!("← access(ino={}) = OK [{:.2?}]", ino, start.elapsed());
                 reply.ok();
             } else {
                 let errno = unsafe {
@@ -2573,7 +2448,6 @@ impl Filesystem for SssFS {
                     #[cfg(target_os = "macos")]
                     { *libc::__error() }
                 };
-                fuse_debug!("← access(ino={}) = errno {} [{:.2?}]", ino, errno, start.elapsed());
                 reply.error(errno);
             }
         }
@@ -2588,8 +2462,7 @@ impl Filesystem for SssFS {
         _lock_owner: u64,
         reply: fuser::ReplyEmpty,
     ) {
-        let start = Instant::now();
-        fuse_debug!("→ flush(fh={})", fh);
+        let _start = Instant::now();
 
         // For passthrough files, sync to flush any mmap'd writes
         let handles = self.file_handles.read();
@@ -2604,15 +2477,12 @@ impl Filesystem for SssFS {
 
                 if result < 0 {
                     let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-                    fuse_debug!("← flush(fh={}) = error (errno={}) [{:.2?}]", fh, errno, start.elapsed());
                     reply.error(errno);
                     return;
                 }
             }
-            fuse_debug!("← flush(fh={}) = OK [{:.2?}]", fh, start.elapsed());
             reply.ok();
         } else {
-            fuse_debug!("← flush(fh={}) = EBADF [{:.2?}]", fh, start.elapsed());
             reply.error(libc::EBADF);
         }
     }

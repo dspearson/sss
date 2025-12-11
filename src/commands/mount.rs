@@ -173,21 +173,14 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
     }
 
     // Mount the filesystem (either in foreground or as daemon)
-    eprintln!("[DEBUG] About to call fuser::mount2()");
-    eprintln!("[DEBUG] Mountpoint: {:?}", mountpoint_path);
-    eprintln!("[DEBUG] Options: {:?}", options);
-    eprintln!("[DEBUG] Process PID: {}", std::process::id());
-
     match fuser::mount2(fs, &mountpoint_path, &options) {
         Ok(()) => {
-            eprintln!("[DEBUG] fuser::mount2() returned successfully");
             if foreground {
                 eprintln!("Filesystem unmounted successfully");
             }
             Ok(())
         }
         Err(e) => {
-            eprintln!("[DEBUG] fuser::mount2() returned with error: {}", e);
             Err(anyhow!("Failed to mount filesystem: {}", e))
         }
     }

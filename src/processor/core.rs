@@ -243,6 +243,11 @@ impl Processor {
         Self::new_with_secrets_config(repository_key, "secrets".to_string(), ".secrets".to_string())
     }
 
+    /// Get a clone of the secrets cache for sharing with other components
+    pub fn get_secrets_cache(&self) -> SecretsCache {
+        (*self.secrets_cache.borrow()).clone()
+    }
+
     /// Create a new processor with custom secrets filename
     pub fn new_with_secrets_filename(repository_key: RepositoryKey, secrets_filename: String) -> Result<Self> {
         Self::new_with_secrets_config(repository_key, secrets_filename, ".secrets".to_string())

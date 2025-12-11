@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH, Instant};
 
 use crate::filesystem_common::{has_encrypted_markers, has_any_markers};
+use crate::secrets::{FileSystemOps, SecretsCache, interpolate_secrets};
 use crate::Processor;
 
 const TTL: Duration = Duration::from_secs(1);
@@ -159,6 +160,8 @@ pub struct SssFS {
     gid: u32,
     /// Processor for encryption/decryption operations
     processor: Processor,
+    /// Secrets cache for finding and loading .secrets files
+    secrets_cache: RwLock<SecretsCache>,
     /// Inode table: maps inode number to path information
     inode_table: RwLock<HashMap<u64, InodeEntry>>,
     /// Reverse lookup: path to inode number
@@ -173,6 +176,62 @@ pub struct SssFS {
     render_cache: RwLock<HashMap<u64, Vec<u8>>>,
     /// Pinned virtual paths with their operations
     pinned_paths: Vec<PinnedPath>,
+}
+
+/// FD-based filesystem operations for FUSE in-place mounts
+///
+/// When FUSE is mounted over the source directory, normal filesystem operations
+/// like .exists() and fs::read() will route back through the FUSE mount, causing
+/// deadlock. This implementation uses fd-based operations (openat, faccessat) with
+/// source_fd to access the real filesystem underneath the mount.
+struct FdFileSystemOps {
+    source_fd: std::os::unix::io::RawFd,
+}
+
+impl FileSystemOps for FdFileSystemOps {
+    fn file_exists(&self, path: &Path) -> bool {
+        let path_bytes = path.as_os_str().as_bytes();
+        let path_cstr = match std::ffi::CString::new(path_bytes) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        let result = unsafe {
+            libc::faccessat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                libc::F_OK,
+                0,
+            )
+        };
+
+        result == 0
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        let path_bytes = path.as_os_str().as_bytes();
+        let path_cstr = std::ffi::CString::new(path_bytes)?;
+
+        let fd = unsafe {
+            libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
+        };
+
+        if fd < 0 {
+            return Err(anyhow!("Failed to open file {:?}", path));
+        }
+
+        // Read file contents
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let mut contents = Vec::new();
+        use std::io::Read;
+        std::io::Read::read_to_end(&mut file, &mut contents)?;
+        std::mem::forget(file); // Don't close fd automatically
+
+        // Close fd manually
+        unsafe { libc::close(fd); }
+
+        Ok(contents)
+    }
 }
 
 impl SssFS {
@@ -299,6 +358,9 @@ impl SssFS {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
 
+        // Create secrets cache from processor configuration
+        let secrets_cache = processor.get_secrets_cache().clone();
+
         Ok(Self {
             source_path,
             source_fd,
@@ -306,6 +368,7 @@ impl SssFS {
             uid,
             gid,
             processor,
+            secrets_cache: RwLock::new(secrets_cache),
             inode_table: RwLock::new(inode_table),
             path_to_ino: RwLock::new(path_to_ino),
             next_ino: RwLock::new(ROOT_INO + 1),

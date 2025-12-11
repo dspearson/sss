@@ -7,6 +7,36 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::{decrypt_from_base64, RepositoryKey};
 
+/// Trait for abstracting filesystem operations
+///
+/// This allows the same code to work with both normal filesystem operations
+/// (using std::fs) and fd-based operations (using openat/faccessat) needed
+/// by FUSE in-place mounts to avoid deadlock.
+pub trait FileSystemOps {
+    /// Check if a file exists at the given path
+    fn file_exists(&self, path: &Path) -> bool;
+
+    /// Read the contents of a file
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>>;
+}
+
+/// Standard filesystem operations using std::fs
+pub struct StdFileSystemOps;
+
+impl FileSystemOps for StdFileSystemOps {
+    fn file_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        fs::read(path).map_err(|e| anyhow!("Failed to read file {:?}: {}", path, e))
+    }
+}
+
+/// Regex for secret interpolation - matches ⊲{secret_name} or <{secret_name}
+pub static SECRETS_INTERPOLATION_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
+
 /// Regex for parsing secrets file format - single-line values
 /// Supports: name: value, "name": value, name: "value", "name": "value"
 /// Also supports: name: 'value', 'name': 'value'
@@ -23,6 +53,7 @@ static MULTILINE_INDICATOR_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// SecretsCache manages loading and caching of secrets from files
+#[derive(Clone)]
 pub struct SecretsCache {
     cache: HashMap<PathBuf, HashMap<String, String>>,
     repository_key: Option<RepositoryKey>,
@@ -140,12 +171,13 @@ impl SecretsCache {
         parse_secrets_content(&content, path)
     }
 
-    /// Find secrets file using the lookup hierarchy
+    /// Find secrets file using the lookup hierarchy with generic filesystem operations
     /// Searches for: $filename{secrets_suffix}, {secrets_filename}, ../{secrets_filename}, up to git root
-    pub fn find_secrets_file<P: AsRef<Path>>(
+    pub fn find_secrets_file_with_ops<P: AsRef<Path>, F: FileSystemOps>(
         &self,
         file_path: P,
         project_root: &Path,
+        fs_ops: &F,
     ) -> Result<PathBuf> {
         let file_path = file_path.as_ref();
 
@@ -169,7 +201,7 @@ impl SecretsCache {
             resolved_file_path.display(),
             self.secrets_suffix
         ));
-        if filename_with_suffix.exists() {
+        if fs_ops.file_exists(&filename_with_suffix) {
             return Ok(filename_with_suffix);
         }
 
@@ -177,7 +209,7 @@ impl SecretsCache {
         let mut current_dir = file_dir.to_path_buf();
         loop {
             let secrets_path = current_dir.join(&self.secrets_filename);
-            if secrets_path.exists() {
+            if fs_ops.file_exists(&secrets_path) {
                 return Ok(secrets_path);
             }
 
@@ -189,7 +221,19 @@ impl SecretsCache {
             // Move up one directory
             match current_dir.parent() {
                 Some(parent) => {
-                    current_dir = parent.to_path_buf();
+                    // Handle empty parent path (convert to "." for project root)
+                    let parent_path = if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    };
+
+                    // Check if we've already checked the project root
+                    if current_dir == Path::new(".") {
+                        break;
+                    }
+
+                    current_dir = parent_path.to_path_buf();
                 },
                 None => break,
             }
@@ -204,18 +248,46 @@ impl SecretsCache {
         ))
     }
 
-    /// Lookup a secret value by name
-    pub fn lookup_secret<P: AsRef<Path>>(
+    /// Find secrets file using the lookup hierarchy (uses standard filesystem operations)
+    /// Searches for: $filename{secrets_suffix}, {secrets_filename}, ../{secrets_filename}, up to git root
+    pub fn find_secrets_file<P: AsRef<Path>>(
+        &self,
+        file_path: P,
+        project_root: &Path,
+    ) -> Result<PathBuf> {
+        self.find_secrets_file_with_ops(file_path, project_root, &StdFileSystemOps)
+    }
+
+    /// Lookup a secret value by name with custom filesystem operations
+    pub fn lookup_secret_with_ops<P: AsRef<Path>, F: FileSystemOps>(
         &mut self,
         secret_name: &str,
         file_path: P,
         project_root: &Path,
+        fs_ops: &F,
     ) -> Result<String> {
-        // Find the secrets file
-        let secrets_file = self.find_secrets_file(file_path, project_root)?;
+        let file_path = file_path.as_ref();
 
-        // Load secrets from the file
-        let secrets = self.load_secrets_file(&secrets_file)?;
+        // Find the secrets file
+        let secrets_file = self.find_secrets_file_with_ops(file_path, project_root, fs_ops)?;
+
+        // Read and decrypt secrets file
+        let secrets_content = fs_ops.read_file(&secrets_file)?;
+        let secrets_str = String::from_utf8(secrets_content)?;
+
+        // Decrypt if needed
+        let decrypted = if secrets_str.trim().starts_with("⊠{") {
+            if let Some(ref key) = self.repository_key {
+                decrypt_from_base64(&secrets_str, key)?
+            } else {
+                return Err(anyhow!("Secrets file is encrypted but no repository key provided"));
+            }
+        } else {
+            secrets_str
+        };
+
+        // Parse secrets
+        let secrets = parse_secrets_content(&decrypted, &secrets_file)?;
 
         // Look up the secret
         secrets
@@ -229,6 +301,54 @@ impl SecretsCache {
                 )
             })
     }
+
+    /// Lookup a secret value by name (uses standard filesystem operations)
+    pub fn lookup_secret<P: AsRef<Path>>(
+        &mut self,
+        secret_name: &str,
+        file_path: P,
+        project_root: &Path,
+    ) -> Result<String> {
+        self.lookup_secret_with_ops(secret_name, file_path, project_root, &StdFileSystemOps)
+    }
+}
+
+/// Unified secret interpolation function that works with any filesystem operations
+///
+/// This replaces ⊲{secret_name} and <{secret_name} markers with actual values from .secrets files.
+/// Uses the FileSystemOps trait to support both normal filesystem and fd-based operations (for FUSE).
+///
+/// # Arguments
+/// * `content` - The content containing interpolation markers
+/// * `file_path` - Path to the file being processed (used to locate secrets files)
+/// * `project_root` - Project root directory
+/// * `secrets_cache` - SecretsCache for finding and loading secrets
+/// * `fs_ops` - Filesystem operations implementation
+///
+/// # Returns
+/// Content with secrets interpolated, or original markers if lookup fails
+pub fn interpolate_secrets<P: AsRef<Path>, F: FileSystemOps>(
+    content: &str,
+    file_path: P,
+    project_root: &Path,
+    secrets_cache: &mut SecretsCache,
+    fs_ops: &F,
+) -> Result<String> {
+    let file_path = file_path.as_ref();
+
+    let result = SECRETS_INTERPOLATION_REGEX.replace_all(content, |caps: &regex::Captures| {
+        let secret_name = &caps[1];
+
+        match secrets_cache.lookup_secret_with_ops(secret_name, file_path, project_root, fs_ops) {
+            Ok(value) => value,
+            Err(e) => {
+                eprintln!("Warning: Failed to lookup secret '{}': {}", secret_name, e);
+                caps[0].to_string() // Return original marker on error
+            }
+        }
+    });
+
+    Ok(result.to_string())
 }
 
 /// Decrypt secrets file content, handling encrypted marker

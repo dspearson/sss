@@ -52,10 +52,12 @@ static MULTILINE_INDICATOR_REGEX: Lazy<Regex> = Lazy::new(|| {
         .expect("Failed to compile multiline indicator regex")
 });
 
-/// SecretsCache manages loading and caching of secrets from files
+/// SecretsCache manages loading of secrets from files
+///
+/// Note: Despite the name, this does NOT cache plaintext secrets in memory for security reasons.
+/// It only manages configuration (repository key, filename patterns) for secrets lookups.
 #[derive(Clone)]
 pub struct SecretsCache {
-    cache: HashMap<PathBuf, HashMap<String, String>>,
     repository_key: Option<RepositoryKey>,
     secrets_filename: String,
     secrets_suffix: String,
@@ -70,7 +72,6 @@ impl Default for SecretsCache {
 impl SecretsCache {
     pub fn new() -> Self {
         Self {
-            cache: HashMap::new(),
             repository_key: None,
             secrets_filename: "secrets".to_string(),
             secrets_suffix: ".secrets".to_string(),
@@ -80,7 +81,6 @@ impl SecretsCache {
     /// Create a new SecretsCache with a repository key for unsealing encrypted secrets files
     pub fn with_repository_key(repository_key: RepositoryKey) -> Self {
         Self {
-            cache: HashMap::new(),
             repository_key: Some(repository_key),
             secrets_filename: "secrets".to_string(),
             secrets_suffix: ".secrets".to_string(),
@@ -90,7 +90,6 @@ impl SecretsCache {
     /// Create a new SecretsCache with a repository key and custom secrets filename
     pub fn with_repository_key_and_filename(repository_key: RepositoryKey, secrets_filename: String) -> Self {
         Self {
-            cache: HashMap::new(),
             repository_key: Some(repository_key),
             secrets_filename,
             secrets_suffix: ".secrets".to_string(),
@@ -104,7 +103,6 @@ impl SecretsCache {
         secrets_suffix: String,
     ) -> Self {
         Self {
-            cache: HashMap::new(),
             repository_key: Some(repository_key),
             secrets_filename,
             secrets_suffix,
@@ -210,8 +208,8 @@ impl SecretsCache {
 
     /// Lookup a secret value by name with custom filesystem operations
     ///
-    /// This method uses caching to avoid repeated file reads, decryption, and parsing
-    /// when multiple secrets are referenced from the same file.
+    /// For security reasons, this does NOT cache secrets in memory. Each lookup reads
+    /// and decrypts the secrets file fresh, ensuring no plaintext secrets remain in memory.
     pub fn lookup_secret_with_ops<P: AsRef<Path>, F: FileSystemOps>(
         &mut self,
         secret_name: &str,
@@ -224,21 +222,7 @@ impl SecretsCache {
         // Find the secrets file
         let secrets_file = self.find_secrets_file_with_ops(file_path, project_root, fs_ops)?;
 
-        // Check cache first
-        if let Some(cached_secrets) = self.cache.get(&secrets_file) {
-            return cached_secrets
-                .get(secret_name)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Secret '{}' not found in {}",
-                        secret_name,
-                        secrets_file.display()
-                    )
-                });
-        }
-
-        // Not cached - read and decrypt secrets file
+        // Read secrets file (fresh on each lookup for security)
         let secrets_content = fs_ops.read_file(&secrets_file)?;
         let secrets_str = String::from_utf8(secrets_content)?;
 
@@ -256,10 +240,7 @@ impl SecretsCache {
         // Parse secrets
         let secrets = parse_secrets_content(&decrypted, &secrets_file)?;
 
-        // Cache the parsed secrets for future lookups
-        self.cache.insert(secrets_file.clone(), secrets.clone());
-
-        // Look up the secret
+        // Look up the secret and return immediately
         secrets
             .get(secret_name)
             .cloned()

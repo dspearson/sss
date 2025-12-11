@@ -4,7 +4,6 @@
 //! refactoring, ensuring that:
 //! - FileSystemOps trait works correctly for both standard and fd-based operations
 //! - Secret interpolation is consistent between CLI and FUSE paths
-//! - Caching behavior works as expected
 //! - Marker detection is comprehensive
 //! - Configuration loading helpers work correctly
 
@@ -69,75 +68,6 @@ fn test_unified_interpolation_with_std_ops() -> Result<()> {
     )?;
 
     assert_eq!(result, "api: secret_key_123\ndb: secure_pass\n");
-
-    Ok(())
-}
-
-/// Test that caching prevents redundant file reads
-#[test]
-fn test_caching_prevents_redundant_reads() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
-
-    // Create a secrets file
-    let secrets_content = "secret1: value1\nsecret2: value2\nsecret3: value3\n";
-    let secrets_file = project_root.join("secrets");
-    fs::write(&secrets_file, secrets_content)?;
-
-    // Create test file
-    let test_file = project_root.join("test.txt");
-    fs::write(&test_file, "test")?;
-
-    // Create cache and lookup multiple secrets
-    let mut cache = SecretsCache::new();
-
-    // First lookup - will read file
-    let val1 = cache.lookup_secret("secret1", &test_file, project_root)?;
-    assert_eq!(val1, "value1");
-
-    // Modify the secrets file to verify cache is used
-    fs::write(&secrets_file, "secret1: MODIFIED\nsecret2: MODIFIED\n")?;
-
-    // Second lookup - should use cache, not read modified file
-    let val2 = cache.lookup_secret("secret2", &test_file, project_root)?;
-    assert_eq!(val2, "value2"); // Should be original value, not MODIFIED
-
-    // Third lookup - also from cache
-    let val3 = cache.lookup_secret("secret3", &test_file, project_root)?;
-    assert_eq!(val3, "value3");
-
-    Ok(())
-}
-
-/// Test that encrypted secrets are properly cached after decryption
-#[test]
-fn test_encrypted_secrets_caching() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let project_root = temp_dir.path();
-
-    let key = RepositoryKey::new();
-
-    // Create and encrypt secrets
-    let plaintext = "api_key: encrypted_value\ntoken: secret_token\n";
-    let encrypted = sss::crypto::encrypt_to_base64(plaintext, &key)?;
-    let sealed_content = format!("⊠{{{}}}", encrypted);
-
-    let secrets_file = project_root.join("secrets");
-    fs::write(&secrets_file, &sealed_content)?;
-
-    let test_file = project_root.join("test.txt");
-    fs::write(&test_file, "test")?;
-
-    // Create cache with key
-    let mut cache = SecretsCache::with_repository_key(key);
-
-    // First lookup - will decrypt
-    let val1 = cache.lookup_secret("api_key", &test_file, project_root)?;
-    assert_eq!(val1, "encrypted_value");
-
-    // Second lookup - should use cached decrypted version
-    let val2 = cache.lookup_secret("token", &test_file, project_root)?;
-    assert_eq!(val2, "secret_token");
 
     Ok(())
 }

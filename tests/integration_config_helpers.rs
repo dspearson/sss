@@ -23,27 +23,28 @@ fn test_load_project_config_current_dir() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
 
-    // Change to temp directory
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&temp_path)?;
-
     // Create a basic config
     let config = create_test_config()?;
     config.save_to_file(&temp_path.join(".sss.toml"))?;
 
+    // Save original directory
+    let original_dir = std::env::current_dir()?;
+
+    // Change to temp directory
+    std::env::set_current_dir(&temp_path)?;
+
     // Test loading
     let result = load_project_config();
+
+    // Always restore directory, even if test fails
+    std::env::set_current_dir(&original_dir).ok();
+
+    // Now check assertions
     assert!(result.is_ok());
 
     let (config_path, loaded_config) = result?;
     assert!(config_path.ends_with(".sss.toml"));
     assert_eq!(loaded_config.version, config.version);
-
-    // Restore directory
-    std::env::set_current_dir(original_dir)?;
-
-    // Keep temp_dir alive
-    drop(temp_dir);
 
     Ok(())
 }
@@ -60,19 +61,20 @@ fn test_load_project_config_searches_upward() -> Result<()> {
     let config = create_test_config()?;
     config.save_to_file(&temp_path.join(".sss.toml"))?;
 
-    // Change to subdirectory
+    // Save original directory
     let original_dir = std::env::current_dir()?;
+
+    // Change to subdirectory
     std::env::set_current_dir(&subdir)?;
 
     // Should find config in parent
     let result = load_project_config();
+
+    // Always restore directory, even if test fails
+    std::env::set_current_dir(&original_dir).ok();
+
+    // Now check test assertions
     assert!(result.is_ok());
-
-    // Restore directory
-    std::env::set_current_dir(original_dir)?;
-
-    // Keep temp_dir alive until end
-    drop(temp_dir);
 
     Ok(())
 }
@@ -83,12 +85,19 @@ fn test_load_project_config_no_config_error() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
 
-    // Change to temp directory without config
+    // Save original directory
     let original_dir = std::env::current_dir()?;
+
+    // Change to temp directory without config
     std::env::set_current_dir(&temp_path)?;
 
     // Should return error
     let result = load_project_config();
+
+    // Always restore directory, even if test fails
+    std::env::set_current_dir(&original_dir).ok();
+
+    // Now check assertions
     assert!(result.is_err());
 
     let err_msg = result.unwrap_err().to_string();
@@ -98,12 +107,6 @@ fn test_load_project_config_no_config_error() -> Result<()> {
         "Error message: {}",
         err_msg
     );
-
-    // Restore directory
-    std::env::set_current_dir(original_dir)?;
-
-    // Keep temp_dir alive
-    drop(temp_dir);
 
     Ok(())
 }

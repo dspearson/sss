@@ -1,6 +1,4 @@
 use anyhow::{anyhow, Result};
-use once_cell::sync::Lazy;
-use regex::Regex;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -13,12 +11,7 @@ use parking_lot::RwLock;
 
 use crate::constants::{MAX_FILE_SIZE, MAX_MARKER_CONTENT_SIZE};
 use crate::crypto::{decrypt_from_base64, encrypt_to_base64, encrypt_to_base64_deterministic, RepositoryKey};
-use crate::secrets::SecretsCache;
-
-// Pre-compiled regex patterns for secrets interpolation only
-// (marker parsing now uses brace-counting for nested support)
-static SECRETS_INTERPOLATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
+use crate::secrets::{interpolate_secrets, SecretsCache, StdFileSystemOps};
 
 // Marker match structure for brace-counting parser
 #[derive(Debug, Clone)]
@@ -156,18 +149,6 @@ impl Processor {
         }
     }
 
-    /// Helper to look up secret from cache (handles RefCell vs RwLock)
-    fn lookup_secret_from_cache(&self, secret_name: &str, file_path: &Path, project_root: &Path) -> Result<String> {
-        #[cfg(not(feature = "ninep"))]
-        {
-            self.secrets_cache.borrow_mut().lookup_secret(secret_name, file_path, project_root)
-        }
-        #[cfg(feature = "ninep")]
-        {
-            self.secrets_cache.write().lookup_secret(secret_name, file_path, project_root)
-        }
-    }
-
     /// Helper to handle encryption errors with consistent warning
     fn handle_encrypt_error(&self, error: &anyhow::Error, original: &str) -> String {
         eprintln!("Warning: Failed to encrypt plaintext: {}", error);
@@ -215,7 +196,7 @@ impl Processor {
         Ok(format!("./{}", relative.to_string_lossy().replace('\\', "/")))
     }
 
-    /// Interpolate secrets: replace ⊲{secret} or ⊲{secret} with values from secrets file
+    /// Interpolate secrets: replace ⊲{secret} or <{secret} with values from secrets file
     fn interpolate_secrets(&self, content: &str, file_path: &Path) -> Result<String> {
         // If no project root is set, try to find it
         let project_root = if let Some(ref root) = self.project_root {
@@ -224,19 +205,29 @@ impl Processor {
             crate::config::find_project_root()?
         };
 
-        let result = SECRETS_INTERPOLATION_REGEX.replace_all(content, |caps: &regex::Captures| {
-            let secret_name = &caps[1];
-
-            match self.lookup_secret_from_cache(secret_name, file_path, &project_root) {
-                Ok(value) => value,
-                Err(e) => {
-                    eprintln!("Warning: Failed to lookup secret '{}': {}", secret_name, e);
-                    caps[0].to_string() // Return original marker on error
-                }
-            }
-        });
-
-        Ok(result.to_string())
+        // Use unified interpolation with standard filesystem ops
+        #[cfg(not(feature = "ninep"))]
+        {
+            let mut secrets_cache = self.secrets_cache.borrow_mut();
+            interpolate_secrets(
+                content,
+                file_path,
+                &project_root,
+                &mut *secrets_cache,
+                &StdFileSystemOps,
+            )
+        }
+        #[cfg(feature = "ninep")]
+        {
+            let mut secrets_cache = self.secrets_cache.write();
+            interpolate_secrets(
+                content,
+                file_path,
+                &project_root,
+                &mut *secrets_cache,
+                &StdFileSystemOps,
+            )
+        }
     }
 
     pub fn new(repository_key: RepositoryKey) -> Result<Self> {

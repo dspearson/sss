@@ -828,11 +828,8 @@ impl SssFS {
 
         // Check if file has markers by scanning raw bytes for UTF-8 marker sequences
         // This avoids String conversion for files without markers (preserves exact bytes)
-        let has_markers = bytes.windows(2).any(|w| {
-            matches!(w, b"\xe2\x8a" | b"[*" | b"o+" | b"<{")  // ⊠, ⊕, ⊲, [*, o+, <{
-        });
-
-        if !has_markers {
+        use crate::filesystem_common::has_any_markers_bytes;
+        if !has_any_markers_bytes(&bytes) {
             // No markers present, return raw bytes unchanged to preserve exact file content
             return Ok(bytes);
         }

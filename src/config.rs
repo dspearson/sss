@@ -56,6 +56,74 @@ pub fn get_project_config_path_from(start_dir: &Path) -> Result<PathBuf> {
     Ok(project_root.join(DEFAULT_CONFIG_FILE))
 }
 
+/// Load project configuration with consistent error handling
+///
+/// This is a convenience function that combines getting the config path
+/// and loading the configuration with standardized error messages.
+///
+/// # Returns
+///
+/// Returns a tuple of (config_path, config) for commands that need both.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - No .sss.toml is found in current or parent directories
+/// - The config file cannot be loaded or parsed
+///
+/// # Examples
+///
+/// ```no_run
+/// use sss::config::load_project_config;
+///
+/// let (config_path, config) = load_project_config()?;
+/// println!("Loaded config from: {}", config_path.display());
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn load_project_config() -> Result<(PathBuf, ProjectConfig)> {
+    let config_path = get_project_config_path()?;
+    let config = ProjectConfig::load_from_file(&config_path).map_err(|e| {
+        anyhow!(
+            "Failed to load SSS project configuration.\n\
+             Config file: {}\n\
+             Error: {}\n\n\
+             Run 'sss init' to create a new project.",
+            config_path.display(),
+            e
+        )
+    })?;
+    Ok((config_path, config))
+}
+
+/// Load project configuration from a specific directory
+///
+/// Like `load_project_config()` but starts searching from a specific directory.
+///
+/// # Examples
+///
+/// ```no_run
+/// use sss::config::load_project_config_from;
+/// use std::path::Path;
+///
+/// let source_dir = Path::new("/path/to/project");
+/// let (config_path, config) = load_project_config_from(source_dir)?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn load_project_config_from(start_dir: &Path) -> Result<(PathBuf, ProjectConfig)> {
+    let config_path = get_project_config_path_from(start_dir)?;
+    let config = ProjectConfig::load_from_file(&config_path).map_err(|e| {
+        anyhow!(
+            "Failed to load SSS project configuration.\n\
+             Config file: {}\n\
+             Error: {}\n\n\
+             Run 'sss init' to create a new project.",
+            config_path.display(),
+            e
+        )
+    })?;
+    Ok((config_path, config))
+}
+
 /// Check if a config file exists and determine its format
 pub fn detect_config_format<P: AsRef<Path>>(config_path: P) -> Result<ConfigFormat> {
     if !config_path.as_ref().exists() {

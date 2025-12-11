@@ -278,7 +278,7 @@ impl SecretsCache {
         // Decrypt if needed
         let decrypted = if secrets_str.trim().starts_with("⊠{") {
             if let Some(ref key) = self.repository_key {
-                decrypt_from_base64(&secrets_str, key)?
+                decrypt_secrets_content(&secrets_str, key)?
             } else {
                 return Err(anyhow!("Secrets file is encrypted but no repository key provided"));
             }

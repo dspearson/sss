@@ -121,56 +121,6 @@ impl SecretsCache {
         self.secrets_suffix = suffix;
     }
 
-    /// Load secrets from a file and cache them
-    /// If the file is sealed (encrypted), it will be temporarily unsealed in memory
-    fn load_secrets_file<P: AsRef<Path>>(&mut self, path: P) -> Result<&HashMap<String, String>> {
-        let path = path.as_ref().to_path_buf();
-
-        // Check if already cached
-        if self.cache.contains_key(&path) {
-            return Ok(self.cache.get(&path).unwrap());
-        }
-
-        // Load and parse the secrets file
-        let secrets = self.parse_secrets_file_with_unseal(&path)?;
-        self.cache.insert(path.clone(), secrets);
-        Ok(self.cache.get(&path).unwrap())
-    }
-
-    /// Parse secrets file, automatically unsealing if encrypted
-    fn parse_secrets_file_with_unseal<P: AsRef<Path>>(&self, path: P) -> Result<HashMap<String, String>> {
-        let path = path.as_ref();
-        let content = fs::read_to_string(path)
-            .map_err(|e| anyhow!("Failed to read secrets file {}: {}", path.display(), e))?;
-
-        // Check if content looks encrypted - starts with ⊠{
-        let looks_encrypted = content.trim().starts_with("⊠{");
-
-        if looks_encrypted {
-            // Try to unseal it
-            if let Some(ref key) = self.repository_key {
-                match decrypt_secrets_content(content.trim(), key) {
-                    Ok(decrypted) => {
-                        // Parse the decrypted content
-                        return parse_secrets_content(&decrypted, path);
-                    }
-                    Err(_) => {
-                        // Decryption failed, try parsing as-is
-                        return parse_secrets_content(&content, path);
-                    }
-                }
-            } else {
-                return Err(anyhow!(
-                    "Secrets file {} appears to be encrypted but no repository key available for unsealing",
-                    path.display()
-                ));
-            }
-        }
-
-        // Not encrypted, parse directly
-        parse_secrets_content(&content, path)
-    }
-
     /// Find secrets file using the lookup hierarchy with generic filesystem operations
     /// Searches for: $filename{secrets_suffix}, {secrets_filename}, ../{secrets_filename}, up to git root
     pub fn find_secrets_file_with_ops<P: AsRef<Path>, F: FileSystemOps>(
@@ -259,6 +209,9 @@ impl SecretsCache {
     }
 
     /// Lookup a secret value by name with custom filesystem operations
+    ///
+    /// This method uses caching to avoid repeated file reads, decryption, and parsing
+    /// when multiple secrets are referenced from the same file.
     pub fn lookup_secret_with_ops<P: AsRef<Path>, F: FileSystemOps>(
         &mut self,
         secret_name: &str,
@@ -271,7 +224,21 @@ impl SecretsCache {
         // Find the secrets file
         let secrets_file = self.find_secrets_file_with_ops(file_path, project_root, fs_ops)?;
 
-        // Read and decrypt secrets file
+        // Check cache first
+        if let Some(cached_secrets) = self.cache.get(&secrets_file) {
+            return cached_secrets
+                .get(secret_name)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Secret '{}' not found in {}",
+                        secret_name,
+                        secrets_file.display()
+                    )
+                });
+        }
+
+        // Not cached - read and decrypt secrets file
         let secrets_content = fs_ops.read_file(&secrets_file)?;
         let secrets_str = String::from_utf8(secrets_content)?;
 
@@ -288,6 +255,9 @@ impl SecretsCache {
 
         // Parse secrets
         let secrets = parse_secrets_content(&decrypted, &secrets_file)?;
+
+        // Cache the parsed secrets for future lookups
+        self.cache.insert(secrets_file.clone(), secrets.clone());
 
         // Look up the secret
         secrets
@@ -685,15 +655,20 @@ trailing_spaces: value with trailing
         let secrets_file = project_root.join("secrets");
         std::fs::write(&secrets_file, &sealed_content).unwrap();
 
+        // Create test file that will reference secrets
+        let test_file = project_root.join("config.txt");
+        std::fs::write(&test_file, "test").unwrap();
+
         // Create a secrets cache with the repository key
         let mut cache = SecretsCache::with_repository_key(key);
 
-        // Try to load the sealed secrets file - should automatically unseal
-        let secrets = cache.load_secrets_file(&secrets_file).unwrap();
+        // Try to lookup secrets - should automatically unseal and cache
+        let api_key = cache.lookup_secret("api_key", &test_file, project_root).unwrap();
+        assert_eq!(api_key, "my_secret");
 
-        // Should have decrypted and parsed the secrets
-        assert_eq!(secrets.get("api_key").unwrap(), "my_secret");
-        assert_eq!(secrets.get("password").unwrap(), "secure123");
+        // Second lookup should use cache (test caching works)
+        let password = cache.lookup_secret("password", &test_file, project_root).unwrap();
+        assert_eq!(password, "secure123");
     }
 
     #[test]

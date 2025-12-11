@@ -83,7 +83,7 @@ impl DerivedKey {
             let ret = sodium::crypto_pwhash(
                 key.as_mut_ptr(),                          // output key
                 KEY_SIZE as u64,                           // key length
-                passphrase.as_ptr() as *const i8,          // passphrase
+                passphrase.as_ptr() as *const libc::c_char, // passphrase
                 passphrase.len() as u64,                   // passphrase length
                 salt.0.as_ptr(),                           // salt
                 params.ops_limit,                          // ops limit (from params)

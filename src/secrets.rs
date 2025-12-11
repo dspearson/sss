@@ -149,8 +149,16 @@ impl SecretsCache {
     ) -> Result<PathBuf> {
         let file_path = file_path.as_ref();
 
+        // Resolve file_path relative to project_root
+        // If file_path is absolute, use it as-is. Otherwise, join with project_root.
+        let resolved_file_path = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            project_root.join(file_path)
+        };
+
         // Get the directory containing the file
-        let file_dir = file_path
+        let file_dir = resolved_file_path
             .parent()
             .ok_or_else(|| anyhow!("Cannot determine parent directory"))?;
 
@@ -158,7 +166,7 @@ impl SecretsCache {
         // E.g., if file is "config.yaml" and suffix is ".sealed", look for "config.yaml.sealed"
         let filename_with_suffix = PathBuf::from(format!(
             "{}{}",
-            file_path.display(),
+            resolved_file_path.display(),
             self.secrets_suffix
         ));
         if filename_with_suffix.exists() {
@@ -180,7 +188,9 @@ impl SecretsCache {
 
             // Move up one directory
             match current_dir.parent() {
-                Some(parent) => current_dir = parent.to_path_buf(),
+                Some(parent) => {
+                    current_dir = parent.to_path_buf();
+                },
                 None => break,
             }
         }
@@ -242,7 +252,7 @@ fn decrypt_secrets_content(content: &str, key: &RepositoryKey) -> Result<String>
 /// - Multi-line:  name: |
 ///                  line1
 ///                  line2
-fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<String, String>> {
+pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<String, String>> {
     let mut secrets = HashMap::new();
     let lines: Vec<&str> = content.lines().collect();
     let mut i = 0;

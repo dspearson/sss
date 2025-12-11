@@ -289,6 +289,37 @@ pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
     process_file_or_stdin(sub_matches, "render")
 }
 
+/// Build a GlobSet from ignore patterns in the project config
+/// Returns None if no patterns are configured or if building fails
+fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globset::GlobSet> {
+    use globset::{Glob, GlobSetBuilder};
+
+    let patterns = config.parse_ignore_patterns();
+    if patterns.is_empty() {
+        return None;
+    }
+
+    let mut builder = GlobSetBuilder::new();
+    for pattern in patterns {
+        match Glob::new(&pattern) {
+            Ok(glob) => {
+                builder.add(glob);
+            }
+            Err(e) => {
+                eprintln!("Warning: Invalid ignore pattern '{}': {}", pattern, e);
+            }
+        }
+    }
+
+    match builder.build() {
+        Ok(globset) => Some(globset),
+        Err(e) => {
+            eprintln!("Warning: Failed to build ignore pattern matcher: {}", e);
+            None
+        }
+    }
+}
+
 /// Recursively process all files in the project with the given operation
 /// IMPORTANT: Does not follow symlinks outside the project boundary
 fn process_project_recursively(operation: &str) -> Result<()> {
@@ -334,7 +365,10 @@ fn process_project_recursively(operation: &str) -> Result<()> {
         .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;
 
     // Load project config and processor
-    let (_config, processor, _) = utils::create_processor_from_project_config()?;
+    let (config, processor, _) = utils::create_processor_from_project_config()?;
+
+    // Build the ignore pattern matcher from project config
+    let ignore_globset = build_ignore_globset(&config);
 
     let mut processed_count = 0;
     let mut error_count = 0;
@@ -361,6 +395,16 @@ fn process_project_recursively(operation: &str) -> Result<()> {
             if e.file_type().is_dir() {
                 let skip_dirs = ["target", "node_modules", ".git", "dist", "build"];
                 return !skip_dirs.contains(&name.as_ref());
+            }
+
+            // Check against ignore patterns from project config
+            if let Some(ref globset) = ignore_globset {
+                // Get path relative to project root for matching
+                if let Ok(rel_path) = e.path().strip_prefix(&project_root) {
+                    if globset.is_match(rel_path) {
+                        return false;
+                    }
+                }
             }
 
             true
@@ -458,9 +502,9 @@ fn process_file_in_place(path: &Path, processor: &crate::processor::core::Proces
     let original_content = fs::read_to_string(path)?;
 
     let processed_content = match operation {
-        "seal" => processor.encrypt_content(&original_content)?,
-        "open" => processor.decrypt_content(&original_content)?,
-        "render" => processor.decrypt_to_raw(&original_content)?,
+        "seal" => processor.seal_content_with_path(&original_content, path)?,
+        "open" => processor.open_content_with_path(&original_content, path)?,
+        "render" => processor.decrypt_to_raw_with_path(&original_content, path)?,
         _ => return Err(anyhow!("Unknown operation: {}", operation)),
     };
 

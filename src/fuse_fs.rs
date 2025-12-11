@@ -735,6 +735,27 @@ impl SssFS {
         }
     }
 
+    /// Check if a file exists using source_fd (works even if mounted over source)
+    fn file_exists_via_fd(&self, rel_path: &Path) -> bool {
+        let path_bytes = rel_path.as_os_str().as_bytes();
+        let path_cstr = match std::ffi::CString::new(path_bytes) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+
+        // Use faccessat to check if file exists without deadlocking
+        let result = unsafe {
+            libc::faccessat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                libc::F_OK,  // Check for existence
+                0,
+            )
+        };
+
+        result == 0
+    }
+
     /// Read file using source_fd (works even if mounted over source)
     fn read_file_via_fd(&self, rel_path: &Path) -> Result<Vec<u8>> {
         // On macOS, openat can deadlock from FUSE handlers
@@ -777,7 +798,7 @@ impl SssFS {
     /// Reduces duplication across read_and_render, read_and_open, and read_sealed
     fn read_and_process<F>(&self, path: &Path, process_fn: F) -> Result<Vec<u8>>
     where
-        F: FnOnce(&Self, String) -> Result<String>,
+        F: FnOnce(&Self, String, &Path) -> Result<String>,
     {
         // Get relative path from source root
         let rel_path = path.strip_prefix(&self.source_path)
@@ -795,18 +816,118 @@ impl SssFS {
             }
         };
 
-        // Apply processing function
-        let processed = process_fn(self, content)?;
+        // Apply processing function with relative path for proper secrets resolution
+        let processed = process_fn(self, content, rel_path)?;
         Ok(processed.into_bytes())
     }
 
+    /// Interpolate secrets using fd-based operations (avoids FUSE deadlock)
+    fn interpolate_secrets_via_fd(&self, content: &str, rel_path: &Path) -> Result<String> {
+        use regex::Regex;
+        use once_cell::sync::Lazy;
+
+        static SECRETS_REGEX: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").unwrap());
+
+        let result = SECRETS_REGEX.replace_all(content, |caps: &regex::Captures| {
+            let secret_name = &caps[1];
+
+            match self.lookup_secret_via_fd(secret_name, rel_path) {
+                Ok(value) => value,
+                Err(_) => caps[0].to_string()
+            }
+        });
+
+        Ok(result.to_string())
+    }
+
+    /// Lookup a secret using fd-based operations (avoids FUSE deadlock)
+    fn lookup_secret_via_fd(&self, secret_name: &str, file_rel_path: &Path) -> Result<String> {
+        // Find secrets file using fd-based operations
+        let secrets_file = self.find_secrets_file_via_fd(file_rel_path)?;
+
+        // Read secrets file content
+        let secrets_content = self.read_file_via_fd(&secrets_file)?;
+        let secrets_str = String::from_utf8(secrets_content)?;
+
+        // Use the processor's built-in secrets parsing (handles encryption, multi-line values, etc.)
+        // We need to decrypt AND remove all markers if it's encrypted
+        let decrypted = if secrets_str.trim().starts_with("⊠{") {
+            // Use decrypt_to_raw to fully remove markers, not just convert ⊠{} → ⊕{}
+            self.processor.decrypt_to_raw(&secrets_str)?
+        } else {
+            secrets_str
+        };
+
+        // Parse using the robust parser from secrets.rs
+        use crate::secrets::parse_secrets_content;
+        // Need to convert relative path to absolute for parse_secrets_content
+        let secrets_abs_path = self.source_path.join(&secrets_file);
+        let secrets = parse_secrets_content(&decrypted, &secrets_abs_path)?;
+
+        secrets.get(secret_name)
+            .cloned()
+            .ok_or_else(|| anyhow!("Secret '{}' not found in {:?}", secret_name, secrets_file))
+    }
+
+    /// Find secrets file using fd-based operations (matches behavior of SecretsCache::find_secrets_file)
+    fn find_secrets_file_via_fd(&self, file_rel_path: &Path) -> Result<PathBuf> {
+        let file_dir = file_rel_path.parent()
+            .ok_or_else(|| anyhow!("Cannot determine parent directory"))?;
+
+        // Strategy 1: Look for $filename.secrets in same directory
+        let filename_with_suffix = PathBuf::from(format!("{}.secrets", file_rel_path.display()));
+        if self.file_exists_via_fd(&filename_with_suffix) {
+            return Ok(filename_with_suffix);
+        }
+
+        // Strategy 2: Search for 'secrets' file upward to project root
+        // Start from file's directory and search upward
+        let mut current_dir = file_dir.to_path_buf();
+
+        loop {
+            let secrets_path = current_dir.join("secrets");
+            if self.file_exists_via_fd(&secrets_path) {
+                return Ok(secrets_path);
+            }
+
+            // Move up one directory
+            match current_dir.parent() {
+                Some(parent) => {
+                    // Parent of "subdir" is "", convert to "." for project root
+                    let parent_path = if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    };
+
+                    // Check if we've already checked the project root
+                    if current_dir == Path::new(".") {
+                        break;
+                    }
+
+                    current_dir = parent_path.to_path_buf();
+                },
+                None => break,
+            }
+        }
+
+        Err(anyhow!(
+            "No secrets file found for {:?}. Searched: {}.secrets and 'secrets' up to project root.",
+            file_rel_path,
+            file_rel_path.display()
+        ))
+    }
+
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
-        self.read_and_process(path, |fs, content| {
+        self.read_and_process(path, |fs, content, rel_path| {
             // Process if file has any markers (sealed or opened)
             if has_any_markers(&content) {
-                // Decrypt and render (remove all markers)
-                // decrypt_to_raw handles both sealed (⊠{}) and opened (⊕{}, o+{}) markers
-                fs.processor.decrypt_to_raw(&content)
+                // First, interpolate secrets using fd-based operations (avoids deadlock)
+                let content_with_secrets = fs.interpolate_secrets_via_fd(&content, rel_path)?;
+
+                // Then decrypt and remove all markers
+                fs.processor.decrypt_to_raw(&content_with_secrets)
             } else {
                 // Return as-is for non-marked files
                 Ok(content)
@@ -816,7 +937,7 @@ impl SssFS {
 
     /// Read and open a file (decrypt ⊠{} → ⊕{} but keep markers for ssse edit)
     fn read_and_open(&self, path: &Path) -> Result<Vec<u8>> {
-        self.read_and_process(path, |fs, content| {
+        self.read_and_process(path, |fs, content, _rel_path| {
             // Only process if file has encrypted markers
             if has_encrypted_markers(&content) {
                 // Decrypt to opened form (⊠{} → ⊕{})

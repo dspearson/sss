@@ -53,6 +53,12 @@ pub struct ProjectConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secrets_suffix: Option<String>,
 
+    /// Gitignore-style patterns for files to ignore in project-wide operations
+    /// Multiple patterns separated by spaces or commas
+    /// Example: "*.log build/ temp*.txt"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore: Option<String>,
+
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -76,6 +82,7 @@ impl Default for ProjectConfig {
             rotation: RotationMetadata::default(),
             secrets_filename: None,
             secrets_suffix: None,
+            ignore: None,
             key: None,
         }
     }
@@ -141,6 +148,7 @@ impl ProjectConfig {
             rotation: RotationMetadata::default(),
             secrets_filename: None,
             secrets_suffix: None,
+            ignore: None,
             key: None,
         })
     }
@@ -338,6 +346,36 @@ impl ProjectConfig {
     /// Clear the secrets filename (use default)
     pub fn clear_secrets_filename(&mut self) {
         self.secrets_filename = None;
+    }
+
+    /// Get the ignore patterns as a single string
+    pub fn get_ignore_patterns(&self) -> Option<&str> {
+        self.ignore.as_deref()
+    }
+
+    /// Parse ignore patterns into a vector of individual patterns
+    /// Splits on whitespace and commas, filters out empty strings
+    pub fn parse_ignore_patterns(&self) -> Vec<String> {
+        self.ignore
+            .as_ref()
+            .map(|patterns| {
+                patterns
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Set the ignore patterns (gitignore-style, space or comma separated)
+    pub fn set_ignore_patterns(&mut self, patterns: String) {
+        self.ignore = Some(patterns);
+    }
+
+    /// Clear the ignore patterns
+    pub fn clear_ignore_patterns(&mut self) {
+        self.ignore = None;
     }
 }
 

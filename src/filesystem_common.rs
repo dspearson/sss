@@ -19,13 +19,15 @@ pub fn has_encrypted_markers(content: &str) -> bool {
     content.contains("⊠{")
 }
 
-/// Check if content contains any SSS markers (encrypted OR plaintext)
+/// Check if content contains any SSS markers (encrypted, plaintext, OR interpolation)
 ///
 /// This checks for all marker types:
 /// - `⊠{}` - Sealed/encrypted markers
 /// - `⊕{}` - Opened/plaintext markers (canonical form)
 /// - `o+{}` - Opened/plaintext markers (ASCII alternative)
 /// - `[*{}` - Legacy marker syntax
+/// - `⊲{}` - Interpolation markers (secrets references)
+/// - `<{}` - Alternative interpolation marker syntax
 ///
 /// # Examples
 ///
@@ -35,6 +37,7 @@ pub fn has_encrypted_markers(content: &str) -> bool {
 /// assert!(has_any_markers("⊠{encrypted}"));
 /// assert!(has_any_markers("⊕{plaintext}"));
 /// assert!(has_any_markers("o+{plaintext}"));
+/// assert!(has_any_markers("⊲{secret_ref}"));
 /// assert!(!has_any_markers("No markers here"));
 /// ```
 pub fn has_any_markers(content: &str) -> bool {
@@ -42,6 +45,8 @@ pub fn has_any_markers(content: &str) -> bool {
         || content.contains("⊕{")
         || content.contains("[*{")
         || content.contains("o+{")
+        || content.contains("⊲{")  // Interpolation markers
+        || content.contains("<{")   // Alternative interpolation marker syntax
 }
 
 #[cfg(test)]
@@ -62,6 +67,8 @@ mod tests {
         assert!(has_any_markers("⊕{opened}"));
         assert!(has_any_markers("o+{ascii}"));
         assert!(has_any_markers("[*{legacy}"));
+        assert!(has_any_markers("⊲{interpolation}"));
+        assert!(has_any_markers("<{interpolation}"));
         assert!(!has_any_markers("No markers"));
     }
 

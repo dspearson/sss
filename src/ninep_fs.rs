@@ -196,7 +196,8 @@ impl SssNinepFS {
         // Only process if file has encrypted markers
         if has_encrypted_markers(&content) {
             let processor = self.processor.read().await;
-            let rendered = processor.decrypt_to_raw(&content)?;
+            // Use decrypt_to_raw_with_path for secrets interpolation
+            let rendered = processor.decrypt_to_raw_with_path(&content, path)?;
             Ok(rendered.into_bytes())
         } else {
             Ok(content.into_bytes())
@@ -525,10 +526,10 @@ impl Filesystem for SssNinepFS {
                             .unwrap_or(buf)
                     }
                     FileMode::Rendered => {
-                        // Fully decrypt and render
+                        // Fully decrypt and render with secrets interpolation
                         let processor = self.processor.read().await;
                         processor
-                            .decrypt_to_raw(&content_str)
+                            .decrypt_to_raw_with_path(&content_str, &path)
                             .map(|s| s.into_bytes())
                             .unwrap_or(buf)
                     }

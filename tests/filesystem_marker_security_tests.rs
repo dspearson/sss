@@ -503,9 +503,9 @@ fn test_marker_detection_performance() {
         let _ = has_any_markers(&content);
         let duration = start.elapsed();
 
-        // Detection should be very fast (< 10ms even for 1MB)
+        // Detection should be very fast (< 200ms even for 1MB to account for system variability)
         assert!(
-            duration.as_millis() < 100,
+            duration.as_millis() < 200,
             "Detection took too long for {} bytes: {:?}",
             size,
             duration

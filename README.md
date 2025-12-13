@@ -1,468 +1,272 @@
 # sss - Secret String Substitution
 
-sss is a command-line tool for transparent encryption and decryption of text within files using XChaCha20-Poly1305 with a modern multi-user architecture. It enables seamless protection of sensitive data embedded in configuration files, scripts, and other text documents.
+Transparent encryption of secrets within files using XChaCha20-Poly1305, with multi-user key management and git integration.
 
 ## Features
 
-- **Transparent Encryption**: Mark secrets with simple patterns (`⊕{secret}` or `o+{secret}`)
-- **Multi-User Architecture**: Asymmetric + symmetric hybrid encryption for team collaboration
-- **Git Integration**: Automatic hooks for seal/open/render operations
-- **Key Rotation**: Re-encrypt all project files with a new key
-- **FUSE Filesystem**: Mount projects with transparent rendering (Linux only, optional)
-- **9P Server**: Cross-platform network-transparent file access (optional)
-- **Smart Merge**: Preserves encryption markers when editing rendered files
-- **Deterministic Encryption**: Clean git diffs with BLAKE2b-derived nonces
-- **Comprehensive Security**: XChaCha20-Poly1305, Argon2id, Ed25519, zeroization
+- **Marker-based encryption** — wrap secrets with `⊕{secret}` or `o+{secret}`; sss seals them in-place
+- **Multi-user architecture** — hybrid X25519 + XChaCha20-Poly1305 encryption; each user holds their own keypair
+- **Git integration** — pre-commit, post-merge, and post-checkout hooks maintain sealed state automatically
+- **Key derivation** — Argon2id with configurable security levels (sensitive / moderate / interactive)
+- **Deterministic nonces** — BLAKE2b-derived nonces produce clean git diffs
+- **Marker inference** — intelligent marker preservation when editing rendered files
+- **Secrets files** — interpolation from `.secrets` files with YAML-style multi-line values
+- **System keyring** — native OS credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
+- **Emacs integration** — `sss-mode` provides transparent decrypt-on-open and re-seal-on-save
+- **FUSE filesystem** — mount a project with transparent rendering (Linux/macOS, optional)
+- **9P server** — network-transparent file access (optional)
+- **Agent daemon** — key caching with policy-based access control (experimental)
 
-## Quick Start
+## Installation
 
-### Installation
-
-#### Build from Source
+### Build from Source
 
 ```bash
 git clone <repository-url>
 cd sss
 cargo build --release
+# Binaries are in target/release/
 ```
 
-#### Optional Features
+### Optional Features
 
-Build with FUSE support (Linux only):
+Build with FUSE support (Linux/macOS):
+
 ```bash
-# Install libfuse3 development libraries
-sudo apt-get install libfuse3-dev fuse3  # Debian/Ubuntu
-sudo dnf install fuse3-devel fuse3       # Fedora/RHEL
+# Debian/Ubuntu
+sudo apt-get install libfuse3-dev fuse3
+# Fedora/RHEL
+sudo dnf install fuse3-devel fuse3
+# macOS: install macFUSE from https://osxfuse.github.io/
 
-# Build with FUSE
 cargo build --features fuse --release
 ```
 
-Build with 9P server support (cross-platform):
+Build with 9P server support:
+
 ```bash
 cargo build --features ninep --release
 ```
 
-### Basic Usage
+### Pre-built Packages
 
-1. **Generate a keypair**:
+Pre-built packages are available via build scripts:
+
+- **Debian/Ubuntu** — `debian/build-deb.sh`
+- **RHEL/CentOS** — `rpm-build/build-rpm.sh`
+- **Alpine/musl** — `Dockerfile.alpine`
+
+See [docs/INSTALLATION.md](docs/INSTALLATION.md) for platform-specific instructions including macOS cross-compilation.
+
+## Quick Start
+
+1. **Generate a keypair**
+
    ```bash
    sss keys generate
-   # Creates a new keypair encrypted with your passphrase
    ```
 
-2. **Initialize a new project**:
+   You will be prompted for a passphrase to protect your private key.
+
+2. **Initialise a project**
+
    ```bash
-   sss init
+   sss init alice
    ```
 
-3. **Encrypt sensitive data in a file**:
+   This creates `.sss.toml` in the current directory and adds you as the first user.
+
+3. **Mark secrets in a file**
+
    ```bash
-   # Mark sensitive data with ⊕{content} or o+{content}
    echo "password=⊕{my-secret-password}" > config.txt
+   ```
 
-   # Encrypt marked content
-   sss seal config.txt > config.encrypted.txt
-   # Or encrypt in-place
+4. **Seal the file**
+
+   ```bash
    sss seal -x config.txt
+   # config.txt now contains: password=⊠{base64-ciphertext}
    ```
 
-4. **Decrypt for viewing**:
-   ```bash
-   sss open config.encrypted.txt
-   ```
+5. **Open the file**
 
-5. **Edit files with automatic encryption/decryption**:
    ```bash
-   sss edit config.encrypted.txt
+   sss open config.txt
+   # Outputs: password=⊕{my-secret-password}
    ```
 
 ## String Patterns
 
-- **Plaintext markers**:
-  - `⊕{content}` - UTF-8 marker (default output)
-  - `o+{content}` - ASCII alternative for compatibility
-- **Ciphertext marker**: `⊠{content}` - Indicates encrypted content (always UTF-8)
+| Marker | Type | Description |
+|--------|------|-------------|
+| `⊕{content}` | Plaintext | UTF-8 marker (U+2295) |
+| `o+{content}` | Plaintext | ASCII alternative |
+| `⊠{content}` | Ciphertext | Sealed form (U+22A0), always UTF-8 |
 
-## Multi-User Architecture
+The `⊕` and `o+` forms are interchangeable on input. After sealing, all markers become `⊠{…}`.
 
-### Team Collaboration Workflow
-
-1. **Project Owner** initializes project:
-   ```bash
-   sss init alice
-   # Creates project with alice as initial user
-   ```
-
-2. **Add team members**:
-   ```bash
-   # Bob generates his keypair
-   sss keys generate
-   sss keys pubkey > bob-pubkey.txt
-
-   # Alice adds Bob to the project
-   sss project users add bob bob-pubkey.txt
-   ```
-
-3. **Team members can now access files**:
-   ```bash
-   # Bob can encrypt/decrypt using his private key
-   sss seal --user bob secrets.txt
-   sss open --user bob secrets.txt
-   ```
+See [docs/marker-format.md](docs/marker-format.md) for the complete syntax reference including BNF grammar and ciphertext payload layout.
 
 ## Core Commands
 
 ### File Operations
 
 ```bash
-# Process individual files
-sss seal <file>                    # Encrypt plaintext markers (outputs to stdout)
-sss seal -x <file>                 # Encrypt in-place
-sss open <file>                    # Decrypt to plaintext markers (outputs to stdout)
-sss open -x <file>                 # Decrypt in-place
-sss render <file>                  # Decrypt and strip markers (outputs to stdout)
-sss render -x <file>               # Decrypt to plain text in-place
-sss edit <file>                    # Edit with auto-encrypt/decrypt (always in-place)
-
-# Process entire project (requires permissions)
-sss seal --project                 # Seal all files in project
-sss open --project                 # Open all files (requires permission)
-sss render --project               # Render all files (requires permission)
-
-# All commands support stdin with '-'
-echo "⊕{secret}" | sss seal -
+sss seal <file>          # Seal plaintext markers (output to stdout)
+sss seal -x <file>       # Seal in-place
+sss open <file>          # Unseal to plaintext markers (output to stdout)
+sss open -x <file>       # Unseal in-place
+sss render <file>        # Unseal and strip markers (bare secret values)
+sss edit <file>          # Unseal, open in $EDITOR, re-seal on save
 ```
 
-### Project Management
+### Project
 
 ```bash
-# Initialize project
-sss init [username]
-
-# Check project status
-sss status                         # Show project root path
-
-# User management
-sss project users list             # List project users
-sss project users add <username> <pubkey>     # Add user (pubkey can be file or base64)
-sss project users remove <username>           # Remove user (triggers key rotation)
-sss project users info <username>             # Show user information
-
-# Project settings
-sss project show                   # Show current project settings
-sss project enable render          # Enable auto-render for this project
-sss project enable open            # Enable auto-open for this project
-sss project disable render         # Disable auto-render
-sss project disable open           # Disable auto-open
-
-# Bypass permissions with environment variables (for automation/VS Code extensions)
-SSS_PROJECT_OPEN=true sss open --project     # Bypass open permission check
-SSS_PROJECT_RENDER=true sss render --project # Bypass render permission check
-
-# Ignore patterns for project-wide operations
-sss project ignore add <pattern>   # Add glob pattern to ignore list
-sss project ignore remove <pattern> # Remove pattern
-sss project ignore list            # Show ignore patterns
+sss init [username]                          # Initialise project
+sss status                                   # Show project root
+sss seal --project                           # Seal all files in project
+sss open --project                           # Unseal all files
+sss render --project                         # Render all files
 ```
 
 ### Key Management
 
 ```bash
-# Generate new keypair
-sss keys generate [--force] [--no-password]
-
-# List your private keys
-sss keys list
-
-# Show public key
-sss keys pubkey                    # Your public key
-sss keys pubkey --fingerprint      # SHA256 fingerprint with visual randomart
-sss keys pubkey --user <username>  # Another user's public key from project
-
-# Passphrase management
-sss keys set-passphrase <key-id>      # Add or change passphrase for a key
-sss keys remove-passphrase <key-id>   # Remove passphrase protection (WARNING: stores key unencrypted)
-
-# Show or set current keypair
-sss keys current [key-id]
-
-# Delete a private key
-sss keys delete <key-id>
-
-# Rotate project encryption key
-sss keys rotate [--force] [--no-backup] [--dry-run]
+sss keys generate                            # Generate new keypair
+sss keys list                                # List private keys
+sss keys pubkey                              # Show your public key
+sss keys rotate                              # Rotate project key (re-encrypts all files)
 ```
 
-### Settings Management
+### Users
 
 ```bash
-# Show current settings
-sss settings show
-
-# Configure defaults
-sss settings set --username <username>
-sss settings set --editor <editor>
-sss settings set --coloured true/false
-sss settings set --auto-render-projects true/false
-sss settings set --auto-open-projects true/false
-
-# Reset settings
-sss settings reset --confirm
-
-# Show configuration file locations
-sss settings location
+sss project users list                       # List project users
+sss project users add <user> <pubkey>        # Add user (file or base64)
+sss project users remove <user>              # Remove user (triggers rotation)
 ```
 
-### Git Integration
+### Git Hooks
 
 ```bash
-# Install git hooks to current repository
-sss hooks install
-
-# Export hooks to ~/.config/sss/hooks/
-sss hooks export
-
-# List available hooks
-sss hooks list
-
-# Show hook contents
-sss hooks show <hook-name>
+sss hooks install                            # Install hooks into current repo
+sss hooks list                               # Show available hooks
 ```
 
-**Available hooks:**
-- `pre-commit`: Seals files with plaintext markers
-- `post-merge`: Processes files after git pull/merge
-- `post-checkout`: Processes files after checkout/clone
+See [docs/usage-guide.md](docs/usage-guide.md) for complete workflow documentation.
 
-### FUSE Filesystem (Linux Only, Optional)
+## Multi-User Collaboration
+
+1. Each user generates their own keypair with `sss keys generate`
+2. Each user shares their public key: `sss keys pubkey > username.pub`
+3. The project owner adds each user: `sss project users add <username> <pubkey-file>`
+
+All users can then seal and open files independently using their own private key.
+
+See [docs/usage-guide.md](docs/usage-guide.md#team-collaboration) for the full team collaboration workflow.
+
+## Security
+
+Cryptographic primitives:
+
+| Purpose | Algorithm |
+|---------|-----------|
+| Authenticated encryption | XChaCha20-Poly1305 (via libsodium) |
+| Key derivation | Argon2id |
+| Key exchange | X25519 (crypto_box_seal) |
+| Identity | Ed25519 |
+| Nonce derivation | BLAKE2b keyed hash |
+
+**What is encrypted:** the content inside `⊕{…}` / `o+{…}` markers only. File structure, key names, and surrounding text are not encrypted.
+
+**Nonce design:** nonces are derived deterministically from the plaintext and key, which produces clean git diffs but reveals when a secret value changes.
+
+**Memory protection:** decrypted key material is zeroised on drop via the `zeroize` crate.
+
+See [docs/security-model.md](docs/security-model.md) for the full security model including Argon2id parameter levels, threat model, and key hierarchy.
+
+## Emacs Integration
+
+`sss-mode` provides transparent encryption for Emacs:
+
+- Sealed files (`⊠{…}`) are automatically unsealed on open
+- Re-sealed on save — the plaintext never touches disk
+- Font-lock highlighting for both marker forms
+- Mode-line indicator (`SSS[open]` / `SSS[sealed]`)
+
+See [docs/sss-mode-guide.md](docs/sss-mode-guide.md) for installation, daemon-mode configuration, key bindings, and troubleshooting.
+
+## Optional Features
+
+### FUSE Filesystem (Linux/macOS)
+
+Mount a project directory with transparent rendering — all files appear as plain text, git operations see the sealed originals.
 
 ```bash
-# Mount project with transparent rendering
 sss mount <source-dir> <mountpoint>
-sss mount --in-place               # Overlay mount current directory
-sss mount <source-dir> --in-place  # Overlay mount specific directory
-
-# Unmount
-fusermount -u <mountpoint>         # Linux
-umount <mountpoint>                # macOS
 ```
 
-### 9P Server (Cross-Platform, Optional)
+### 9P Server
+
+Serve a project over a 9P network socket for cross-platform access.
 
 ```bash
-# Start 9P server
-sss serve9p tcp:0.0.0.0:564                    # TCP server
-sss serve9p unix:/tmp/sss-9p.sock              # Unix socket server
-sss serve9p tcp:localhost:5640 -d /path -u alice  # Custom options
+sss serve9p tcp:0.0.0.0:564
 ```
 
-**File access modes:**
-- `file` - Rendered view (default)
-- `file.open` - Opened view with markers
-- `file.sealed` - Raw sealed content
+### Agent Daemon (Experimental)
 
-### Editor Command (ssse)
+`sss-agent` caches decrypted keys in memory with policy-based access control. Requires `SSS_DEVEL_MODE=1`.
+
+## Building and Development
+
+**Requirements:** Rust 2024 edition (1.85+), libsodium (linked automatically by `libsodium-sys`)
 
 ```bash
-# Edit with automatic decryption/encryption
-ssse filename
+cargo test                                   # Run all tests
+cargo test --lib                             # Unit tests only
+cargo clippy -- -D warnings                  # Linting
 ```
 
-**Note**: `ssse` uses your system username ($USER/$USERNAME). Create a symlink: `ln -sf sss ssse`
+**Binaries produced:**
 
-## Configuration
-
-### Project Configuration (.sss.toml)
-
-```toml
-# Project metadata
-id = "unique-project-id"
-version = "1.0"
-created = "2025-01-01T00:00:00Z"
-
-# Users and their sealed repository keys
-[alice]
-public = "base64_encoded_public_key"
-sealed_key = "base64_encoded_sealed_repository_key"
-added = "2025-01-01T00:00:00Z"
-```
-
-### User Settings
-
-Located at `~/.config/sss/settings.toml` (or platform equivalent).
-
-Configuration precedence (highest to lowest):
-1. Command-line arguments
-2. Environment variables
-3. User configuration file
-4. System defaults
-
-### Environment Variables
-
-- `EDITOR`: Preferred text editor for `ssse`
-- `VISUAL`: Alternative text editor
-- `SSS_USER`: Default username (overrides config file setting)
-- `SSS_PASSPHRASE`: Passphrase for password-protected keys (avoids interactive prompts)
-- `SSS_PROJECT_OPEN`: Set to `true` or `1` to bypass project-wide open permission checks
-- `SSS_PROJECT_RENDER`: Set to `true` or `1` to bypass project-wide render permission checks
-
-## Examples
-
-### Basic Workflow
-
-```bash
-# Create new project
-sss init alice
-
-# Mark secrets in a file
-echo "api_key=⊕{secret-key-123}" > config.txt
-
-# Seal the file
-sss seal -x config.txt
-# Now contains: api_key=⊠{base64-encrypted-data}
-
-# Open for editing
-sss edit config.txt
-# Automatically decrypts, opens editor, re-encrypts on save
-
-# Render to plain text
-sss render config.txt
-# Output: api_key=secret-key-123
-```
-
-### Team Collaboration
-
-```bash
-# Alice initializes project
-sss init alice
-
-# Bob generates keypair and shares public key
-sss keys generate
-sss keys pubkey > bob-key.txt
-# Send bob-key.txt to Alice
-
-# Alice adds Bob to project
-sss project users add bob bob-key.txt
-
-# Both can now work with the same files
-sss seal -x --user alice secrets.conf
-sss open --user bob secrets.conf
-```
-
-### Git Integration
-
-```bash
-# Install hooks for automatic encryption
-cd /path/to/project
-sss hooks install
-
-# Now git operations automatically seal/open files
-git add config.txt   # pre-commit hook seals plaintext markers
-git pull             # post-merge hook opens/renders files
-git checkout branch  # post-checkout hook processes files
-```
-
-### Key Rotation
-
-```bash
-# Rotate project encryption key (re-encrypts all files)
-sss keys rotate
-
-# Dry run to see what would be rotated
-sss keys rotate --dry-run
-
-# Rotate without backup
-sss keys rotate --no-backup
-```
-
-## Security Features
-
-- **Authenticated Encryption**: XChaCha20-Poly1305 with integrity verification
-- **Deterministic Nonces**: BLAKE2b-derived for clean git diffs
-- **Key Derivation**: Argon2id for password-protected private keys
-- **Memory Protection**: Zeroization of sensitive data
-- **Rate Limiting**: Password attempt throttling
-- **Input Validation**: DoS protection with 100MB per-secret limit
-- **No Secret Leakage**: Careful error message handling
-
-## Building
-
-### Requirements
-
-- Rust 1.70+
-- libsodium (automatically handled by libsodium-sys)
-- libfuse3 (optional, for FUSE feature)
-- rust-9p (optional, for 9P feature - see ARCHITECTURE.md for setup)
-
-### Development
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd sss
-
-# Run tests (302 tests total)
-cargo test
-
-# Run specific test suites
-cargo test --lib                   # Library tests
-cargo test --test verb_commands    # Integration tests
-
-# Check code quality
-cargo clippy -- -D warnings
-
-# Build for your platform
-cargo build --release
-
-# Build with optional features
-cargo build --features fuse --release
-cargo build --features ninep --release
-```
-
-### Code Structure
-
-The codebase is organized into well-defined modules:
-
-- `src/main.rs` - CLI interface and command routing
-- `src/commands/` - Modular command handlers
-  - `init.rs` - Project initialization
-  - `keys.rs` - Key management and rotation
-  - `users.rs` - User management
-  - `process.rs` - File processing (seal/open/render/edit)
-  - `settings.rs` - User settings management
-  - `project.rs` - Project settings and permissions
-  - `hooks.rs` - Git hooks management
-  - `status.rs` - Project status
-  - `mount.rs` - FUSE mount operations (optional)
-  - `ninep.rs` - 9P server (optional)
-- `src/crypto.rs` - Core cryptographic operations
-- `src/keystore.rs` - Private key storage
-- `src/processor.rs` - File content processing
-- `src/project.rs` - Project configuration handling
-- `src/config_manager.rs` - Layered configuration system
-- `src/rotation.rs` - Key rotation orchestration
-- `src/merge.rs` - Smart reconstruction algorithm
-- `src/validation.rs` - Input validation
-- `src/error.rs` - Custom error types
-- `src/secure_memory.rs` - Secure memory handling
+| Binary | Description |
+|--------|-------------|
+| `sss` | Main CLI tool |
+| `sss-agent` | Key management daemon (Unix) |
+| `sss-askpass-tty` | TTY confirmation helper for agent |
+| `sss-askpass-gui` | GUI confirmation helper for agent |
 
 ## Documentation
 
-For detailed technical documentation, architecture details, and implementation notes, see [ARCHITECTURE.md](ARCHITECTURE.md).
+| Document | Description |
+|----------|-------------|
+| [docs/usage-guide.md](docs/usage-guide.md) | Common workflows: setup, seal/open/edit/render, key management, team collaboration, git hooks |
+| [docs/configuration.md](docs/configuration.md) | Configuration reference: .sss.toml, settings.toml, environment variables |
+| [docs/security-model.md](docs/security-model.md) | Security model: algorithms, key hierarchy, threat model |
+| [docs/marker-format.md](docs/marker-format.md) | Marker syntax reference: BNF grammar, ciphertext payload format |
+| [docs/architecture.md](docs/architecture.md) | Technical architecture: processor pipeline, marker inference, FUSE, 9P |
+| [docs/sss-mode-guide.md](docs/sss-mode-guide.md) | Emacs sss-mode installation and usage |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Protocol specification |
+| [SECURITY.md](SECURITY.md) | Security policy and vulnerability disclosure |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
+| [LICENCE](LICENCE) | ISC licence |
+| [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) | Cryptographic implementation details |
+| [docs/KEY_MANAGEMENT.md](docs/KEY_MANAGEMENT.md) | Key management guide |
+| [docs/SECRETS_FILE_FORMAT.md](docs/SECRETS_FILE_FORMAT.md) | Secrets file specification |
+| [docs/INSTALLATION.md](docs/INSTALLATION.md) | Detailed installation guide |
 
-For security policy and vulnerability disclosure, see [SECURITY.md](SECURITY.md).
+## Licence
 
-For contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-For version history, see [CHANGELOG.md](CHANGELOG.md).
-
-## License
-
-This project is licensed under the ISC License - see the [LICENSE](LICENSE) file for details.
+ISC — see the [LICENCE](LICENCE) file for details.
 
 ## Acknowledgements
 
 - Built with [libsodium](https://libsodium.gitbook.io/) for cryptographic operations
 - FUSE support via [fuser](https://github.com/cberner/fuser)
 - 9P server via [pfpacket/rust-9p](https://github.com/pfpacket/rust-9p)
+- Diff algorithm via [similar](https://github.com/mitsuhiko/similar)
+- Multi-pattern matching via [aho-corasick](https://github.com/BurntSushi/aho-corasick)

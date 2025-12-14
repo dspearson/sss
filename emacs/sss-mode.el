@@ -1,7 +1,7 @@
 ;;; sss-mode.el --- Major mode for sss-sealed files  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
-;; Version: 0.1.0
+;; Version: 1.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: files, encryption, secrets
 ;; URL: https://github.com/blob/main/emacs/sss-mode.el
@@ -16,6 +16,23 @@
 ;;
 ;; For daemon mode, set sss-executable to the absolute path:
 ;;   (setq sss-executable "/usr/local/bin/sss")
+;;
+;; New in v1.1:
+;; - Region encrypt/decrypt (sss-encrypt-region, sss-decrypt-region)
+;; - Toggle marker state at point (sss-toggle-at-point)
+;; - Overlay mode for visual marker highlighting (sss-toggle-overlay-mode)
+;; - Preview decrypted secret at point (sss-preview-at-point)
+;; - Auth-source integration for keystore passphrase (sss-use-auth-source)
+;; - Transient command menu with fallback (sss-dispatch)
+;; - Fixed keygen to use non-deprecated CLI command
+;;
+;; Evil integration (when evil-mode is loaded):
+;; - ge/gd/gt operators for encrypt/decrypt/toggle via motions (sss-mode buffers only)
+;; - is/as text objects for selecting SSS marker content/boundaries
+;;
+;; Doom Emacs integration (when Doom is detected):
+;; - SPC e prefix for encryption commands (leader)
+;; - , e prefix for buffer-local sss operations (localleader)
 
 ;;; Code:
 
@@ -31,10 +48,27 @@ Example: \"/usr/local/bin/sss\""
   :type 'string
   :group 'sss)
 
+(defcustom sss-use-auth-source t
+  "When non-nil, use auth-source for keystore passphrase lookup.
+Passphrases are stored under host \"sss\" in `auth-sources'.
+Example ~/.authinfo entry: machine sss login default password YOURPASS
+Requires auth-source (bundled with Emacs 27.1+)."
+  :type 'boolean
+  :group 'sss)
+
 (defconst sss--sealed-marker "\xe2\x8a\xa0{"
   "UTF-8 byte sequence for the sealed SSS marker \xe2\x8a\xa0{.
 U+22A0 (SQUARE ORIGINAL OF) followed by U+007B (LEFT CURLY BRACKET).
 UTF-8 encoding: \\xe2\\x8a\\xa0\\x7b (4 bytes).")
+
+(defconst sss--any-marker-regexp
+  "\\(?:\xe2\x8a\x95\\|\xe2\x8a\xa0\\){[^}]*}"
+  "Regexp matching any SSS marker (open or sealed).
+Uses raw UTF-8 byte sequences for cross-version compatibility.")
+
+(defconst sss--sealed-marker-regexp
+  "\xe2\x8a\xa0{[^}]*}"
+  "Regexp matching a sealed SSS marker.")
 
 (defface sss-open-face
   '((((class color) (background light))
@@ -60,12 +94,24 @@ Applied to regions matching the sealed-marker pattern."
   (list
    '("\xe2\x8a\x95{[^}]*}" . 'sss-open-face)
    '("\xe2\x8a\xa0{[^}]*}" . 'sss-sealed-face))
-  "Font-lock keyword list for sss-mode.
+  "Font-lock keyword list for `sss-mode'.
 Highlights open markers and sealed markers with distinct faces.")
 
 (defvar-local sss--state nil
   "Current state of this sss buffer.
 Value is the symbol \\='sealed or \\='open.")
+
+(defun sss--get-passphrase ()
+  "Return passphrase for SSS keystore from auth-source, or nil.
+Checks auth-source when `sss-use-auth-source' is non-nil.
+The passphrase is cached by auth-source in the user's credential store."
+  (when (and sss-use-auth-source (require 'auth-source nil t))
+    (let ((result (auth-source-search :host "sss"
+                                      :require '(:secret)
+                                      :max 1)))
+      (when result
+        (let ((secret (plist-get (car result) :secret)))
+          (if (functionp secret) (funcall secret) secret))))))
 
 (defun sss--call-cli (args &optional input-file)
   "Call the sss binary with ARGS, return (EXIT-CODE STDOUT STDERR).
@@ -75,6 +121,11 @@ The --non-interactive flag is always prepended to prevent TTY blocking.
 EXIT-CODE is an integer (0 = success).  STDOUT and STDERR are strings."
   (let* ((stdout-buf (generate-new-buffer " *sss-stdout*"))
          (stderr-file (make-temp-file "sss-stderr"))
+         (passphrase (sss--get-passphrase))
+         (process-environment
+          (if passphrase
+              (cons (concat "SSS_PASSPHRASE=" passphrase) process-environment)
+            process-environment))
          exit-code stdout stderr)
     (unwind-protect
         (progn
@@ -95,6 +146,75 @@ EXIT-CODE is an integer (0 = success).  STDOUT and STDERR are strings."
       (when (file-exists-p stderr-file)
         (delete-file stderr-file)))
     (list exit-code stdout stderr)))
+
+(defun sss--call-cli-region (args text)
+  "Call the sss binary with ARGS, sending TEXT as stdin.
+Returns (EXIT-CODE STDOUT STDERR).
+ARGS should NOT include the final `-' argument -- it is appended.
+The --non-interactive flag is always prepended."
+  (let* ((stdout-buf (generate-new-buffer " *sss-stdout*"))
+         (stderr-file (make-temp-file "sss-stderr"))
+         (passphrase (sss--get-passphrase))
+         (process-environment
+          (if passphrase
+              (cons (concat "SSS_PASSPHRASE=" passphrase) process-environment)
+            process-environment))
+         exit-code stdout stderr)
+    (unwind-protect
+        (with-temp-buffer
+          (insert text)
+          (setq exit-code
+                (apply #'call-process-region
+                       (point-min) (point-max)
+                       sss-executable
+                       nil
+                       (list stdout-buf stderr-file)
+                       nil
+                       (append (list "--non-interactive") args (list "-"))))
+          (setq stdout (with-current-buffer stdout-buf (buffer-string)))
+          (setq stderr (with-temp-buffer
+                         (insert-file-contents stderr-file)
+                         (buffer-string))))
+      (kill-buffer stdout-buf)
+      (when (file-exists-p stderr-file)
+        (delete-file stderr-file)))
+    (list exit-code stdout stderr)))
+
+;;;###autoload
+(defun sss-encrypt-region (start end)
+  "Encrypt the region between START and END in-place.
+If the region is not already an open marker, it is wrapped in
+a \xe2\x8a\x95{} marker first.  The text is then sealed via `sss seal -'
+and the region is replaced with the resulting \xe2\x8a\xa0{} marker."
+  (interactive "r")
+  (let* ((text (buffer-substring-no-properties start end))
+         (input (if (string-match-p "\\`\xe2\x8a\x95{" text)
+                    text
+                  (concat "\xe2\x8a\x95{" text "}"))))
+    (pcase (sss--call-cli-region (list "seal") input)
+      (`(0 ,sealed ,_stderr)
+       (delete-region start end)
+       (insert (string-trim-right sealed))
+       (sss--refresh-overlays))
+      (`(,exit ,_stdout ,stderr)
+       (error "Sss-mode: encrypt failed (exit %d): %s"
+              exit (string-trim stderr))))))
+
+;;;###autoload
+(defun sss-decrypt-region (start end)
+  "Decrypt the sealed region between START and END in-place.
+The \xe2\x8a\xa0{} marker is replaced with the plaintext \xe2\x8a\x95{} marker.
+Uses `sss open -' with the region text sent as stdin."
+  (interactive "r")
+  (let ((text (buffer-substring-no-properties start end)))
+    (pcase (sss--call-cli-region (list "open") text)
+      (`(0 ,opened ,_stderr)
+       (delete-region start end)
+       (insert (string-trim-right opened))
+       (sss--refresh-overlays))
+      (`(,exit ,_stdout ,stderr)
+       (error "Sss-mode: decrypt failed (exit %d): %s"
+              exit (string-trim stderr))))))
 
 (defun sss--sealed-p ()
   "Return non-nil if the current buffer begins with a sealed SSS marker.
@@ -273,16 +393,16 @@ equivalent functionality."
 ;;;###autoload
 (defun sss-keygen ()
   "Generate a new SSS keypair.
-Runs `sss keygen' and displays the output."
+Runs `sss keys generate' and displays the output."
   (interactive)
-  (pcase (sss--call-cli '("keygen"))
+  (pcase (sss--call-cli '("keys" "generate"))
     (`(0 ,stdout ,stderr)
      (sss--display-output "*SSS Keygen*"
                           (concat stdout
                                   (unless (string-empty-p stderr)
                                     (concat "\n" stderr)))))
     (`(,exit ,_stdout ,stderr)
-     (error "Sss-mode: sss keygen failed (exit %d): %s"
+     (error "Sss-mode: sss keys generate failed (exit %d): %s"
             exit (string-trim stderr)))))
 
 ;;;###autoload
@@ -299,6 +419,172 @@ Runs `sss keys list' and shows the output in buffer *SSS Keys*."
     (`(,exit ,_stdout ,stderr)
      (error "Sss-mode: sss keys list failed (exit %d): %s"
             exit (string-trim stderr)))))
+
+;;; Marker detection and toggle
+
+(defun sss--marker-at-point ()
+  "Return (START . END) of SSS marker at point, or nil.
+Scans backward from point to find the marker start, then verifies
+that the original point position falls within the match."
+  (save-excursion
+    (let ((original-point (point)))
+      (while (and (not (bobp))
+                  (not (looking-at sss--any-marker-regexp)))
+        (backward-char))
+      (when (and (looking-at sss--any-marker-regexp)
+                 (<= (point) original-point)
+                 (>= (match-end 0) original-point))
+        (cons (point) (match-end 0))))))
+
+;;;###autoload
+(defun sss-toggle-at-point ()
+  "Toggle the encryption state of the SSS marker at point.
+If point is on a \xe2\x8a\xa0{} marker, decrypts it.
+If point is on a \xe2\x8a\x95{} marker, encrypts it."
+  (interactive)
+  (let ((bounds (sss--marker-at-point)))
+    (unless bounds
+      (user-error "No SSS marker at point"))
+    (let ((start (car bounds))
+          (end (cdr bounds)))
+      (save-excursion
+        (goto-char start)
+        (if (looking-at (regexp-quote sss--sealed-marker))
+            (sss-decrypt-region start end)
+          (sss-encrypt-region start end))))))
+
+;;; Overlay mode
+
+(defvar-local sss--overlays nil
+  "List of SSS visual overlays in the current buffer.")
+
+(defun sss--remove-overlays ()
+  "Remove all SSS overlays from the current buffer."
+  (mapc #'delete-overlay sss--overlays)
+  (setq sss--overlays nil))
+
+(defun sss--make-overlays ()
+  "Create visual overlays for all SSS markers in the current buffer.
+Overlays are purely visual -- they do not modify buffer content."
+  (sss--remove-overlays)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward sss--any-marker-regexp nil t)
+      (let* ((start (match-beginning 0))
+             (end (match-end 0))
+             (sealed-p (eq (char-after start) ?\u22A0))
+             (ov (make-overlay start end)))
+        (overlay-put ov 'face (if sealed-p 'sss-sealed-face 'sss-open-face))
+        (overlay-put ov 'help-echo
+                     (if sealed-p
+                         "Sealed secret (C-c C-d to decrypt, C-c C-t to toggle)"
+                       "Open secret (C-c C-e to encrypt, C-c C-t to toggle)"))
+        (overlay-put ov 'sss-overlay t)
+        (push ov sss--overlays)))))
+
+(defun sss--refresh-overlays ()
+  "Refresh SSS overlays if overlay mode is active."
+  (when sss--overlays
+    (sss--make-overlays)))
+
+;;;###autoload
+(defun sss-toggle-overlay-mode ()
+  "Toggle SSS overlay mode in the current buffer.
+When enabled, markers are visually highlighted with overlays.
+When disabled, overlays are removed."
+  (interactive)
+  (if sss--overlays
+      (progn
+        (sss--remove-overlays)
+        (remove-hook 'kill-buffer-hook #'sss--remove-overlays t)
+        (message "SSS overlay mode disabled"))
+    (sss--make-overlays)
+    (add-hook 'kill-buffer-hook #'sss--remove-overlays nil t)
+    (message "SSS overlay mode enabled")))
+
+;;; Preview at point
+
+(defun sss--show-preview-overlay (content pos)
+  "Show CONTENT in a transient overlay at POS.
+Dismisses on the next command."
+  (let* ((ov (make-overlay pos pos))
+         (text (propertize (concat " [" content "]")
+                           'face 'tooltip)))
+    (overlay-put ov 'after-string text)
+    (overlay-put ov 'sss-preview t)
+    (letrec ((cleanup (lambda ()
+                        (when (overlay-buffer ov) (delete-overlay ov))
+                        (remove-hook 'pre-command-hook cleanup))))
+      (add-hook 'pre-command-hook cleanup))))
+
+;;;###autoload
+(defun sss-preview-at-point ()
+  "Show a transient overlay preview of the decrypted secret at point.
+Does not modify buffer content.  Dismisses on next command.
+Only works on sealed (\xe2\x8a\xa0{}) markers."
+  (interactive)
+  (let ((bounds (sss--marker-at-point)))
+    (unless bounds
+      (user-error "No SSS marker at point"))
+    (let ((text (buffer-substring-no-properties (car bounds) (cdr bounds))))
+      (unless (string-match-p (concat "\\`" (regexp-quote sss--sealed-marker))
+                              text)
+        (user-error "Marker at point is not sealed"))
+      (pcase (sss--call-cli-region (list "open") text)
+        (`(0 ,plaintext ,_)
+         (sss--show-preview-overlay (string-trim-right plaintext) (car bounds)))
+        (`(,exit ,_ ,stderr)
+         (error "Sss-mode: preview failed (exit %d): %s"
+                exit (string-trim stderr)))))))
+
+;;; Transient menu (UX-04)
+
+(when (require 'transient nil t)
+  (transient-define-prefix sss--transient-dispatch ()
+    "SSS command dispatch."
+    ["Region Operations"
+     ("e" "Encrypt region"   sss-encrypt-region)
+     ("d" "Decrypt region"   sss-decrypt-region)
+     ("t" "Toggle at point"  sss-toggle-at-point)
+     ("v" "Preview at point" sss-preview-at-point)]
+    ["Buffer / File"
+     ("o" "Open (decrypt) buffer"  sss-open-buffer)
+     ("s" "Seal (encrypt) buffer"  sss-seal-buffer)
+     ("r" "Render (strip markers)" sss-render-buffer)]
+    ["Project"
+     ("i" "Init project"    sss-init)
+     ("p" "Process project" sss-process)
+     ("k" "Generate keys"   sss-keygen)
+     ("l" "List keys"       sss-keys-list)]
+    ["Settings"
+     ("O" "Toggle overlay mode" sss-toggle-overlay-mode)]))
+
+(defun sss--completing-read-dispatch ()
+  "Fallback dispatch via `completing-read' when transient is unavailable."
+  (let* ((cmds '(("Encrypt region"      . sss-encrypt-region)
+                 ("Decrypt region"      . sss-decrypt-region)
+                 ("Toggle at point"     . sss-toggle-at-point)
+                 ("Preview at point"    . sss-preview-at-point)
+                 ("Open buffer"         . sss-open-buffer)
+                 ("Seal buffer"         . sss-seal-buffer)
+                 ("Render buffer"       . sss-render-buffer)
+                 ("Init project"        . sss-init)
+                 ("Process project"     . sss-process)
+                 ("Generate keys"       . sss-keygen)
+                 ("List keys"           . sss-keys-list)
+                 ("Toggle overlay mode" . sss-toggle-overlay-mode)))
+         (choice (completing-read "SSS command: " (mapcar #'car cmds) nil t))
+         (fn (cdr (assoc choice cmds))))
+    (when fn (call-interactively fn))))
+
+;;;###autoload
+(defun sss-dispatch ()
+  "Open the SSS command menu.
+Uses transient if available; falls back to `completing-read'."
+  (interactive)
+  (if (fboundp 'sss--transient-dispatch)
+      (sss--transient-dispatch)
+    (sss--completing-read-dispatch)))
 
 ;;; Mode definition
 
@@ -332,6 +618,11 @@ Customization: \\[customize-group] RET sss RET
   (define-key sss-mode-map (kbd "C-c C-p") #'sss-process)
   (define-key sss-mode-map (kbd "C-c C-k") #'sss-keygen)
   (define-key sss-mode-map (kbd "C-c C-l") #'sss-keys-list)
+  (define-key sss-mode-map (kbd "C-c C-e") #'sss-encrypt-region)
+  (define-key sss-mode-map (kbd "C-c C-d") #'sss-decrypt-region)
+  (define-key sss-mode-map (kbd "C-c C-t") #'sss-toggle-at-point)
+  (define-key sss-mode-map (kbd "C-c C-v") #'sss-preview-at-point)
+  (define-key sss-mode-map (kbd "C-c C-m") #'sss-dispatch)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))
@@ -349,6 +640,107 @@ Interactive command for `sss-mode-map' (\\[sss-seal-buffer]).
 Equivalent to \\[save-buffer] — triggers `write-contents-functions'."
   (interactive)
   (save-buffer))
+
+;;; Evil integration (EVIL-01, EVIL-02, EVIL-03, DOOM-03)
+
+(with-eval-after-load 'evil
+
+  ;; Operators (EVIL-01, EVIL-02, EVIL-03)
+
+  (evil-define-operator sss-evil-encrypt (beg end)
+    "Evil operator to encrypt region between BEG and END."
+    :motion evil-line
+    (sss-encrypt-region beg end))
+
+  (evil-define-operator sss-evil-decrypt (beg end)
+    "Evil operator to decrypt sealed marker between BEG and END."
+    :motion evil-line
+    (sss-decrypt-region beg end))
+
+  (evil-define-operator sss-evil-toggle (beg end)
+    "Evil operator to toggle encryption at point or region."
+    :motion evil-line
+    (if (= beg end)
+        (sss-toggle-at-point)
+      (save-excursion
+        (goto-char beg)
+        (while (and (< (point) end)
+                    (re-search-forward sss--any-marker-regexp end t))
+          (goto-char (match-beginning 0))
+          (sss-toggle-at-point)
+          (forward-char 1)))))
+
+  ;; Buffer-local key bindings: ge/gd/gt active only in sss-mode buffers (EVIL-01, EVIL-02, EVIL-03)
+  ;; Uses evil-define-key with sss-mode-map (buffer-local) rather than evil-normal-state-map
+  ;; (global). This preserves ge=evil-backward-word-end, gd=evil-goto-definition,
+  ;; gt=evil-tab-next in all other buffers where they are meaningful.
+  (evil-define-key 'normal sss-mode-map
+    (kbd "ge") #'sss-evil-encrypt
+    (kbd "gd") #'sss-evil-decrypt
+    (kbd "gt") #'sss-evil-toggle)
+
+  ;; Text objects: `is' (inner sss) and `as' (outer sss) (EVIL-03)
+  ;; Usage: vis/dis/cis -- select/delete/change inner pattern content
+  ;;        vas/das/cas -- select/delete/change entire pattern
+
+  (evil-define-text-object sss-inner-pattern (count &optional beg end type)
+    "Inner SSS text object: content inside marker braces, excluding delimiters."
+    (let ((bounds (sss--marker-at-point)))
+      (when bounds
+        (save-excursion
+          (goto-char (car bounds))
+          (when (re-search-forward "{" (cdr bounds) t)
+            (let ((content-start (point))
+                  (content-end (save-excursion
+                                 (goto-char (cdr bounds))
+                                 (when (re-search-backward "}" (car bounds) t)
+                                   (point)))))
+              (when content-end
+                (list content-start content-end))))))))
+
+  (evil-define-text-object sss-outer-pattern (count &optional beg end type)
+    "Outer SSS text object: entire marker including prefix and braces."
+    (let ((bounds (sss--marker-at-point)))
+      (when bounds
+        (list (car bounds) (cdr bounds)))))
+
+  (define-key evil-inner-text-objects-map "s" 'sss-inner-pattern)
+  (define-key evil-outer-text-objects-map "s" 'sss-outer-pattern))
+
+;;; Doom integration (DOOM-01, DOOM-02)
+
+;; Silence byte-compiler warning for map! without requiring doom-core at compile time.
+(declare-function map! "doom-core" t t)
+
+(when (fboundp 'map!)
+  ;; Global leader bindings (DOOM-01): SPC e prefix for encryption commands.
+  ;; Sub-prefixes: SPC e p (project), SPC e k (keys).
+  ;; eval prevents byte-compiler from expanding map! macro syntax outside Doom.
+  (eval
+   '(map! :leader
+          (:prefix-map ("e" . "encryption")
+           :desc "Encrypt region"   "e" #'sss-encrypt-region
+           :desc "Decrypt region"   "d" #'sss-decrypt-region
+           :desc "Toggle at point"  "t" #'sss-toggle-at-point
+           :desc "Preview at point" "v" #'sss-preview-at-point
+           :desc "SSS menu"         "SPC" #'sss-dispatch
+           (:prefix ("p" . "project")
+            :desc "Init project"    "i" #'sss-init
+            :desc "Process project" "p" #'sss-process)
+           (:prefix ("k" . "keys")
+            :desc "Generate keys"   "g" #'sss-keygen
+            :desc "List keys"       "l" #'sss-keys-list))))
+  ;; Localleader bindings (DOOM-02): , e prefix in sss-mode buffers only.
+  ;; :map sss-mode-map scopes these bindings to sss-mode buffers.
+  (eval
+   '(map! :localleader
+          :map sss-mode-map
+          (:prefix ("e" . "sss")
+           :desc "Encrypt region"   "e" #'sss-encrypt-region
+           :desc "Decrypt region"   "d" #'sss-decrypt-region
+           :desc "Toggle at point"  "t" #'sss-toggle-at-point
+           :desc "Preview at point" "v" #'sss-preview-at-point
+           :desc "SSS menu"         "SPC" #'sss-dispatch))))
 
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

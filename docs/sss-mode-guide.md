@@ -29,9 +29,9 @@ Before loading sss-mode, ensure all of the following are in place:
 | `sss` binary on PATH | Install sss; verify with `which sss` in a terminal |
 | Working keystore | Run `sss keys generate` at least once |
 | Initialised project | Run `sss init <username>` in the project directory |
-| Passphrase without TTY | Store in system keyring **or** set `SSS_PASSPHRASE` env var |
+| Passphrase without TTY | Store in system keyring, `SSS_PASSPHRASE` env var, or `~/.authinfo` (see Section 10) |
 
-The last requirement is critical. sss-mode always passes `--non-interactive` to every CLI call, which prevents sss from prompting for a passphrase on a TTY. If the passphrase is not available through the keyring or the environment variable, all operations will fail with "Decryption failed".
+The last requirement is critical. sss-mode always passes `--non-interactive` to every CLI call, which prevents sss from prompting for a passphrase on a TTY. If the passphrase is not available through the keyring, auth-source, or the environment variable, all operations will fail with "Decryption failed".
 
 ---
 
@@ -137,7 +137,7 @@ systemctl --user set-environment SSS_PASSPHRASE="your-passphrase"
 launchctl setenv SSS_PASSPHRASE "your-passphrase"
 ```
 
-**Security note:** environment variables are visible to other processes owned by the same user. Prefer keyring integration where possible.
+**Security note:** environment variables are visible to other processes owned by the same user. Prefer keyring integration or auth-source (Section 10) where possible.
 
 ---
 
@@ -200,14 +200,274 @@ All sss-mode bindings use the `C-c C-x` pattern (package-lint compliant — mino
 | `C-c C-r` | `sss-render-buffer` | View pure plaintext (markers stripped) in a separate buffer |
 | `C-c C-i` | `sss-init` | Run `sss init` in the project directory |
 | `C-c C-p` | `sss-process` | Run `sss seal --project` (seal all files in project) |
-| `C-c C-k` | `sss-keygen` | Run `sss keygen` (generate a new keypair) |
+| `C-c C-k` | `sss-keygen` | Run `sss keys generate` (generate a new keypair) |
 | `C-c C-l` | `sss-keys-list` | Display available keys (project and keystore) |
+| `C-c C-e` | `sss-encrypt-region` | Encrypt selected region in-place |
+| `C-c C-d` | `sss-decrypt-region` | Decrypt sealed region in-place |
+| `C-c C-t` | `sss-toggle-at-point` | Toggle encrypt/decrypt at point |
+| `C-c C-v` | `sss-preview-at-point` | Preview decrypted secret (transient overlay) |
+| `C-c C-m` | `sss-dispatch` | Open SSS command menu (transient or completing-read) |
 
 **Note:** `sss-process` calls `sss seal --project` — there is no `sss process` subcommand in the CLI. This command seals all files with plaintext markers across the whole project.
 
 ---
 
-## 8. Customisation
+## 8. Region Operations
+
+v1.1 adds four commands for operating on individual markers within a buffer. These complement the whole-buffer open/seal commands and allow fine-grained control over which secrets are encrypted at any given time.
+
+### `sss-encrypt-region` (`C-c C-e`)
+
+Select any text and press `C-c C-e` to encrypt it in-place.
+
+- If the selected text is already an open marker (`⊕{...}`), it is passed directly to `sss seal -`.
+- If the selected text is plain text (not wrapped in a marker), sss-mode automatically wraps it in `⊕{...}` before sealing.
+- The region is replaced with the resulting sealed marker (`⊠{...}`).
+
+```
+Before: my-secret-password
+        ^----- select this -----^
+
+After:  ⊠{a3f8c2...}
+```
+
+### `sss-decrypt-region` (`C-c C-d`)
+
+Select a sealed marker and press `C-c C-d` to decrypt it in-place.
+
+- The selected `⊠{...}` marker is passed to `sss open -`.
+- The region is replaced with the open marker (`⊕{...}`), revealing the plaintext content.
+
+### `sss-toggle-at-point` (`C-c C-t`)
+
+Place point anywhere inside a marker and press `C-c C-t` to toggle its encryption state.
+
+- If point is on a sealed marker (`⊠{...}`), it is decrypted to an open marker.
+- If point is on an open marker (`⊕{...}`), it is encrypted to a sealed marker.
+- No selection required — sss-mode detects the marker boundaries automatically by scanning backward from point.
+
+### Example Workflow
+
+1. Type a secret value in the buffer: `api_key=abc123xyz`
+2. Select the value: `C-SPC` then move to end of line.
+3. Press `C-c C-e` to encrypt: buffer now shows `api_key=⊠{3f8a...}`.
+4. To inspect the value temporarily, place point inside the sealed marker.
+5. Press `C-c C-t` to toggle: marker becomes `⊕{abc123xyz}` (plaintext visible).
+6. Press `C-c C-t` again to re-seal: marker returns to `⊠{3f8a...}`.
+
+---
+
+## 9. Preview and Overlays
+
+### Preview at Point (`C-c C-v`)
+
+`sss-preview-at-point` decrypts a sealed marker and shows the result as a **transient overlay** next to the marker in the buffer. The buffer content is **not modified**.
+
+- Place point anywhere inside a `⊠{...}` marker.
+- Press `C-c C-v`.
+- The decrypted value appears in a tooltip-style overlay immediately after the marker: `⊠{3f8a...} [abc123xyz]`.
+- Press any key to dismiss the overlay.
+
+This is useful for quickly checking a secret's value without leaving an open marker in the buffer.
+
+### Overlay Mode (`sss-toggle-overlay-mode`)
+
+`sss-toggle-overlay-mode` enables or disables persistent visual overlays on all SSS markers in the buffer.
+
+When overlay mode is **enabled**:
+
+- Every `⊕{...}` marker receives the `sss-open-face` highlight (gold/green by default).
+- Every `⊠{...}` marker receives the `sss-sealed-face` highlight (grey by default).
+- Overlays include `help-echo` tooltips listing available commands:
+  - On a sealed marker: "Sealed secret (C-c C-d to decrypt, C-c C-t to toggle)"
+  - On an open marker: "Open secret (C-c C-e to encrypt, C-c C-t to toggle)"
+- Overlays update automatically after any encrypt/decrypt operation.
+
+When overlay mode is **disabled**, all overlays are removed. Font-lock highlighting (Section 15) remains active regardless of overlay mode.
+
+To enable overlay mode on startup, add to `init.el`:
+
+```elisp
+(add-hook 'sss-mode-hook #'sss-toggle-overlay-mode)
+```
+
+`sss-toggle-overlay-mode` has no default key binding in the base mode-map; use `C-c C-m` (`sss-dispatch`) to access it from the command menu.
+
+---
+
+## 10. Auth-Source Integration
+
+sss-mode v1.1 integrates with Emacs' built-in `auth-source` library, providing a third passphrase mechanism alongside the system keyring and `SSS_PASSPHRASE` environment variable.
+
+### How It Works
+
+The custom variable `sss-use-auth-source` (default: `t`) controls this behaviour. When non-nil, sss-mode calls `auth-source-search` with `:host "sss"` before each CLI invocation. If a matching entry is found, the secret is injected as `SSS_PASSPHRASE` in the subprocess environment — without ever writing it to disk or exposing it in process listings beyond the child process.
+
+This uses `(require 'auth-source nil t)` — a soft require that adds no hard dependency. If auth-source is not available, the feature silently does nothing.
+
+### Setting Up `~/.authinfo`
+
+Add a single line to `~/.authinfo`:
+
+```
+machine sss login default password YOURPASSPHRASE
+```
+
+Replace `YOURPASSPHRASE` with your actual keystore passphrase.
+
+For a GPG-encrypted authinfo file (`~/.authinfo.gpg`), use the same format — Emacs decrypts it transparently via EasyPG.
+
+### Auth-Source Backends
+
+`auth-source` supports multiple backends. Any of the following work:
+
+| Backend | Configuration |
+|---------|--------------|
+| Plain text file | `(setq auth-sources '("~/.authinfo"))` |
+| GPG-encrypted file | `(setq auth-sources '("~/.authinfo.gpg"))` |
+| Secrets Service (GNOME Keyring, KWallet) | `(setq auth-sources '(default))` |
+| macOS Keychain | `(setq auth-sources '(macos-keychain-internet))` |
+
+The default `auth-sources` value on most Emacs installations already includes `~/.authinfo.gpg` and `~/.authinfo`.
+
+### Disabling Auth-Source
+
+To disable auth-source lookup and fall back to system keyring or environment variable:
+
+```elisp
+(setq sss-use-auth-source nil)
+```
+
+---
+
+## 11. Command Menu (`sss-dispatch`)
+
+`sss-dispatch` (`C-c C-m`) opens a unified command menu listing all SSS operations. It is the primary discoverability entry point: new users can press `C-c C-m` to see what sss-mode can do.
+
+### Transient Menu (Emacs 28+ or MELPA)
+
+When the `transient` package is available (bundled with Emacs 28+, available on MELPA for Emacs 27.1), `sss-dispatch` opens a categorised transient popup:
+
+```
+SSS command dispatch.
+
+Region Operations
+  e  Encrypt region        d  Decrypt region
+  t  Toggle at point       v  Preview at point
+
+Buffer / File
+  o  Open (decrypt) buffer     s  Seal (encrypt) buffer
+  r  Render (strip markers)
+
+Project
+  i  Init project    p  Process project
+  k  Generate keys   l  List keys
+
+Settings
+  O  Toggle overlay mode
+```
+
+### Completing-Read Fallback
+
+When `transient` is not installed, `sss-dispatch` falls back to `completing-read`, presenting the same command list in the minibuffer with completion. All commands are accessible — only the presentation differs.
+
+### Usage
+
+Press `C-c C-m` from any sss-mode buffer. The menu is always available regardless of whether transient is installed.
+
+---
+
+## 12. Evil Integration
+
+sss-mode includes evil-mode integration that is **conditionally loaded**: the evil code only runs when `evil` has been loaded (`with-eval-after-load 'evil`). In vanilla Emacs without evil, no evil code is evaluated.
+
+### Operators
+
+Three evil operators are defined for sss-mode buffers:
+
+| Key | Operator | Description |
+|-----|----------|-------------|
+| `ge` | `sss-evil-encrypt` | Encrypt text covered by motion |
+| `gd` | `sss-evil-decrypt` | Decrypt text covered by motion |
+| `gt` | `sss-evil-toggle` | Toggle encryption state of markers in motion range |
+
+**Usage with motions:**
+
+- `geiw` — Encrypt the current word (inner word motion)
+- `ge$` — Encrypt from point to end of line
+- `gd` (on a sealed marker line) — Decrypt the line's marker
+- `gtiw` — Toggle the marker under the cursor
+
+**Scope:** These bindings are set via `evil-define-key 'normal sss-mode-map`, making them **buffer-local** to sss-mode buffers. The default evil bindings (`ge` = `evil-backward-word-end`, `gd` = `evil-goto-definition`, `gt` = `evil-tab-next`) remain in effect in all non-sss buffers.
+
+### Text Objects
+
+Two text objects are defined for selecting SSS marker content:
+
+| Key | Object | Selects |
+|-----|--------|---------|
+| `is` | `sss-inner-pattern` | Content inside marker braces, excluding `⊕{` / `⊠{` prefix and closing `}` |
+| `as` | `sss-outer-pattern` | Entire marker including prefix and braces |
+
+**Usage examples:**
+
+- `vis` — Visually select the secret value inside a marker (inner)
+- `das` — Delete the entire marker including delimiters (outer)
+- `cis` — Change the inner content of a marker (replace the secret value)
+- `yis` — Yank (copy) the inner content to the kill ring
+
+Text objects work in both visual state and as arguments to operators: `geis` encrypts the inner content of the marker at point.
+
+---
+
+## 13. Doom Emacs Integration
+
+sss-mode includes Doom Emacs bindings that are **conditionally loaded**: the `map!` calls only execute when the `map!` macro is available (`(fboundp 'map!)`). The code is safe to load in vanilla Emacs — the `when` guard prevents `map!` from being called.
+
+### Installation for Doom
+
+1. Copy `emacs/sss-mode.el` to `~/.config/doom/lisp/sss-mode.el`
+2. Add to `~/.config/doom/config.el`:
+   ```elisp
+   (load! "lisp/sss-mode")
+   ```
+3. Run `doom sync`
+
+That is all. sss-mode activates automatically for sealed files via `magic-mode-alist`.
+
+### Leader Bindings (`SPC e` prefix)
+
+The `SPC e` prefix provides global access to encryption commands from any buffer:
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `SPC e e` | `sss-encrypt-region` | Encrypt region |
+| `SPC e d` | `sss-decrypt-region` | Decrypt region |
+| `SPC e t` | `sss-toggle-at-point` | Toggle at point |
+| `SPC e v` | `sss-preview-at-point` | Preview at point |
+| `SPC e SPC` | `sss-dispatch` | SSS command menu |
+| `SPC e p i` | `sss-init` | Init project |
+| `SPC e p p` | `sss-process` | Process project |
+| `SPC e k g` | `sss-keygen` | Generate keys |
+| `SPC e k l` | `sss-keys-list` | List keys |
+
+Sub-prefixes: `SPC e p` for project commands, `SPC e k` for key management.
+
+### Localleader Bindings (`, e` prefix)
+
+The `, e` prefix provides buffer-local access in sss-mode buffers (`:map sss-mode-map`). In Doom, the localleader is typically `,` (comma):
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `, e e` | `sss-encrypt-region` | Encrypt region |
+| `, e d` | `sss-decrypt-region` | Decrypt region |
+| `, e t` | `sss-toggle-at-point` | Toggle at point |
+| `, e v` | `sss-preview-at-point` | Preview at point |
+| `, e SPC` | `sss-dispatch` | SSS command menu |
+
+---
+
+## 14. Customisation
 
 Open the customisation interface:
 
@@ -225,9 +485,17 @@ Path to the sss binary. sss-mode searches `exec-path` (Emacs' equivalent of `PAT
 (setq sss-executable "/usr/local/bin/sss")
 ```
 
+**`sss-use-auth-source`** (default: `t`)
+
+When non-nil, sss-mode looks up the keystore passphrase from `auth-source` before each CLI call. See Section 10 for setup instructions. To disable:
+
+```elisp
+(setq sss-use-auth-source nil)
+```
+
 ---
 
-## 9. Font-Lock Highlighting
+## 15. Font-Lock Highlighting
 
 sss-mode highlights marker syntax with distinct colours:
 
@@ -240,7 +508,7 @@ This lets you visually distinguish open (plaintext) regions from sealed (encrypt
 
 ---
 
-## 10. Troubleshooting
+## 16. Troubleshooting
 
 ### "sss: command not found" or binary not on exec-path
 
@@ -254,7 +522,7 @@ Verify the path in a terminal: `which sss`.
 
 ### "Decryption failed" on file open
 
-sss-mode passes `--non-interactive` to all calls, so the passphrase must be in the system keyring or `SSS_PASSPHRASE`. Test from a terminal:
+sss-mode passes `--non-interactive` to all calls, so the passphrase must be in the system keyring, auth-source, or `SSS_PASSPHRASE`. Test from a terminal:
 
 ```bash
 sss --non-interactive open /path/to/sealed-file.txt
@@ -264,6 +532,7 @@ If this fails, the issue is with the keystore or passphrase, not with sss-mode. 
 
 - Keyring not unlocked for the Emacs process (daemon mode issue — see Section 5).
 - `SSS_PASSPHRASE` not set in the environment Emacs inherited.
+- `~/.authinfo` entry missing or misspelt (see Section 10).
 - Wrong user: the project was initialised with a different username. Check `.sss.toml`.
 
 ### Blank or empty buffer after open
@@ -288,7 +557,7 @@ This should not happen — sss-mode disables auto-save immediately when opening 
 
 ---
 
-## 11. Security Considerations
+## 17. Security Considerations
 
 ### Protections Provided by sss-mode
 
@@ -296,9 +565,11 @@ This should not happen — sss-mode disables auto-save immediately when opening 
 - **Backup disabled:** Emacs will not write `file~` backup files containing plaintext.
 - **`write-contents-functions` return value:** Returning `t` on success prevents Emacs' default `write-region` from writing plaintext.
 - **Error on seal failure:** `(error ...)` on a failed seal prevents the plaintext write that would otherwise occur if `nil` were returned.
+- **Auth-source passphrase injection:** When `sss-use-auth-source` is enabled, the passphrase is retrieved from the user's credential store and injected into the subprocess environment rather than being stored in Emacs variables or written to any file.
 
 ### Accepted Limitations
 
 - **Brief plaintext window on save:** Between the write-plaintext and seal-in-place steps, the file exists on disk in plaintext for a few milliseconds. Identical to `epa-file.el`'s behaviour.
 - **Buffer is plaintext in Emacs memory:** While the buffer is open, the decrypted content lives in Emacs process memory. This is unavoidable for interactive editing. Emacs memory is not swapped to disk on modern systems with sufficient RAM, but this is not guaranteed.
 - **No protection against Emacs crashes:** If Emacs crashes after writing plaintext but before sealing, the plaintext file may remain on disk. Consider enabling full-disk encryption on systems where this is a concern.
+- **Preview overlay decrypts to memory:** `sss-preview-at-point` calls the CLI to decrypt the marker; the decrypted value passes through Emacs process memory momentarily. The overlay is dismissed on the next keystroke, but the value may linger in the process address space until garbage collected.

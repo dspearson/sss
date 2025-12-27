@@ -162,13 +162,12 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
             let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
 
             // Get existing patterns, add new one if not present
-            let mut patterns = config.parse_ignore_patterns();
+            let mut patterns = config.get_ignore_pattern_strings();
             if !patterns.contains(new_pattern) {
                 patterns.push(new_pattern.clone());
 
                 // Join patterns with spaces (gitignore-style on one line)
-                let patterns_str = patterns.join(" ");
-                config.set_ignore_patterns(patterns_str);
+                config.set_ignore_patterns(patterns);
                 config.save_to_file(CONFIG_FILE_NAME)?;
 
                 println!("Added ignore pattern: {}", new_pattern);
@@ -183,7 +182,7 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
             let mut config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
 
             // Get existing patterns and remove the specified one
-            let mut patterns = config.parse_ignore_patterns();
+            let mut patterns = config.get_ignore_pattern_strings();
             let original_len = patterns.len();
             patterns.retain(|p| p != pattern_to_remove);
 
@@ -192,8 +191,7 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
                 if patterns.is_empty() {
                     config.clear_ignore_patterns();
                 } else {
-                    let patterns_str = patterns.join(" ");
-                    config.set_ignore_patterns(patterns_str);
+                    config.set_ignore_patterns(patterns);
                 }
                 config.save_to_file(CONFIG_FILE_NAME)?;
                 println!("Removed ignore pattern: {}", pattern_to_remove);
@@ -205,7 +203,7 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
             // Load project config
             let config = ProjectConfig::load_from_file(CONFIG_FILE_NAME)?;
 
-            let patterns = config.parse_ignore_patterns();
+            let patterns = config.get_ignore_pattern_strings();
 
             if patterns.is_empty() {
                 println!("No ignore patterns configured");

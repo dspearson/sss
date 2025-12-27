@@ -1,6 +1,6 @@
 [package]
 name = "sss"
-version = "1.1.8"
+version = "1.1.9"
 edition = "2024"
 license = "ISC"
 authors = ["Dominic Pearson <dsp@technoanimal.net"]

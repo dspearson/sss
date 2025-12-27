@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.1.8
+Version:        1.1.9
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 

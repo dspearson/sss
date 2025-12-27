@@ -103,7 +103,7 @@ pub fn handle_serve9p(matches: &ArgMatches) -> Result<()> {
     println!("Starting server...");
 
     // Start async runtime and serve
-    serve_blocking(directory, processor, address)?;
+    serve_blocking(directory, processor, address, &project_config)?;
 
     Ok(())
 }
@@ -111,12 +111,13 @@ pub fn handle_serve9p(matches: &ArgMatches) -> Result<()> {
 /// Blocking wrapper for async serve function
 ///
 /// Creates a tokio runtime and runs the async 9P server to completion.
-fn serve_blocking(directory: PathBuf, processor: crate::Processor, address: &str) -> Result<()> {
+fn serve_blocking(directory: PathBuf, processor: crate::Processor, address: &str,
+                   config: &crate::project::ProjectConfig) -> Result<()> {
     use crate::SssNinepFS;
     use rs9p::srv::srv_async;
 
-    // Create filesystem
-    let fs = SssNinepFS::new(directory, processor)?;
+    // Create filesystem (pass config for ignore patterns)
+    let fs = SssNinepFS::new(directory, processor, Some(config))?;
 
     // Create tokio runtime
     let runtime = tokio::runtime::Runtime::new()?;

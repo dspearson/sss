@@ -49,6 +49,65 @@ pub fn has_any_markers(content: &str) -> bool {
         || content.contains("<{")   // Alternative interpolation marker syntax
 }
 
+/// Check if content contains well-formed (balanced) SSS markers.
+///
+/// Unlike `has_any_markers` which only checks for opening sequences like `⊠{`,
+/// this verifies at least one marker has balanced braces (e.g. `⊠{...}`).
+/// Files that merely mention marker characters in strings or grep patterns
+/// will return false, avoiding false-positive processing.
+pub fn has_balanced_markers(content: &str) -> bool {
+    // Prefixes to look for, in order of priority
+    const PREFIXES: &[&str] = &["⊠", "⊕", "⊲", "[*", "o+", "<"];
+
+    let bytes = content.as_bytes();
+    let mut byte_pos = 0;
+
+    while byte_pos < bytes.len() {
+        let remaining = &content[byte_pos..];
+
+        let mut matched = false;
+        for &prefix in PREFIXES {
+            if let Some(after_prefix) = remaining.strip_prefix(prefix) {
+                if after_prefix.starts_with('{') {
+                    // Found a potential marker opening — check for balanced close
+                    let open_pos = byte_pos + prefix.len() + 1; // past prefix + '{'
+                    let mut depth = 1u32;
+                    for (i, ch) in content[open_pos..].char_indices() {
+                        match ch {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    // Must have non-empty content
+                                    if i > 0 {
+                                        return true;
+                                    }
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Unbalanced — skip past this prefix+'{' and keep scanning
+                    byte_pos = open_pos;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+
+        if !matched {
+            if let Some(ch) = remaining.chars().next() {
+                byte_pos += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    false
+}
+
 /// Marker patterns as byte sequences for efficient scanning
 /// This avoids String conversion for files without markers
 pub const MARKER_PATTERNS: &[&str] = &["⊠{", "⊕{", "[*{", "o+{", "⊲{", "<{"];

@@ -3,8 +3,9 @@ use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
     ReplyWrite, ReplyOpen,
 };
+use globset::GlobSet;
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CString, OsStr};
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -12,9 +13,32 @@ use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH, Instant};
 
-use crate::filesystem_common::{has_encrypted_markers, has_any_markers};
+use crate::filesystem_common::{has_encrypted_markers, has_any_markers, has_any_markers_bytes};
+use crate::project::ProjectConfig;
 use crate::secrets::{FileSystemOps, SecretsCache, interpolate_secrets};
 use crate::Processor;
+
+/// Debug logging macro for FUSE operations. Enabled by setting SSS_FUSE_DEBUG=1.
+/// Includes thread ID and PID for diagnosing deadlocks and concurrency issues.
+macro_rules! fuse_debug {
+    ($($arg:tt)*) => {
+        if FUSE_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
+            let thread_id = std::thread::current().id();
+            let pid = std::process::id();
+            eprintln!("[FUSE DEBUG {:?} PID:{}] {}", thread_id, pid, format!($($arg)*));
+        }
+    };
+}
+
+/// Global flag checked by fuse_debug! — set once from SSS_FUSE_DEBUG env var.
+static FUSE_DEBUG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Initialise the debug flag from the environment. Call once at startup.
+fn init_fuse_debug() {
+    if std::env::var("SSS_FUSE_DEBUG").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true")) {
+        FUSE_DEBUG.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 const TTL: Duration = Duration::from_secs(1);
 const TTL_ZERO: Duration = Duration::from_secs(0);  // No caching for passthrough files
@@ -176,6 +200,16 @@ pub struct SssFS {
     render_cache: RwLock<HashMap<u64, Vec<u8>>>,
     /// Pinned virtual paths with their operations
     pinned_paths: Vec<PinnedPath>,
+    /// Processors for nested projects (rel_path from source → Processor)
+    nested_processors: HashMap<PathBuf, Processor>,
+    /// Relative paths of nested projects where we have no matching keys
+    no_key_roots: HashSet<PathBuf>,
+    /// Ignore patterns from root project config (positive matches → skip processing)
+    ignore_patterns: Option<GlobSet>,
+    /// Negation patterns from root project config (overrides ignore)
+    negation_patterns: Option<GlobSet>,
+    /// Per-nested-project ignore patterns (rel_path → (positive, negation))
+    nested_ignore: HashMap<PathBuf, (GlobSet, GlobSet)>,
 }
 
 /// FD-based filesystem operations for FUSE in-place mounts
@@ -184,13 +218,32 @@ pub struct SssFS {
 /// like .exists() and fs::read() will route back through the FUSE mount, causing
 /// deadlock. This implementation uses fd-based operations (openat, faccessat) with
 /// source_fd to access the real filesystem underneath the mount.
+///
+/// IMPORTANT: All paths MUST be relative to source_fd. Absolute paths are
+/// automatically relativised by stripping `source_path` to prevent deadlocks
+/// when faccessat/openat would otherwise resolve through the FUSE mount.
 struct FdFileSystemOps {
     source_fd: std::os::unix::io::RawFd,
+    source_path: PathBuf,
+}
+
+impl FdFileSystemOps {
+    /// Convert a path to be relative to source_fd.
+    /// Absolute paths starting with source_path are stripped; other absolute
+    /// paths are returned as-is (openat will resolve them through VFS).
+    fn relativise<'a>(&self, path: &'a Path) -> &'a Path {
+        if path.is_absolute() {
+            path.strip_prefix(&self.source_path).unwrap_or(path)
+        } else {
+            path
+        }
+    }
 }
 
 impl FileSystemOps for FdFileSystemOps {
     fn file_exists(&self, path: &Path) -> bool {
-        let path_bytes = path.as_os_str().as_bytes();
+        let rel = self.relativise(path);
+        let path_bytes = rel.as_os_str().as_bytes();
         let path_cstr = match std::ffi::CString::new(path_bytes) {
             Ok(p) => p,
             Err(_) => return false,
@@ -209,7 +262,8 @@ impl FileSystemOps for FdFileSystemOps {
     }
 
     fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
-        let path_bytes = path.as_os_str().as_bytes();
+        let rel = self.relativise(path);
+        let path_bytes = rel.as_os_str().as_bytes();
         let path_cstr = std::ffi::CString::new(path_bytes)?;
 
         let fd = unsafe {
@@ -221,9 +275,8 @@ impl FileSystemOps for FdFileSystemOps {
         }
 
         // Read file contents
-        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let mut file = unsafe { fs::File::from_raw_fd(fd) };
         let mut contents = Vec::new();
-        use std::io::Read;
         std::io::Read::read_to_end(&mut file, &mut contents)?;
         std::mem::forget(file); // Don't close fd automatically
 
@@ -265,11 +318,15 @@ impl SssFS {
     /// let key = RepositoryKey::new();
     /// let processor = Processor::new(key)?;
     /// // Hold fd to mount point for /proc access
-    /// let fs = SssFS::new(source, processor, Some(mount))?;
+    /// let fs = SssFS::new(source, processor, Some(mount), None)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(source_path: PathBuf, processor: Processor, mount_path: Option<PathBuf>) -> Result<Self> {
+    pub fn new(source_path: PathBuf, processor: Processor, mount_path: Option<PathBuf>,
+               config: Option<&ProjectConfig>) -> Result<Self> {
+        init_fuse_debug();
+        fuse_debug!("SssFS::new source={:?} mount={:?}", source_path, mount_path);
+
         if !source_path.exists() {
             return Err(anyhow!("Source path does not exist: {:?}", source_path));
         }
@@ -361,6 +418,70 @@ impl SssFS {
         // Create secrets cache from processor configuration
         let secrets_cache = processor.get_secrets_cache().clone();
 
+        // Parse root project ignore patterns from config
+        let (ignore_patterns, negation_patterns) = if let Some(cfg) = config {
+            let (pos, neg) = cfg.parse_ignore_patterns()?;
+            (
+                if pos.is_empty() { None } else { Some(pos) },
+                if neg.is_empty() { None } else { Some(neg) },
+            )
+        } else {
+            (None, None)
+        };
+
+        // Scan for nested projects (subdirectories with their own .sss.toml)
+        let mut nested_processors = HashMap::new();
+        let mut no_key_roots = HashSet::new();
+        let mut nested_ignore = HashMap::new();
+
+        for entry in walkdir::WalkDir::new(&source_path)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                if name.starts_with('.') { return false; }
+                if e.file_type().is_dir() {
+                    let skip = ["target", "node_modules", "dist", "build"];
+                    return !skip.contains(&name.as_ref());
+                }
+                true
+            })
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_dir() { continue; }
+            if entry.path() == source_path { continue; }
+
+            let config_path = entry.path().join(".sss.toml");
+            if !config_path.exists() { continue; }
+
+            let rel_path = entry.path().strip_prefix(&source_path)
+                .unwrap_or(entry.path())
+                .to_path_buf();
+
+            match crate::commands::utils::try_create_processor_for_config(&config_path) {
+                Ok(Some((cfg, proc))) => {
+                    // Parse ignore patterns for this nested project
+                    if let Ok((pos, neg)) = cfg.parse_ignore_patterns() {
+                        if !pos.is_empty() {
+                            nested_ignore.insert(rel_path.clone(), (pos, neg));
+                        }
+                    }
+                    nested_processors.insert(rel_path, proc);
+                }
+                Ok(None) => {
+                    eprintln!("Note: FUSE - no keys for nested project at {}", rel_path.display());
+                    no_key_roots.insert(rel_path);
+                }
+                Err(e) => {
+                    eprintln!("Warning: FUSE - cannot load nested project at {}: {}", rel_path.display(), e);
+                    no_key_roots.insert(rel_path);
+                }
+            }
+        }
+
         Ok(Self {
             source_path,
             source_fd,
@@ -376,6 +497,11 @@ impl SssFS {
             next_fh: RwLock::new(1),
             render_cache: RwLock::new(HashMap::new()),
             pinned_paths,
+            nested_processors,
+            no_key_roots,
+            ignore_patterns,
+            negation_patterns,
+            nested_ignore,
         })
     }
 
@@ -396,7 +522,7 @@ impl SssFS {
     /// # let mount = PathBuf::from("/mnt/project");
     /// # let key = RepositoryKey::new();
     /// # let processor = Processor::new(key)?;
-    /// let fs = SssFS::new(source, processor, Some(mount))?;
+    /// let fs = SssFS::new(source, processor, Some(mount), None)?;
     /// if let Some(fd) = fs.get_mount_fd() {
     ///     println!("Access underlying directory: /proc/self/fd/{}", fd);
     /// }
@@ -601,6 +727,81 @@ impl SssFS {
         }
     }
 
+    /// Get the processor for a given relative path by walking up to find
+    /// the nearest nested project, or falling back to the root processor.
+    /// Returns `None` if the path falls inside a no-key root (passthrough).
+    fn get_processor_for_path(&self, rel_path: &Path) -> Option<&Processor> {
+        let mut current = Some(rel_path);
+        while let Some(p) = current {
+            if self.no_key_roots.contains(p) {
+                return None;
+            }
+            if let Some(proc) = self.nested_processors.get(p) {
+                return Some(proc);
+            }
+            current = p.parent();
+        }
+        Some(&self.processor)
+    }
+
+    /// Check if a file should skip SSS processing due to ignore patterns.
+    /// Ignored files are still visible but returned as raw bytes (no decrypt/render).
+    fn should_skip_processing(&self, rel_path: &Path) -> bool {
+        // Walk up from rel_path to find the nearest nested project with ignore patterns
+        let mut current = Some(rel_path);
+        while let Some(p) = current {
+            if let Some((positive, negative)) = self.nested_ignore.get(p) {
+                // Found nested project — check path relative to this project root
+                let sub_path = rel_path.strip_prefix(p).unwrap_or(rel_path);
+                return Self::matches_ignore_patterns(sub_path, positive, negative);
+            }
+            current = p.parent();
+        }
+
+        // No nested project found, use root patterns
+        if let Some(ref positive) = self.ignore_patterns {
+            let negative = self.negation_patterns.as_ref();
+            let empty = GlobSet::empty();
+            let neg = negative.unwrap_or(&empty);
+            Self::matches_ignore_patterns(rel_path, positive, neg)
+        } else {
+            false
+        }
+    }
+
+    /// Check if a path matches positive ignore patterns without being overridden by negation.
+    fn matches_ignore_patterns(path: &Path, positive: &GlobSet, negative: &GlobSet) -> bool {
+        if positive.is_empty() {
+            return false;
+        }
+
+        // Check both full path and filename (so *.log matches subdir/debug.log)
+        let matches_ignore = positive.is_match(path)
+            || path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| positive.is_match(name))
+                .unwrap_or(false);
+
+        if !matches_ignore {
+            return false;
+        }
+
+        // Check negation override
+        if !negative.is_empty() {
+            let matches_negation = negative.is_match(path)
+                || path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|name| negative.is_match(name))
+                    .unwrap_or(false);
+
+            if matches_negation {
+                return false; // Negation overrides ignore
+            }
+        }
+
+        true
+    }
+
     /// Check if a file/directory should be hidden from FUSE view
     fn should_hide(name: &str) -> bool {
         matches!(
@@ -755,6 +956,7 @@ impl SssFS {
     }
 
     /// Check if a file exists using source_fd (works even if mounted over source)
+    #[allow(dead_code)]
     fn file_exists_via_fd(&self, rel_path: &Path) -> bool {
         let path_bytes = rel_path.as_os_str().as_bytes();
         let path_cstr = match std::ffi::CString::new(path_bytes) {
@@ -777,12 +979,15 @@ impl SssFS {
 
     /// Read file using source_fd (works even if mounted over source)
     fn read_file_via_fd(&self, rel_path: &Path) -> Result<Vec<u8>> {
+        fuse_debug!("      read_file_via_fd: rel_path={:?} source_fd={}", rel_path, self.source_fd);
         // On macOS, openat can deadlock from FUSE handlers
         // Use full path instead
         #[cfg(target_os = "macos")]
         {
             let full_path = self.source_path.join(rel_path);
+            fuse_debug!("      read_file_via_fd: macOS fs::read {:?}", full_path);
             let buffer = fs::read(&full_path)?;
+            fuse_debug!("      read_file_via_fd: done, {}bytes", buffer.len());
             return Ok(buffer);
         }
 
@@ -794,9 +999,11 @@ impl SssFS {
             let path_cstr = std::ffi::CString::new(path_bytes)?;
 
             // Open file relative to source_fd
+            fuse_debug!("      read_file_via_fd: calling openat(fd={}, {:?}, O_RDONLY)", self.source_fd, rel_path);
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
             };
+            fuse_debug!("      read_file_via_fd: openat returned fd={}", fd);
 
             if fd < 0 {
                 let err = std::io::Error::last_os_error();
@@ -804,10 +1011,12 @@ impl SssFS {
             }
 
             // Read file contents
+            fuse_debug!("      read_file_via_fd: reading contents");
             let mut buffer = Vec::new();
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             use std::io::Read;
             std::io::BufReader::new(file).read_to_end(&mut buffer)?;
+            fuse_debug!("      read_file_via_fd: done, {}bytes", buffer.len());
 
             Ok(buffer)
         }
@@ -823,18 +1032,28 @@ impl SssFS {
         let rel_path = path.strip_prefix(&self.source_path)
             .unwrap_or(path);
 
-        // Read file via fd
-        let bytes = self.read_file_via_fd(rel_path)?;
+        fuse_debug!("    read_and_process: rel_path={:?}", rel_path);
 
-        // Check if file has markers by scanning raw bytes for UTF-8 marker sequences
-        // This avoids String conversion for files without markers (preserves exact bytes)
-        use crate::filesystem_common::has_any_markers_bytes;
-        if !has_any_markers_bytes(&bytes) {
-            // No markers present, return raw bytes unchanged to preserve exact file content
+        // Read file via fd
+        fuse_debug!("    read_and_process: calling read_file_via_fd");
+        let bytes = self.read_file_via_fd(rel_path)?;
+        fuse_debug!("    read_and_process: read {}bytes", bytes.len());
+
+        // Skip processing for files matching ignore patterns — return raw bytes
+        if self.should_skip_processing(rel_path) {
+            fuse_debug!("    read_and_process: skipped (ignore pattern)");
             return Ok(bytes);
         }
 
-        // File has markers, convert to string for processing
+        // Quick byte-level scan for marker opening sequences (avoids String conversion
+        // for the vast majority of files that have no markers at all)
+        use crate::filesystem_common::has_any_markers_bytes;
+        if !has_any_markers_bytes(&bytes) {
+            fuse_debug!("    read_and_process: no markers, returning raw");
+            return Ok(bytes);
+        }
+
+        // File has marker-like bytes — convert to string for deeper validation
         let content = match String::from_utf8(bytes.clone()) {
             Ok(c) => c,
             Err(_) => {
@@ -843,18 +1062,37 @@ impl SssFS {
             }
         };
 
+        // Verify file actually has balanced markers (prefix + { + content + })
+        // Files that merely mention marker characters (e.g. in grep patterns or
+        // documentation) are returned as-is to avoid false-positive processing
+        use crate::filesystem_common::has_balanced_markers;
+        if !has_balanced_markers(&content) {
+            fuse_debug!("    read_and_process: no balanced markers, returning raw");
+            return Ok(bytes);
+        }
+
+        fuse_debug!("    read_and_process: has balanced markers, processing");
+
         // Apply processing function with relative path for proper secrets resolution
         let processed = process_fn(self, content, rel_path)?;
+        fuse_debug!("    read_and_process: done");
         Ok(processed.into_bytes())
     }
 
     fn read_and_render(&self, path: &Path) -> Result<Vec<u8>> {
         self.read_and_process(path, |fs, content, rel_path| {
+            // Check for a nested-project processor (None → no keys, passthrough)
+            let proc = match fs.get_processor_for_path(rel_path) {
+                Some(p) => p,
+                None => return Ok(content), // no keys — return as-is
+            };
+
             // Process if file has any markers (sealed or opened)
             if has_any_markers(&content) {
                 // First, interpolate secrets using unified function with fd-based operations (avoids deadlock)
                 let fd_ops = FdFileSystemOps {
                     source_fd: fs.source_fd,
+                    source_path: fs.source_path.clone(),
                 };
                 let mut secrets_cache = fs.secrets_cache.write();
                 let content_with_secrets = interpolate_secrets(
@@ -865,8 +1103,8 @@ impl SssFS {
                     &fd_ops,
                 )?;
 
-                // Then decrypt and remove all markers
-                fs.processor.decrypt_to_raw(&content_with_secrets)
+                // Then decrypt and remove all markers using the correct processor
+                proc.decrypt_to_raw(&content_with_secrets)
             } else {
                 // Return as-is for non-marked files
                 Ok(content)
@@ -876,11 +1114,17 @@ impl SssFS {
 
     /// Read and open a file (decrypt ⊠{} → ⊕{} but keep markers for ssse edit)
     fn read_and_open(&self, path: &Path) -> Result<Vec<u8>> {
-        self.read_and_process(path, |fs, content, _rel_path| {
+        self.read_and_process(path, |fs, content, rel_path| {
+            // Check for a nested-project processor (None → no keys, passthrough)
+            let proc = match fs.get_processor_for_path(rel_path) {
+                Some(p) => p,
+                None => return Ok(content), // no keys — return as-is
+            };
+
             // Only process if file has encrypted markers
             if has_encrypted_markers(&content) {
                 // Decrypt to opened form (⊠{} → ⊕{})
-                fs.processor.decrypt_content(&content)
+                proc.decrypt_content(&content)
             } else {
                 // Return as-is for non-encrypted files
                 Ok(content)
@@ -1031,11 +1275,14 @@ impl SssFS {
         let opened_str = String::from_utf8(opened_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
+        // Select the correct processor for this path
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        let proc = self.get_processor_for_path(rel_path).unwrap_or(&self.processor);
+
         // Seal the opened content (⊕{} → ⊠{})
-        let sealed_content = self.processor.encrypt_content(&opened_str)?;
+        let sealed_content = proc.encrypt_content(&opened_str)?;
 
         // Write to backing store via file descriptor
-        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
         self.write_via_fd_atomic(rel_path, &sealed_content)
     }
 
@@ -1059,8 +1306,12 @@ impl SssFS {
 
     /// Performs smart reconstruction using marker inference
     fn perform_smart_reconstruction(&self, path: &Path, sealed_current: &str, rendered_str: &str) -> Result<String> {
+        // Select the correct processor for this path
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        let proc = self.get_processor_for_path(rel_path).unwrap_or(&self.processor);
+
         // Open (decrypt/open) current version to get content with markers
-        let opened_current = self.processor.decrypt_content(sealed_current)?;
+        let opened_current = proc.decrypt_content(sealed_current)?;
 
         // Use intelligent marker inference to reconstruct markers
         let inference_result = crate::marker_inference::infer_markers(&opened_current, rendered_str)
@@ -1078,6 +1329,17 @@ impl SssFS {
     }
 
     fn write_and_seal(&self, path: &Path, rendered_content: &[u8], original_sealed: Option<&String>) -> Result<()> {
+        // Check if this file is in a no-key zone — write raw
+        let rel_path = path.strip_prefix(&self.source_path).unwrap_or(path);
+        if self.get_processor_for_path(rel_path).is_none() {
+            return self.write_raw_to_backing(path, rendered_content);
+        }
+
+        // Skip processing for files matching ignore patterns — write raw
+        if self.should_skip_processing(rel_path) {
+            return self.write_raw_to_backing(path, rendered_content);
+        }
+
         // Convert bytes to string
         let rendered_str = String::from_utf8(rendered_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
@@ -1145,7 +1407,13 @@ impl SssFS {
 
         // Get or create inode
         let ino = self.get_or_create_inode(&virtual_path, parent);
-        let attr = self.metadata_to_attr(ino, &metadata, None, false);
+        let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
+        let size_override = if is_passthrough {
+            None
+        } else {
+            self.compute_size_override(ino, &metadata)
+        };
+        let attr = self.metadata_to_attr(ino, &metadata, size_override, false);
 
         Ok((ino, attr))
     }
@@ -1182,19 +1450,26 @@ impl SssFS {
 
     /// Pre-cache file content based on mode flags
     fn precache_for_open(&self, file_path: &Path, is_sealed_mode: bool, is_opened_mode: bool, writable: bool) -> Option<Vec<u8>> {
-        if is_sealed_mode {
+        fuse_debug!("  precache: path={:?} sealed={} opened={} writable={}", file_path, is_sealed_mode, is_opened_mode, writable);
+        let result = if is_sealed_mode {
             // Sealed mode: pre-cache raw sealed content with ⊠{} markers
+            fuse_debug!("  precache: reading sealed");
             self.read_sealed(file_path).ok()
         } else if is_opened_mode {
             // Opened mode: pre-cache with ⊕{} markers
+            fuse_debug!("  precache: reading opened");
             self.read_and_open(file_path).ok()
-        } else if !writable {
-            // Read-only: pre-render normally
-            self.read_and_render(file_path).ok()
         } else {
-            // Writable non-opened mode: no pre-cache
-            None
-        }
+            // Normal mode (read-only or writable): pre-render so that
+            // getattr reports the correct rendered size rather than the
+            // on-disk size (which includes encrypted markers and differs).
+            // For writable files the cached content is updated in-place by
+            // write() and flushed/sealed in release(), so precaching is safe.
+            fuse_debug!("  precache: reading rendered (writable={})", writable);
+            self.read_and_render(file_path).ok()
+        };
+        fuse_debug!("  precache: done, got={}bytes", result.as_ref().map_or(0, |c| c.len()));
+        result
     }
 
     /// Get content for file handle based on its mode
@@ -1324,11 +1599,43 @@ impl SssFS {
             .map(|content| content.len() as u64);
 
         if handle_size.is_some() {
-            handle_size
-        } else {
-            // Fallback to render cache
+            return handle_size;
+        }
+        drop(handles);
+
+        // Check render cache
+        {
             let cache = self.render_cache.read();
-            cache.get(&ino).map(|content| content.len() as u64)
+            if let Some(content) = cache.get(&ino) {
+                return Some(content.len() as u64);
+            }
+        }
+
+        // Nothing cached yet — eagerly render files with markers so that
+        // getattr/lookup report the correct (rendered) size instead of the
+        // on-disk size.  Without this, editors like vim see the larger
+        // on-disk size, read fewer rendered bytes, and display trailing NULs.
+        let entry = self.get_inode(ino)?;
+        let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
+        if pinned.virtual_prefix == Path::new("/.overlay") {
+            return None; // passthrough — on-disk size is correct
+        }
+
+        // Quick byte-level scan: only render if markers are present
+        let bytes = self.read_file_via_fd(&source_rel_path).ok()?;
+        if !has_any_markers_bytes(&bytes) {
+            return None; // no markers — on-disk size matches rendered size
+        }
+
+        // File has markers — render and cache to get the true size
+        let file_path = self.source_path.join(&source_rel_path);
+        match self.read_and_render(&file_path) {
+            Ok(content) => {
+                let size = content.len() as u64;
+                self.render_cache.write().insert(ino, content);
+                Some(size)
+            }
+            Err(_) => None,
         }
     }
 
@@ -1354,20 +1661,25 @@ impl Filesystem for SssFS {
         _req: &Request<'_>,
         _config: &mut fuser::KernelConfig,
     ) -> Result<(), libc::c_int> {
+        fuse_debug!("========== FUSE INIT ==========");
+        fuse_debug!("source={:?} pinned_paths={}", self.source_path, self.pinned_paths.len());
 
         for (_idx, _pinned) in self.pinned_paths.iter().enumerate() {
         }
 
+        fuse_debug!("INIT complete");
         Ok(())
     }
 
     /// Destroy filesystem - called when FUSE connection is terminated
     fn destroy(&mut self) {
+        fuse_debug!("========== FUSE DESTROY ==========");
     }
 
     /// Get file attributes by inode
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         let _start = Instant::now();
+        fuse_debug!("getattr ino={}", ino);
         // Handle synthetic .overlay directory
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             // Get attributes from the actual source directory
@@ -1473,6 +1785,7 @@ impl Filesystem for SssFS {
     /// Lookup entry in directory
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         let _start = Instant::now();
+        fuse_debug!("lookup parent={} name={:?}", parent, name);
 
         // Special case: looking up ".overlay" from root
         if parent == ROOT_INO && name == ".overlay" {
@@ -1609,6 +1922,7 @@ impl Filesystem for SssFS {
         mut reply: ReplyDirectory,
     ) {
         let _start = Instant::now();
+        fuse_debug!("readdir ino={} offset={}", ino, offset);
 
         // Handle .overlay/ - parent is synthetic, build entry manually
         let entry = if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1678,6 +1992,7 @@ impl Filesystem for SssFS {
     /// Open a file
     fn open(&mut self, _req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         let _start = Instant::now();
+        fuse_debug!("open ino={} flags={:#x}", ino, flags);
 
         // Block operations on .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -1693,11 +2008,13 @@ impl Filesystem for SssFS {
             }
         };
 
+        fuse_debug!("  open: path={:?}", entry.path);
 
         // Translate virtual path to source path using pinned paths
         let (source_rel_path, pinned) = self.translate_virtual_to_source(&entry.path);
         let is_passthrough = pinned.virtual_prefix == Path::new("/.overlay");
 
+        fuse_debug!("  open: source_rel={:?} passthrough={}", source_rel_path, is_passthrough);
 
         // Determine file modes (not applicable for passthrough files)
         // Opened mode: detected by nonsense flag combination O_DIRECTORY|O_CREAT
@@ -1722,6 +2039,8 @@ impl Filesystem for SssFS {
             Self::strip_virtual_suffix(&translated_path, is_opened_mode)
         };
 
+        fuse_debug!("  open: file_path={:?} writable={} sealed={} opened={}", file_path, writable, is_sealed_mode, is_opened_mode);
+
         // Generate file handle
         let fh = {
             let mut next_fh = self.next_fh.write();
@@ -1730,12 +2049,16 @@ impl Filesystem for SssFS {
             fh
         };
 
+        fuse_debug!("  open: fh={}, starting precache", fh);
+
         // Pre-cache content based on mode (skip for passthrough - raw access)
         let cached_content = if is_passthrough {
             None
         } else {
             self.precache_for_open(&file_path, is_sealed_mode, is_opened_mode, writable)
         };
+
+        fuse_debug!("  open: precache done, cached={}bytes", cached_content.as_ref().map_or(0, |c| c.len()));
 
         // Capture original sealed content from backing store if file is writable
         // This is needed for smart reconstruction when editor truncates file before writing
@@ -1867,6 +2190,7 @@ impl Filesystem for SssFS {
         reply: ReplyData,
     ) {
         let _start = Instant::now();
+        fuse_debug!("read ino={} fh={} offset={} size={}", ino, fh, offset, size);
 
         // Get content from handle or fall back to direct read
         let handles = self.file_handles.read();
@@ -1949,6 +2273,7 @@ impl Filesystem for SssFS {
         reply: ReplyWrite,
     ) {
         let _start = Instant::now();
+        fuse_debug!("write ino={} fh={} offset={} size={}", ino, fh, offset, data.len());
         // Block writes to .git blocking directory only
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             reply.error(libc::EPERM);
@@ -2049,6 +2374,7 @@ impl Filesystem for SssFS {
         reply: fuser::ReplyEmpty,
     ) {
         let _start = Instant::now();
+        fuse_debug!("release fh={} flush={}", fh, _flush);
         let mut handles = self.file_handles.write();
         if let Some(handle) = handles.remove(&fh) {
             // Close passthrough fd if present
@@ -2191,6 +2517,7 @@ impl Filesystem for SssFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        fuse_debug!("setattr ino={} mode={:?} size={:?}", ino, mode, size);
         // Handle .overlay synthetic directory - return current attributes
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
             match self.metadata_via_fd(Path::new(".")) {
@@ -2332,6 +2659,7 @@ impl Filesystem for SssFS {
         reply: fuser::ReplyEmpty,
     ) {
         let _start = Instant::now();
+        fuse_debug!("fsync fh={} datasync={}", fh, datasync);
 
         // For passthrough files with an fd, sync to flush mmap writes
         let handles = self.file_handles.read();
@@ -2360,6 +2688,7 @@ impl Filesystem for SssFS {
     /// Check file access permissions
     fn access(&mut self, _req: &Request, ino: u64, mask: i32, reply: fuser::ReplyEmpty) {
         let _start = Instant::now();
+        fuse_debug!("access ino={} mask={:#x}", ino, mask);
 
         // Handle synthetic directories
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
@@ -2435,6 +2764,7 @@ impl Filesystem for SssFS {
         reply: fuser::ReplyEmpty,
     ) {
         let _start = Instant::now();
+        fuse_debug!("flush fh={}", fh);
 
         // For passthrough files, sync to flush any mmap'd writes
         let handles = self.file_handles.read();
@@ -2470,6 +2800,7 @@ impl Filesystem for SssFS {
         flags: i32,
         reply: fuser::ReplyCreate,
     ) {
+        fuse_debug!("create parent={} name={:?} flags={:#x}", parent, name, flags);
 
         // Handle .overlay synthetic directory
         let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
@@ -2602,6 +2933,7 @@ impl Filesystem for SssFS {
         _umask: u32,
         reply: fuser::ReplyEntry,
     ) {
+        fuse_debug!("mkdir parent={} name={:?} mode={:#o}", parent, name, mode);
         // Handle .overlay synthetic directory
         let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
             InodeEntry {
@@ -2651,6 +2983,7 @@ impl Filesystem for SssFS {
 
     /// Remove a file
     fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        fuse_debug!("unlink parent={} name={:?}", parent, name);
         // Handle .overlay synthetic directory
         let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
             InodeEntry {
@@ -2701,6 +3034,7 @@ impl Filesystem for SssFS {
 
     /// Remove a directory
     fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: fuser::ReplyEmpty) {
+        fuse_debug!("rmdir parent={} name={:?}", parent, name);
         // Handle .overlay synthetic directory
         let parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
             InodeEntry {
@@ -2867,6 +3201,7 @@ impl Filesystem for SssFS {
         _flags: u32,
         reply: fuser::ReplyEmpty,
     ) {
+        fuse_debug!("rename parent={} name={:?} newparent={} newname={:?}", parent, name, newparent, newname);
         // Handle .overlay synthetic directory for old parent
         let old_parent_entry = if parent == SYNTHETIC_OVERLAY_DIR_INO {
             InodeEntry {

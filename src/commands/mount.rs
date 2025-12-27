@@ -78,13 +78,13 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
     }
 
     // Load project config and create processor
-    let (_config, processor) = load_processor_for_source(&source_path)?;
+    let (config, processor) = load_processor_for_source(&source_path)?;
 
     // Canonicalize mountpoint for fd holding
     let mountpoint_canonical = std::fs::canonicalize(&mountpoint_path)?;
 
-    // Create FUSE filesystem with mount point fd
-    let fs = SssFS::new(source_path.clone(), processor, Some(mountpoint_canonical))?;
+    // Create FUSE filesystem with mount point fd (pass config for ignore patterns)
+    let fs = SssFS::new(source_path.clone(), processor, Some(mountpoint_canonical), Some(&config))?;
 
     if in_place {
         eprintln!("Mounting in-place (overlay): {}", source_path.display());

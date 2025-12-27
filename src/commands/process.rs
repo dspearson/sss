@@ -10,6 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
 
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
 use crate::{
     commands::utils, config::load_project_config_with_repository_key,
     constants::{ERR_STDIN_EDIT, ERR_STDIN_IN_PLACE},
@@ -294,7 +297,7 @@ pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globset::GlobSet> {
     use globset::{Glob, GlobSetBuilder};
 
-    let patterns = config.parse_ignore_patterns();
+    let patterns = config.get_ignore_pattern_strings();
     if patterns.is_empty() {
         return None;
     }
@@ -320,8 +323,37 @@ fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globse
     }
 }
 
-/// Recursively process all files in the project with the given operation
-/// IMPORTANT: Does not follow symlinks outside the project boundary
+/// Walk up from `path` to find the nearest project root in `projects` or `passthrough`.
+///
+/// Returns `Some((root, processor, ignore_globset))` if we find a matching project,
+/// or `None` if the file falls inside a passthrough (no-keys) root or has no project.
+fn find_project_for_path<'a>(
+    path: &Path,
+    projects: &'a HashMap<PathBuf, (Processor, Option<globset::GlobSet>)>,
+    passthrough: &HashSet<PathBuf>,
+) -> Option<(&'a PathBuf, &'a Processor, &'a Option<globset::GlobSet>)> {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if passthrough.contains(dir) {
+            return None;
+        }
+        if let Some((proc, gs)) = projects.get(dir) {
+            return Some((
+                // SAFETY: the key exists, we can get a reference to it from the map
+                projects.keys().find(|k| *k == dir).unwrap(),
+                proc,
+                gs,
+            ));
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+/// Recursively process all files in the project with the given operation.
+/// Detects nested project boundaries and uses each project's own key.
+/// Projects where the current user has no keys are silently skipped.
+/// IMPORTANT: Does not follow symlinks outside the project boundary.
 fn process_project_recursively(operation: &str) -> Result<()> {
     use std::fs;
     use walkdir::WalkDir;
@@ -364,11 +396,16 @@ fn process_project_recursively(operation: &str) -> Result<()> {
     let canonical_project_root = fs::canonicalize(&project_root)
         .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;
 
-    // Load project config and processor
+    // Load root project config and processor
     let (config, processor, _) = utils::create_processor_from_project_config()?;
 
-    // Build the ignore pattern matcher from project config
-    let ignore_globset = build_ignore_globset(&config);
+    // Build per-project maps: project_root → (Processor, ignore_globset)
+    let mut projects: HashMap<PathBuf, (Processor, Option<globset::GlobSet>)> = HashMap::new();
+    let mut passthrough_roots: HashSet<PathBuf> = HashSet::new();
+
+    // Seed with root project
+    let root_ignore = build_ignore_globset(&config);
+    projects.insert(project_root.clone(), (processor, root_ignore));
 
     let mut processed_count = 0;
     let mut error_count = 0;
@@ -397,16 +434,6 @@ fn process_project_recursively(operation: &str) -> Result<()> {
                 return !skip_dirs.contains(&name.as_ref());
             }
 
-            // Check against ignore patterns from project config
-            if let Some(ref globset) = ignore_globset {
-                // Get path relative to project root for matching
-                if let Ok(rel_path) = e.path().strip_prefix(&project_root) {
-                    if globset.is_match(rel_path) {
-                        return false;
-                    }
-                }
-            }
-
             true
         })
     {
@@ -419,12 +446,56 @@ fn process_project_recursively(operation: &str) -> Result<()> {
             }
         };
 
+        let path = entry.path();
+
+        // When we encounter a directory (not root) with .sss.toml, register it
+        if entry.file_type().is_dir() && path != project_root {
+            let nested_config_path = path.join(".sss.toml");
+            if nested_config_path.exists() {
+                match utils::try_create_processor_for_config(&nested_config_path) {
+                    Ok(Some((nested_config, nested_processor))) => {
+                        let nested_ignore = build_ignore_globset(&nested_config);
+                        projects.insert(path.to_path_buf(), (nested_processor, nested_ignore));
+                    }
+                    Ok(None) => {
+                        eprintln!(
+                            "Note: Skipping nested project at {} (no matching keys)",
+                            path.display()
+                        );
+                        passthrough_roots.insert(path.to_path_buf());
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Cannot load nested project at {}: {}",
+                            path.display(), e
+                        );
+                        passthrough_roots.insert(path.to_path_buf());
+                    }
+                }
+            }
+            continue;
+        }
+
         // Only process files
         if !entry.file_type().is_file() {
             continue;
         }
 
-        let path = entry.path();
+        // Find the nearest project for this file
+        let (proj_root, proj_processor, proj_ignore) =
+            match find_project_for_path(path, &projects, &passthrough_roots) {
+                Some(found) => found,
+                None => continue, // in a passthrough zone — skip silently
+            };
+
+        // Check per-project ignore patterns
+        if let Some(globset) = proj_ignore {
+            if let Ok(rel_path) = path.strip_prefix(proj_root) {
+                if globset.is_match(rel_path) {
+                    continue;
+                }
+            }
+        }
 
         // Additional safety: Check if the entry is a symlink and resolve it
         // to ensure it stays within project boundaries
@@ -462,8 +533,8 @@ fn process_project_recursively(operation: &str) -> Result<()> {
             continue;
         }
 
-        // Process the file in-place
-        match process_file_in_place(path, &processor, operation) {
+        // Process the file in-place with the correct project's processor
+        match process_file_in_place(path, proj_processor, operation) {
             Ok(changed) => {
                 if changed {
                     println!("{}: {}", operation_verb, path.display());

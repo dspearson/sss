@@ -236,7 +236,10 @@ impl Processor {
 
     /// Get a clone of the secrets cache for sharing with other components
     pub fn get_secrets_cache(&self) -> SecretsCache {
-        (*self.secrets_cache.borrow()).clone()
+        #[cfg(not(feature = "ninep"))]
+        { (*self.secrets_cache.borrow()).clone() }
+        #[cfg(feature = "ninep")]
+        { self.secrets_cache.read().clone() }
     }
 
     /// Create a new processor with custom secrets filename

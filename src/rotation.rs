@@ -218,7 +218,7 @@ impl RotationManager {
             println!("🔍 Scanning repository for encrypted files...");
         }
 
-        let scanner = FileScanner::new();
+        let scanner = FileScanner::new().with_project_boundaries(true);
         let scan_result = scanner.scan_with_stats(root_dir)?;
 
         if self.options.show_progress {

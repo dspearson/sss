@@ -1,0 +1,480 @@
+{
+  "name": "sss-vscode",
+  "displayName": "Secret String Substitution",
+  "description": "Transparent encryption/decryption for SSS (Secret String Substitution) projects with project and key management",
+  "version": "0.1.0",
+  "publisher": "sss",
+  "license": "ISC",
+  "author": "Dominic Pearson <dsp@technoanimal.net>",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "keywords": [
+    "encryption",
+    "secrets",
+    "security",
+    "git"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "activationEvents": [
+    "onFileSystem:sss-fs",
+    "onStartupFinished",
+    "workspaceContains:.sss.toml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "sss-secrets",
+        "aliases": ["SSS Secrets", "Secrets"],
+        "extensions": [],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sss-secrets",
+        "scopeName": "source.sss-secrets",
+        "path": "./syntaxes/sss-secrets.json"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sss-secrets",
+          "title": "Secrets",
+          "icon": "$(key)"
+        }
+      ]
+    },
+    "views": {
+      "sss-secrets": [
+        {
+          "id": "sss.projectView",
+          "name": "Project",
+          "when": "sss.isProject"
+        },
+        {
+          "id": "sss.usersView",
+          "name": "Users",
+          "when": "sss.isProject"
+        },
+        {
+          "id": "sss.keysView",
+          "name": "Keypairs",
+          "when": "sss.isProject"
+        },
+        {
+          "id": "sss.actionsView",
+          "name": "Actions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "sss.sealFile",
+        "title": "🔒 Seal File (Encrypt)",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "sss.openFile",
+        "title": "✨ Open File (Decrypt to Markers)",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "sss.renderFile",
+        "title": "👁️ Render File (Show Plaintext)",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "sss.wrapSelection",
+        "title": "🔑 Wrap Selection with Encryption Marker",
+        "icon": "$(key)"
+      },
+      {
+        "command": "sss.insertInterpolatedSecret",
+        "title": "🔗 Insert Interpolated Secret",
+        "icon": "$(symbol-key)"
+      },
+      {
+        "command": "sss.goToSecretDefinition",
+        "title": "🔍 Go to Secret Definition",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "sss.normaliseMarkers",
+        "title": "Secret String Substitution: Normalise Markers to UTF-8"
+      },
+      {
+        "command": "sss.sealWorkspace",
+        "title": "Secret String Substitution: Seal All Files in Workspace"
+      },
+      {
+        "command": "sss.openWorkspace",
+        "title": "Secret String Substitution: Open All Files in Workspace"
+      },
+      {
+        "command": "sss.renderProject",
+        "title": "Secret String Substitution: Render Project to Plaintext (Destructive)"
+      },
+      {
+        "command": "sss.initProject",
+        "title": "Secret String Substitution: Initialise Project"
+      },
+      {
+        "command": "sss.showProjectInfo",
+        "title": "Secret String Substitution: Show Project Information"
+      },
+      {
+        "command": "sss.addUser",
+        "title": "Secret String Substitution: Add User to Project",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sss.removeUser",
+        "title": "Remove User from Project"
+      },
+      {
+        "command": "sss.listUsers",
+        "title": "Secret String Substitution: List Project Users"
+      },
+      {
+        "command": "sss.generateKey",
+        "title": "Secret String Substitution: Generate New Keypair",
+        "icon": "$(add)"
+      },
+      {
+        "command": "sss.listKeys",
+        "title": "Secret String Substitution: List Keypairs"
+      },
+      {
+        "command": "sss.setCurrentKey",
+        "title": "Set as Current Keypair"
+      },
+      {
+        "command": "sss.showPublicKey",
+        "title": "Secret String Substitution: Copy Public Key to Clipboard"
+      },
+      {
+        "command": "sss.installHooks",
+        "title": "Secret String Substitution: Install Git Hooks"
+      },
+      {
+        "command": "sss.toggleAutoSeal",
+        "title": "Secret String Substitution: Toggle Auto-Seal on Save"
+      },
+      {
+        "command": "sss.toggleAutoOpen",
+        "title": "Secret String Substitution: Toggle Auto-Open on Load"
+      },
+      {
+        "command": "sss.openSettings",
+        "title": "Secret String Substitution: Open Settings"
+      },
+      {
+        "command": "sss.clearPassword",
+        "title": "Secret String Substitution: Clear Cached Password"
+      },
+      {
+        "command": "sss.updateBinary",
+        "title": "Secret String Substitution: Update sss Binary"
+      },
+      {
+        "command": "sss.refreshProjectView",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sss.refreshUsersView",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sss.refreshKeysView",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "sss.refreshProjectView",
+          "when": "view == sss.projectView",
+          "group": "navigation"
+        },
+        {
+          "command": "sss.addUser",
+          "when": "view == sss.usersView",
+          "group": "navigation"
+        },
+        {
+          "command": "sss.refreshUsersView",
+          "when": "view == sss.usersView",
+          "group": "navigation"
+        },
+        {
+          "command": "sss.generateKey",
+          "when": "view == sss.keysView",
+          "group": "navigation"
+        },
+        {
+          "command": "sss.refreshKeysView",
+          "when": "view == sss.keysView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sss.removeUser",
+          "when": "view == sss.usersView && viewItem == user",
+          "group": "inline"
+        },
+        {
+          "command": "sss.setCurrentKey",
+          "when": "view == sss.keysView && viewItem == key",
+          "group": "inline"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sss.sealFile",
+          "when": "!explorerResourceIsFolder && sss.isProject",
+          "group": "sss@1"
+        },
+        {
+          "command": "sss.openFile",
+          "when": "!explorerResourceIsFolder && sss.isProject",
+          "group": "sss@2"
+        },
+        {
+          "command": "sss.renderFile",
+          "when": "!explorerResourceIsFolder && sss.isProject",
+          "group": "sss@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sss.wrapSelection",
+          "when": "editorHasSelection && sss.isProject",
+          "group": "sss@1"
+        },
+        {
+          "command": "sss.insertInterpolatedSecret",
+          "when": "sss.isProject",
+          "group": "sss@2"
+        },
+        {
+          "command": "sss.goToSecretDefinition",
+          "when": "sss.isProject",
+          "group": "sss@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "sss.sealFile",
+          "when": "sss.isProject && resourceScheme == file",
+          "group": "navigation@1"
+        },
+        {
+          "command": "sss.openFile",
+          "when": "sss.isProject && resourceScheme == file",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sss.sealFile",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.openFile",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.renderFile",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.wrapSelection",
+          "when": "sss.isProject && editorHasSelection"
+        },
+        {
+          "command": "sss.insertInterpolatedSecret",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.goToSecretDefinition",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.normaliseMarkers",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.sealWorkspace",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.openWorkspace",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.showProjectInfo",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.addUser",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.removeUser",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.listUsers",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.installHooks",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.toggleAutoSeal",
+          "when": "sss.isProject"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "sss.sealFile",
+        "key": "alt+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "sss.isProject && (editorFocus || explorerViewletFocus)"
+      },
+      {
+        "command": "sss.openFile",
+        "key": "alt+shift+o",
+        "mac": "cmd+shift+o",
+        "when": "sss.isProject && (editorFocus || explorerViewletFocus)"
+      },
+      {
+        "command": "sss.renderFile",
+        "key": "alt+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "sss.isProject && (editorFocus || explorerViewletFocus)"
+      },
+      {
+        "command": "sss.wrapSelection",
+        "key": "alt+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorTextFocus && editorHasSelection && sss.isProject"
+      },
+      {
+        "command": "sss.insertInterpolatedSecret",
+        "key": "alt+shift+n",
+        "mac": "cmd+shift+n",
+        "when": "editorTextFocus && sss.isProject"
+      },
+      {
+        "command": "sss.goToSecretDefinition",
+        "key": "alt+shift+g",
+        "mac": "cmd+shift+g",
+        "when": "editorTextFocus && sss.isProject"
+      },
+      {
+        "command": "sss.addUser",
+        "key": "alt+shift+u",
+        "mac": "cmd+shift+u",
+        "when": "sss.isProject"
+      }
+    ],
+    "configuration": {
+      "title": "Secret String Substitution",
+      "properties": {
+        "secrets.autoSealOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically seal (encrypt) files when saving"
+        },
+        "secrets.autoOpenOnLoad": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open (decrypt) files when loading in editor"
+        },
+        "secrets.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show status in status bar"
+        },
+        "secrets.warnBeforeCommit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn if attempting to commit unsealed files"
+        },
+        "secrets.highlightMarkers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight markers in editor"
+        },
+        "secrets.user": {
+          "type": "string",
+          "default": "",
+          "description": "User for sss key configuration (sets SSS_USER environment variable, leave empty to not set)"
+        },
+        "secrets.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to sss binary (leave empty to auto-download)"
+        },
+        "secrets.upstreamVersion": {
+          "type": "string",
+          "default": "latest",
+          "description": "sss binary version to download (e.g., '1.1.7' or 'latest')"
+        },
+        "secrets.passphraseCacheTimeout": {
+          "type": "number",
+          "default": 0,
+          "description": "Minutes to cache passphrase (0 = entire session, never expires)"
+        },
+        "secrets.verboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose logging for debugging"
+        },
+        "secrets.autoNormaliseMarkers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically replace ASCII markers (o+{ → ⊕{, <{ → ⊲{) with UTF-8 equivalents as you type"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.x",
+    "@typescript-eslint/parser": "^6.x",
+    "eslint": "^8.x",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {},
+  "trustedDependencies": [
+    "@vscode/vsce-sign"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "scopeName": "markup.sss",
+  "patterns": [
+    {
+      "name": "markup.bold.sss.encrypted",
+      "begin": "⊠\\{",
+      "end": "(?<!\\\\)\\}",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sss",
+          "match": "\\\\[{}]"
+        }
+      ]
+    },
+    {
+      "name": "markup.italic.sss.plaintext",
+      "begin": "⊕\\{",
+      "end": "(?<!\\\\)\\}",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sss",
+          "match": "\\\\[{}]"
+        }
+      ]
+    },
+    {
+      "name": "markup.italic.sss.plaintext",
+      "begin": "o\\+\\{",
+      "end": "(?<!\\\\)\\}",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sss",
+          "match": "\\\\[{}]"
+        }
+      ]
+    },
+    {
+      "name": "markup.underline.sss.interpolation",
+      "begin": "⊲\\{",
+      "end": "(?<!\\\\)\\}",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sss",
+          "match": "\\\\[{}]"
+        }
+      ]
+    },
+    {
+      "name": "markup.underline.sss.interpolation",
+      "begin": "<\\{",
+      "end": "(?<!\\\\)\\}",
+      "patterns": [
+        {
+          "name": "constant.character.escape.sss",
+          "match": "\\\\[{}]"
+        }
+      ]
+    }
+  ]
+}

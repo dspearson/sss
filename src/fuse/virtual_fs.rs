@@ -36,7 +36,7 @@ impl FileOperations for SssOperations {
 
     fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        let perm = metadata.permissions().mode() as u16;
+        let perm = (metadata.permissions().mode() & 0o7777) as u16;
         if has_secrets {
             // Force chmod 600 for files with secrets
             0o600
@@ -56,7 +56,7 @@ impl FileOperations for PassthroughOperations {
 
     fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() as u16
+        (metadata.permissions().mode() & 0o7777) as u16
     }
 }
 

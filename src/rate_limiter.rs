@@ -1,4 +1,4 @@
-use once_cell::sync::Lazy;
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,6 +21,7 @@ struct AttemptRecord {
 
 impl RateLimiter {
     /// Create a new rate limiter
+    #[must_use] 
     pub fn new(max_attempts: u32, window_minutes: u64, lockout_minutes: u64) -> Self {
         Self {
             attempts: Arc::new(Mutex::new(HashMap::new())),
@@ -108,7 +109,7 @@ impl RateLimiter {
 }
 
 /// Global rate limiter instance for password attempts
-static GLOBAL_RATE_LIMITER: Lazy<RateLimiter> = Lazy::new(|| {
+static GLOBAL_RATE_LIMITER: std::sync::LazyLock<RateLimiter> = std::sync::LazyLock::new(|| {
     RateLimiter::new(
         5,  // max 5 attempts
         15, // per 15 minutes
@@ -117,6 +118,7 @@ static GLOBAL_RATE_LIMITER: Lazy<RateLimiter> = Lazy::new(|| {
 });
 
 /// Get the global rate limiter instance
+#[must_use] 
 pub fn get_password_rate_limiter() -> &'static RateLimiter {
     &GLOBAL_RATE_LIMITER
 }

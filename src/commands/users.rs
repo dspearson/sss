@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::fs;
@@ -56,7 +58,7 @@ fn handle_users_list() -> Result<()> {
                         );
                     }
                     Err(_) => {
-                        println!("  {} - (invalid public key)", username);
+                        println!("  {username} - (invalid public key)");
                     }
                 }
             }
@@ -103,7 +105,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     config.add_user(username, &public_key, &repository_key)?;
     config.save_to_file(&config_path)?;
 
-    println!("Added user '{}' to project", username);
+    println!("Added user '{username}' to project");
     println!("Public key: {}", public_key.to_base64());
     Ok(())
 }
@@ -117,7 +119,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
 
     // Check if user exists
     if !config.users.contains_key(username) {
-        return Err(anyhow!("User '{}' not found in project", username));
+        return Err(anyhow!("User '{username}' not found in project"));
     }
 
     // Check if this is the last user
@@ -130,12 +132,12 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     // Remove user from config first
     config.remove_user(username)?;
 
-    println!("Removing user '{}' from project...", username);
+    println!("Removing user '{username}' from project...");
     println!("⚠️  This will trigger automatic key rotation for security");
 
     // Confirm rotation
     use crate::rotation::{confirm_rotation, RotationReason};
-    let reason = RotationReason::UserRemoved(username.to_string());
+    let reason = RotationReason::UserRemoved(username.clone());
     if !confirm_rotation(&reason, false)? {
         println!("Operation cancelled");
         return Ok(());
@@ -179,7 +181,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     )?;
 
     result.print_summary();
-    println!("✓ User '{}' removed and repository key rotated", username);
+    println!("✓ User '{username}' removed and repository key rotated");
     Ok(())
 }
 
@@ -191,7 +193,7 @@ fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
         .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
 
     if let Some(user_config) = config.users.get(username) {
-        println!("User: {}", username);
+        println!("User: {username}");
         println!("Public key: {}", user_config.public);
         match PublicKey::from_base64(&user_config.public) {
             Ok(pubkey) => {
@@ -203,7 +205,7 @@ fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
             }
         }
     } else {
-        return Err(anyhow!("User '{}' not found in project", username));
+        return Err(anyhow!("User '{username}' not found in project"));
     }
     Ok(())
 }

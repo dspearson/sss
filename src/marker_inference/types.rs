@@ -45,7 +45,7 @@ pub struct ChangeHunk {
 
 /// A change mapped back to source coordinates
 ///
-/// Extends ChangeHunk with source position information and identifies
+/// Extends `ChangeHunk` with source position information and identifies
 /// which original markers overlap or are adjacent to this change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MappedChange {

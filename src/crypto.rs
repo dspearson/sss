@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -23,9 +25,7 @@ const BLAKE2B_PERSONALBYTES: usize = sodium::crypto_generichash_blake2b_PERSONAL
 fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| unsafe {
-        if sodium::sodium_init() < 0 {
-            panic!("Failed to initialise libsodium");
-        }
+        assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });
 }
 
@@ -50,7 +50,7 @@ fn validate_and_decode_base64(
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
     {
-        return Err(anyhow!("Invalid characters in Base64 encoded {}", key_type));
+        return Err(anyhow!("Invalid characters in Base64 encoded {key_type}"));
     }
 
     let decoded = error_helpers::decode_base64(encoded, key_type)?;
@@ -78,12 +78,13 @@ impl Default for RepositoryKey {
 }
 
 impl RepositoryKey {
+    #[must_use] 
     pub fn new() -> Self {
         ensure_sodium_init();
         let mut key = [0u8; SYMMETRIC_KEY_SIZE];
         unsafe {
             sodium::randombytes_buf(
-                key.as_mut_ptr() as *mut std::ffi::c_void,
+                key.as_mut_ptr().cast::<std::ffi::c_void>(),
                 SYMMETRIC_KEY_SIZE,
             );
         }
@@ -110,13 +111,15 @@ impl RepositoryKey {
         Ok(Self(key_bytes))
     }
 
+    #[must_use] 
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
     }
 
     /// Generate a new repository key for rotation
-    /// Returns a tuple of (old_key, new_key) where old_key is a copy of self
+    /// Returns a tuple of (`old_key`, `new_key`) where `old_key` is a copy of self
+    #[must_use] 
     pub fn rotate(&self) -> (RepositoryKey, RepositoryKey) {
         let old_key = RepositoryKey(self.0);
         let new_key = RepositoryKey::new();
@@ -136,6 +139,7 @@ impl PublicKey {
         Ok(Self(key_bytes))
     }
 
+    #[must_use] 
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
@@ -152,7 +156,7 @@ impl SecretKey {
 
         let decoded = BASE64_STANDARD
             .decode(encoded)
-            .map_err(|e| anyhow!("Failed to decode base64 secret key: {}", e))?;
+            .map_err(|e| anyhow!("Failed to decode base64 secret key: {e}"))?;
 
         if decoded.len() != SECRET_KEY_SIZE {
             return Err(anyhow!(
@@ -167,6 +171,7 @@ impl SecretKey {
         Ok(Self(key_bytes))
     }
 
+    #[must_use] 
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
@@ -241,7 +246,7 @@ const NONCE_SIZE: usize = SYMMETRIC_NONCE_SIZE;
 
 pub type Key = RepositoryKey;
 
-/// Seal a repository key for a user (using crypto_box_seal)
+/// Seal a repository key for a user (using `crypto_box_seal`)
 pub fn seal_repository_key(
     repo_key: &RepositoryKey,
     user_public_key: &PublicKey,
@@ -267,14 +272,14 @@ pub fn seal_repository_key(
     Ok(BASE64_STANDARD.encode(sealed))
 }
 
-/// Open a sealed repository key (using crypto_box_seal_open)
+/// Open a sealed repository key (using `crypto_box_seal_open`)
 pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<RepositoryKey> {
     ensure_sodium_init();
     use base64::prelude::*;
 
     let sealed_bytes = BASE64_STANDARD
         .decode(sealed_key)
-        .map_err(|e| anyhow!("Failed to decode sealed key: {}", e))?;
+        .map_err(|e| anyhow!("Failed to decode sealed key: {e}"))?;
 
     if sealed_bytes.len() < SEALED_BOX_OVERHEAD {
         return Err(anyhow!("Sealed key too short"));
@@ -300,13 +305,13 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
     RepositoryKey::from_base64(&repo_key_b64)
 }
 
-/// Derive a deterministic nonce using BLAKE2b
+/// Derive a deterministic nonce using `BLAKE2b`
 ///
 /// The nonce is derived from:
 /// - Project creation timestamp (ensures per-project uniqueness)
 /// - File path relative to project root (ensures per-file uniqueness)
 /// - Plaintext content (ensures different secrets get different nonces)
-/// - Project key (used as BLAKE2b key parameter for additional security)
+/// - Project key (used as `BLAKE2b` key parameter for additional security)
 ///
 /// This ensures:
 /// - Same secret in same file → same nonce → same ciphertext (deterministic, clean git diffs)
@@ -370,7 +375,7 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
     unsafe {
         sodium::randombytes_buf(
-            nonce.as_mut_ptr() as *mut std::ffi::c_void,
+            nonce.as_mut_ptr().cast::<std::ffi::c_void>(),
             SYMMETRIC_NONCE_SIZE,
         );
     }
@@ -530,11 +535,11 @@ pub fn decrypt_from_base64(encoded_ciphertext: &str, key: &Key) -> Result<String
 
     let ciphertext = BASE64_STANDARD
         .decode(encoded_ciphertext)
-        .map_err(|e| anyhow!("Failed to decode base64 ciphertext: {}", e))?;
+        .map_err(|e| anyhow!("Failed to decode base64 ciphertext: {e}"))?;
 
     let plaintext_bytes = decrypt(&ciphertext, key)?;
     String::from_utf8(plaintext_bytes)
-        .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {}", e))
+        .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {e}"))
 }
 
 #[cfg(test)]

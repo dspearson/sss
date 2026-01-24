@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic)] // Agent binary — excluded from pedantic enforcement per REQUIREMENTS.md
+
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use std::fs;

@@ -19,8 +19,8 @@ pub trait FileOperations: Send + Sync {
     /// Should this file be hidden from directory listings?
     fn should_hide(&self, name: &str) -> bool;
 
-    /// Get file permissions (may adjust based on secrets, etc.)
-    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16;
+    /// Get file permissions — always mirrors the source file's original mode
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16;
 }
 
 /// SSS operations - renders ⊠{} to plaintext on read, seals to ⊠{} on write
@@ -34,15 +34,9 @@ impl FileOperations for SssOperations {
         )
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        let perm = (metadata.permissions().mode() & 0o7777) as u16;
-        if has_secrets {
-            // Force chmod 600 for files with secrets
-            0o600
-        } else {
-            perm
-        }
+        (metadata.permissions().mode() & 0o7777) as u16
     }
 }
 
@@ -54,7 +48,7 @@ impl FileOperations for PassthroughOperations {
         false // Show everything including .git
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
         use std::os::unix::fs::PermissionsExt;
         (metadata.permissions().mode() & 0o7777) as u16
     }

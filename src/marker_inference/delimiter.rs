@@ -8,7 +8,7 @@ use super::types::{DelimiterPair, Marker};
 ///
 /// Ensures that both delimiters of a pair are excluded from markers per spec section 8.
 /// Returns a list of warnings for any delimiter pairs that were adjusted.
-pub fn validate_delimiters(text: &str, markers: &mut Vec<Marker>) -> Vec<String> {
+pub fn validate_delimiters(text: &str, markers: &mut [Marker]) -> Vec<String> {
     let mut warnings = Vec::new();
     let pairs = vec![
         ('"', '"'),
@@ -101,7 +101,7 @@ fn is_char_marked(pos: usize, markers: &[Marker]) -> bool {
 }
 
 /// Shrink marker to exclude both delimiters of a pair (per spec section 8)
-fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>) {
+fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut [Marker]) {
     // Find markers that include either delimiter
     let indices_to_update: Vec<usize> = markers
         .iter()
@@ -141,15 +141,15 @@ fn shrink_marker_to_exclude_pair(pair: &DelimiterPair, markers: &mut Vec<Marker>
         let delimiters_adjacent = pair.close_pos == pair.open_pos + 1;
 
         // Check if content between delimiters is only other delimiter characters
-        let content_is_only_delimiters = if !marker.content.is_empty() {
+        let content_is_only_delimiters = if marker.content.is_empty() {
+            false
+        } else {
             // Check if removing these delimiters would leave only delimiter characters
             // This is a heuristic: if the marker content is very short and only contains delimiters,
             // it's likely that the delimiters are part of the content, not wrapping it
             let content_length = marker.content.len();
             let delimiter_count = marker.content.chars().filter(|c| delimiter_chars.contains(c)).count();
             content_length > 0 && delimiter_count == content_length && content_length <= 10
-        } else {
-            false
         };
 
         // Only shrink if:

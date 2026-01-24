@@ -1,6 +1,7 @@
 //! Marker parsing (Step 1)
 //!
 //! Extract all `o+{...}` and `⊕{...}` markers from source text and generate rendered version.
+#![allow(clippy::unnecessary_wraps)] // Result return matches module-wide error handling contract
 
 use super::error::Result;
 use super::marker_syntax::{
@@ -11,8 +12,8 @@ use super::types::Marker;
 
 /// Parse markers from source text
 ///
-/// Returns (rendered_text, markers) where:
-/// - rendered_text: Source with markers removed (what user sees)
+/// Returns (`rendered_text`, markers) where:
+/// - `rendered_text`: Source with markers removed (what user sees)
 /// - markers: Vector of Marker structs with position information
 ///
 /// # Examples

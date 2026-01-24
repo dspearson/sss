@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic)] // Agent modules are excluded from pedantic enforcement per REQUIREMENTS.md
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;

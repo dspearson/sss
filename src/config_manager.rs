@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::unnecessary_wraps)]
+
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -135,6 +137,7 @@ impl ConfigManager {
 
     /// Get the default username from user settings (without precedence logic)
     /// Returns None if no default username is configured
+    #[must_use] 
     pub fn get_default_username(&self) -> Option<String> {
         self.user_settings.default_username.clone()
     }
@@ -171,6 +174,7 @@ impl ConfigManager {
     }
 
     /// Get the effective editor (with precedence)
+    #[must_use] 
     pub fn get_editor(&self, cli_override: Option<&str>) -> String {
         if let Some(editor) = cli_override {
             return editor.to_string();
@@ -188,6 +192,7 @@ impl ConfigManager {
     }
 
     /// Get keystore auto-lock timeout
+    #[must_use] 
     pub fn get_auto_lock_timeout(&self) -> u32 {
         self.user_settings
             .keystore
@@ -196,6 +201,7 @@ impl ConfigManager {
     }
 
     /// Get KDF security level with precedence: CLI > ENV > Config > Default (sensitive)
+    #[must_use] 
     pub fn get_kdf_level(&self, cli_override: Option<&str>) -> String {
         // CLI override has highest precedence
         if let Some(level) = cli_override {
@@ -217,6 +223,7 @@ impl ConfigManager {
     }
 
     /// Check if system keyring should be used with precedence: CLI > ENV > Config > Default (false)
+    #[must_use] 
     pub fn use_system_keyring(&self, cli_override: Option<bool>) -> bool {
         // CLI override has highest precedence
         if let Some(use_keyring) = cli_override {
@@ -243,6 +250,7 @@ impl ConfigManager {
     }
 
     /// Get UI preferences
+    #[must_use] 
     pub fn use_coloured_output(&self) -> bool {
         // Check if output supports colour
         if !atty::is(atty::Stream::Stdout) {
@@ -252,14 +260,17 @@ impl ConfigManager {
         self.user_settings.ui.coloured_output.unwrap_or(true)
     }
 
+    #[must_use] 
     pub fn show_progress(&self) -> bool {
         self.user_settings.ui.show_progress.unwrap_or(true)
     }
 
+    #[must_use] 
     pub fn verbosity_level(&self) -> u8 {
         self.user_settings.ui.verbosity.unwrap_or(1)
     }
 
+    #[must_use] 
     pub fn confirm_destructive(&self) -> bool {
         self.user_settings.ui.confirm_destructive.unwrap_or(true)
     }
@@ -307,11 +318,13 @@ impl ConfigManager {
     }
 
     /// Get the current project path
+    #[must_use] 
     pub fn project_path(&self) -> Option<&Path> {
         self.project_path.as_deref()
     }
 
     /// Get merged hooks configuration
+    #[must_use] 
     pub fn get_hooks_config(&self) -> HooksConfig {
         self.project_config
             .as_ref()
@@ -322,6 +335,7 @@ impl ConfigManager {
     // Project-specific settings methods
 
     /// Get all configured projects
+    #[must_use] 
     pub fn get_all_projects(&self) -> &HashMap<String, ProjectSettings> {
         &self.user_settings.projects
     }
@@ -373,8 +387,7 @@ impl ConfigManager {
             .user_settings
             .projects
             .get(&path_str)
-            .map(|s| s.allow_auto_render)
-            .unwrap_or(false))
+            .is_some_and(|s| s.allow_auto_render))
     }
 
     /// Check if automatic opening is enabled for a project
@@ -384,8 +397,7 @@ impl ConfigManager {
             .user_settings
             .projects
             .get(&path_str)
-            .map(|s| s.allow_auto_open)
-            .unwrap_or(false))
+            .is_some_and(|s| s.allow_auto_open))
     }
 
     /// Remove a project from settings
@@ -433,13 +445,13 @@ impl ConfigManager {
 
     /// Get the effective secrets filename with precedence:
     /// Project config > User settings > Default ("secrets")
+    #[must_use] 
     pub fn get_secrets_filename(&self) -> String {
         // Check project config first
-        if let Some(ref config) = self.project_config {
-            if let Some(ref filename) = config.secrets_filename {
+        if let Some(ref config) = self.project_config
+            && let Some(ref filename) = config.secrets_filename {
                 return filename.clone();
             }
-        }
 
         // Check user settings
         if let Some(ref filename) = self.user_settings.secrets_filename {
@@ -452,13 +464,13 @@ impl ConfigManager {
 
     /// Get the effective secrets file suffix with precedence:
     /// Project config > User settings > Default (".secrets")
+    #[must_use] 
     pub fn get_secrets_suffix(&self) -> String {
         // Check project config first
-        if let Some(ref config) = self.project_config {
-            if let Some(ref suffix) = config.secrets_suffix {
+        if let Some(ref config) = self.project_config
+            && let Some(ref suffix) = config.secrets_suffix {
                 return suffix.clone();
             }
-        }
 
         // Check user settings
         if let Some(ref suffix) = self.user_settings.secrets_suffix {
@@ -496,10 +508,10 @@ impl UserSettings {
         }
 
         let content = fs::read_to_string(&settings_path)
-            .map_err(|e| anyhow!("Failed to read user settings: {}", e))?;
+            .map_err(|e| anyhow!("Failed to read user settings: {e}"))?;
 
         let settings: Self = toml::from_str(&content)
-            .map_err(|e| anyhow!("Failed to parse user settings: {}", e))?;
+            .map_err(|e| anyhow!("Failed to parse user settings: {e}"))?;
 
         Ok(settings)
     }
@@ -507,14 +519,14 @@ impl UserSettings {
     /// Save user settings to config directory
     fn save(&self, config_dir: &Path) -> Result<()> {
         fs::create_dir_all(config_dir)
-            .map_err(|e| anyhow!("Failed to create config directory: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create config directory: {e}"))?;
 
         let settings_path = config_dir.join("settings.toml");
         let content = toml::to_string_pretty(self)
-            .map_err(|e| anyhow!("Failed to serialise user settings: {}", e))?;
+            .map_err(|e| anyhow!("Failed to serialise user settings: {e}"))?;
 
         fs::write(&settings_path, content)
-            .map_err(|e| anyhow!("Failed to write user settings: {}", e))?;
+            .map_err(|e| anyhow!("Failed to write user settings: {e}"))?;
 
         Ok(())
     }

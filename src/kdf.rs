@@ -1,3 +1,9 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_wrap, // sodium algorithm constants fit in i32 by libsodium guarantee
+)]
+
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -13,11 +19,12 @@ pub struct Salt([u8; SALT_SIZE]);
 
 impl Salt {
     /// Generate a new cryptographically secure random salt
+    #[must_use] 
     pub fn new() -> Self {
         ensure_sodium_init();
         let mut salt = [0u8; SALT_SIZE];
         unsafe {
-            sodium::randombytes_buf(salt.as_mut_ptr() as *mut std::ffi::c_void, SALT_SIZE);
+            sodium::randombytes_buf(salt.as_mut_ptr().cast::<std::ffi::c_void>(), SALT_SIZE);
         }
         Self(salt)
     }
@@ -37,11 +44,13 @@ impl Salt {
     }
 
     /// Get salt as bytes
+    #[must_use] 
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// Convert to base64 for storage
+    #[must_use] 
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
@@ -52,7 +61,7 @@ impl Salt {
         use base64::prelude::*;
         let bytes = BASE64_STANDARD
             .decode(encoded)
-            .map_err(|e| anyhow!("Invalid base64 salt: {}", e))?;
+            .map_err(|e| anyhow!("Invalid base64 salt: {e}"))?;
         Self::from_bytes(&bytes)
     }
 }
@@ -83,7 +92,7 @@ impl DerivedKey {
             let ret = sodium::crypto_pwhash(
                 key.as_mut_ptr(),                          // output key
                 KEY_SIZE as u64,                           // key length
-                passphrase.as_ptr() as *const libc::c_char, // passphrase
+                passphrase.as_ptr().cast::<libc::c_char>(), // passphrase
                 passphrase.len() as u64,                   // passphrase length
                 salt.0.as_ptr(),                           // salt
                 params.ops_limit,                          // ops limit (from params)
@@ -100,11 +109,13 @@ impl DerivedKey {
     }
 
     /// Get key as bytes
+    #[must_use] 
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
-    /// Convert to our RepositoryKey type for encryption
+    /// Convert to our `RepositoryKey` type for encryption
+    #[must_use] 
     pub fn to_encryption_key(&self) -> crate::crypto::RepositoryKey {
         // This is safe because both are 32-byte arrays
         crate::crypto::RepositoryKey::from_bytes(&self.0)
@@ -116,9 +127,7 @@ impl DerivedKey {
 fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| unsafe {
-        if sodium::sodium_init() < 0 {
-            panic!("Failed to initialise libsodium");
-        }
+        assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });
 }
 
@@ -133,7 +142,7 @@ pub struct KdfParams {
 impl Default for KdfParams {
     fn default() -> Self {
         Self {
-            ops_limit: sodium::crypto_pwhash_OPSLIMIT_INTERACTIVE as u64,
+            ops_limit: u64::from(sodium::crypto_pwhash_OPSLIMIT_INTERACTIVE),
             mem_limit: sodium::crypto_pwhash_MEMLIMIT_INTERACTIVE as usize,
             algorithm: sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
         }
@@ -145,9 +154,10 @@ impl KdfParams {
     /// - Iterations: ~4
     /// - Memory: 256 MiB
     /// - Time: ~2 seconds on modern CPUs
+    #[must_use] 
     pub fn sensitive() -> Self {
         Self {
-            ops_limit: sodium::crypto_pwhash_OPSLIMIT_SENSITIVE as u64,
+            ops_limit: u64::from(sodium::crypto_pwhash_OPSLIMIT_SENSITIVE),
             mem_limit: sodium::crypto_pwhash_MEMLIMIT_SENSITIVE as usize,
             algorithm: sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
         }
@@ -157,9 +167,10 @@ impl KdfParams {
     /// - Iterations: ~3
     /// - Memory: 128 MiB
     /// - Time: ~1 second on modern CPUs
+    #[must_use] 
     pub fn moderate() -> Self {
         Self {
-            ops_limit: sodium::crypto_pwhash_OPSLIMIT_MODERATE as u64,
+            ops_limit: u64::from(sodium::crypto_pwhash_OPSLIMIT_MODERATE),
             mem_limit: sodium::crypto_pwhash_MEMLIMIT_MODERATE as usize,
             algorithm: sodium::crypto_pwhash_ALG_ARGON2ID13 as i32,
         }
@@ -169,6 +180,7 @@ impl KdfParams {
     /// - Iterations: ~2
     /// - Memory: 64 MiB
     /// - Time: ~0.5 seconds on modern CPUs
+    #[must_use] 
     pub fn interactive() -> Self {
         Self::default()
     }
@@ -180,8 +192,7 @@ impl KdfParams {
             "moderate" | "medium" | "balanced" => Ok(Self::moderate()),
             "interactive" | "low" | "fast" => Ok(Self::interactive()),
             _ => Err(anyhow!(
-                "Invalid KDF level '{}'. Valid options: sensitive, moderate, interactive",
-                level
+                "Invalid KDF level '{level}'. Valid options: sensitive, moderate, interactive"
             )),
         }
     }

@@ -1,4 +1,4 @@
-//! Common utilities for filesystem implementations (FUSE, 9P, WinFSP)
+//! Common utilities for filesystem implementations (FUSE, 9P, `WinFSP`)
 //!
 //! This module provides shared functionality used across different filesystem
 //! backends to avoid code duplication.
@@ -15,6 +15,7 @@
 /// assert!(has_encrypted_markers("Some ⊠{encrypted} text"));
 /// assert!(!has_encrypted_markers("Plain text"));
 /// ```
+#[must_use] 
 pub fn has_encrypted_markers(content: &str) -> bool {
     content.contains("⊠{")
 }
@@ -40,6 +41,7 @@ pub fn has_encrypted_markers(content: &str) -> bool {
 /// assert!(has_any_markers("⊲{secret_ref}"));
 /// assert!(!has_any_markers("No markers here"));
 /// ```
+#[must_use] 
 pub fn has_any_markers(content: &str) -> bool {
     content.contains("⊠{")
         || content.contains("⊕{")
@@ -55,6 +57,7 @@ pub fn has_any_markers(content: &str) -> bool {
 /// this verifies at least one marker has balanced braces (e.g. `⊠{...}`).
 /// Files that merely mention marker characters in strings or grep patterns
 /// will return false, avoiding false-positive processing.
+#[must_use] 
 pub fn has_balanced_markers(content: &str) -> bool {
     // Prefixes to look for, in order of priority
     const PREFIXES: &[&str] = &["⊠", "⊕", "⊲", "[*", "o+", "<"];
@@ -67,8 +70,8 @@ pub fn has_balanced_markers(content: &str) -> bool {
 
         let mut matched = false;
         for &prefix in PREFIXES {
-            if let Some(after_prefix) = remaining.strip_prefix(prefix) {
-                if after_prefix.starts_with('{') {
+            if let Some(after_prefix) = remaining.strip_prefix(prefix)
+                && after_prefix.starts_with('{') {
                     // Found a potential marker opening — check for balanced close
                     let open_pos = byte_pos + prefix.len() + 1; // past prefix + '{'
                     let mut depth = 1u32;
@@ -93,7 +96,6 @@ pub fn has_balanced_markers(content: &str) -> bool {
                     matched = true;
                     break;
                 }
-            }
         }
 
         if !matched {
@@ -135,6 +137,7 @@ pub const MARKER_PATTERNS: &[&str] = &["⊠{", "⊕{", "[*{", "o+{", "⊲{", "<{
 /// assert!(has_any_markers_bytes("⊲{secret}".as_bytes()));
 /// assert!(!has_any_markers_bytes(b"No markers"));
 /// ```
+#[must_use] 
 pub fn has_any_markers_bytes(bytes: &[u8]) -> bool {
     // Define all marker byte sequences
     // Note: UTF-8 sequences for Unicode markers are 3 bytes followed by '{'

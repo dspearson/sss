@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc, clippy::items_after_statements)]
 use crate::error::Result;
 use crate::validation_error;
 use std::path::{Path, PathBuf};

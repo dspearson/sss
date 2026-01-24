@@ -28,16 +28,16 @@ pub enum SssError {
 impl fmt::Display for SssError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SssError::Crypto(msg) => write!(f, "Cryptographic error: {}", msg),
-            SssError::Keystore(msg) => write!(f, "Keystore error: {}", msg),
-            SssError::Io(err) => write!(f, "I/O error: {}", err),
-            SssError::Config(msg) => write!(f, "Configuration error: {}", msg),
-            SssError::Validation(msg) => write!(f, "Validation error: {}", msg),
-            SssError::Project(msg) => write!(f, "Project error: {}", msg),
-            SssError::Auth(msg) => write!(f, "Authentication error: {}", msg),
-            SssError::Processing(msg) => write!(f, "Processing error: {}", msg),
-            SssError::Editor(msg) => write!(f, "Editor error: {}", msg),
-            SssError::Network(msg) => write!(f, "Network error: {}", msg),
+            SssError::Crypto(msg) => write!(f, "Cryptographic error: {msg}"),
+            SssError::Keystore(msg) => write!(f, "Keystore error: {msg}"),
+            SssError::Io(err) => write!(f, "I/O error: {err}"),
+            SssError::Config(msg) => write!(f, "Configuration error: {msg}"),
+            SssError::Validation(msg) => write!(f, "Validation error: {msg}"),
+            SssError::Project(msg) => write!(f, "Project error: {msg}"),
+            SssError::Auth(msg) => write!(f, "Authentication error: {msg}"),
+            SssError::Processing(msg) => write!(f, "Processing error: {msg}"),
+            SssError::Editor(msg) => write!(f, "Editor error: {msg}"),
+            SssError::Network(msg) => write!(f, "Network error: {msg}"),
         }
     }
 }
@@ -59,37 +59,37 @@ impl From<std::io::Error> for SssError {
 
 impl From<toml::de::Error> for SssError {
     fn from(err: toml::de::Error) -> Self {
-        SssError::Config(format!("TOML parsing error: {}", err))
+        SssError::Config(format!("TOML parsing error: {err}"))
     }
 }
 
 impl From<toml::ser::Error> for SssError {
     fn from(err: toml::ser::Error) -> Self {
-        SssError::Config(format!("TOML serialization error: {}", err))
+        SssError::Config(format!("TOML serialization error: {err}"))
     }
 }
 
 impl From<base64::DecodeError> for SssError {
     fn from(err: base64::DecodeError) -> Self {
-        SssError::Validation(format!("Base64 decode error: {}", err))
+        SssError::Validation(format!("Base64 decode error: {err}"))
     }
 }
 
 impl From<regex::Error> for SssError {
     fn from(err: regex::Error) -> Self {
-        SssError::Processing(format!("Regex error: {}", err))
+        SssError::Processing(format!("Regex error: {err}"))
     }
 }
 
 impl From<uuid::Error> for SssError {
     fn from(err: uuid::Error) -> Self {
-        SssError::Validation(format!("UUID error: {}", err))
+        SssError::Validation(format!("UUID error: {err}"))
     }
 }
 
 impl From<std::str::Utf8Error> for SssError {
     fn from(err: std::str::Utf8Error) -> Self {
-        SssError::Processing(format!("UTF-8 encoding error: {}", err))
+        SssError::Processing(format!("UTF-8 encoding error: {err}"))
     }
 }
 

@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)] // CLI app definition is a single large function by convention
 use anyhow::{anyhow, Result};
 use clap::{Arg, Command};
 use std::env;

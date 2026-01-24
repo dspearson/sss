@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 
@@ -46,7 +48,7 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     init_project_config(config_path, &username, &keypair.public_key)?;
 
     println!("Project initialized successfully!");
-    println!("Username: {}", username);
+    println!("Username: {username}");
     println!("Public key: {}...", &keypair.public_key.to_base64()[..32]);
 
     Ok(())

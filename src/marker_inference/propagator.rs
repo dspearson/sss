@@ -25,12 +25,11 @@ pub fn propagate_markers(text: &str, markers: &[Marker]) -> Vec<Marker> {
     }
 
     // Use Aho-Corasick for efficient multi-pattern matching
-    let patterns: Vec<&str> = seen_content.iter().map(|s| s.as_str()).collect();
+    let patterns: Vec<&str> = seen_content.iter().map(std::string::String::as_str).collect();
 
     // Build the automaton - return early if patterns are empty or invalid
-    let ac = match AhoCorasick::new(&patterns) {
-        Ok(ac) => ac,
-        Err(_) => return result,
+    let Ok(ac) = AhoCorasick::new(&patterns) else {
+        return result;
     };
 
     // Find all occurrences

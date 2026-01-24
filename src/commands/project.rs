@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::unnecessary_wraps)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::path::PathBuf;
@@ -63,7 +65,7 @@ fn handle_project_list(config_manager: &crate::config_manager::ConfigManager) ->
             "disabled"
         };
 
-        println!("{} (auto-render={}, auto-open={})", path, render_status, open_status);
+        println!("{path} (auto-render={render_status}, auto-open={open_status})");
     }
     Ok(())
 }
@@ -163,16 +165,16 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
 
             // Get existing patterns, add new one if not present
             let mut patterns = config.get_ignore_pattern_strings();
-            if !patterns.contains(new_pattern) {
+            if patterns.contains(new_pattern) {
+                println!("Pattern '{new_pattern}' already exists in ignore list");
+            } else {
                 patterns.push(new_pattern.clone());
 
                 // Join patterns with spaces (gitignore-style on one line)
                 config.set_ignore_patterns(patterns);
                 config.save_to_file(CONFIG_FILE_NAME)?;
 
-                println!("Added ignore pattern: {}", new_pattern);
-            } else {
-                println!("Pattern '{}' already exists in ignore list", new_pattern);
+                println!("Added ignore pattern: {new_pattern}");
             }
         }
         Some(("remove", remove_matches)) => {
@@ -194,9 +196,9 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
                     config.set_ignore_patterns(patterns);
                 }
                 config.save_to_file(CONFIG_FILE_NAME)?;
-                println!("Removed ignore pattern: {}", pattern_to_remove);
+                println!("Removed ignore pattern: {pattern_to_remove}");
             } else {
-                println!("Pattern '{}' not found in ignore list", pattern_to_remove);
+                println!("Pattern '{pattern_to_remove}' not found in ignore list");
             }
         }
         Some(("list", _)) => {
@@ -214,7 +216,7 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
                 println!("Ignore patterns (in .sss.toml):");
                 println!("================================");
                 for pattern in patterns {
-                    println!("  {}", pattern);
+                    println!("  {pattern}");
                 }
                 println!();
                 println!("Raw: {}", config.get_ignore_patterns().unwrap_or(""));
@@ -245,11 +247,11 @@ fn handle_project_secrets_file(sub_matches: &ArgMatches) -> Result<()> {
             config.set_secrets_filename(filename.clone());
             config.save_to_file(CONFIG_FILE_NAME)?;
 
-            println!("Set secrets filename to: {}", filename);
+            println!("Set secrets filename to: {filename}");
             println!();
             println!("Secrets will now be looked up from:");
             println!("  1. <filename>.secrets (file-specific)");
-            println!("  2. {} (directory and parent directories)", filename);
+            println!("  2. {filename} (directory and parent directories)");
         }
         Some(("show", _)) => {
             // Load project config
@@ -257,9 +259,9 @@ fn handle_project_secrets_file(sub_matches: &ArgMatches) -> Result<()> {
 
             let filename = config.get_secrets_filename();
             if config.secrets_filename.is_some() {
-                println!("Secrets filename: {} (custom)", filename);
+                println!("Secrets filename: {filename} (custom)");
             } else {
-                println!("Secrets filename: {} (default)", filename);
+                println!("Secrets filename: {filename} (default)");
             }
         }
         Some(("clear", _)) => {

@@ -18,7 +18,7 @@ pub struct MarkerMatch {
 ///
 /// # Arguments
 /// * `content` - The text content to search for markers
-/// * `prefixes` - List of marker prefixes to search for (e.g., ["⊕", "⊠", "o+"])
+/// * `prefixes` - List of marker prefixes to search for (e.g., `["⊕", "⊠", "o+"]`)
 ///
 /// # Returns
 /// Vector of `MarkerMatch` instances found in the content, in order of appearance
@@ -29,7 +29,7 @@ pub struct MarkerMatch {
 /// 3. If prefix matches and is followed by `{`, start brace counting
 /// 4. Track brace depth: increment on `{`, decrement on `}`
 /// 5. When depth reaches 0, we've found the matching closing brace
-/// 6. Extract the content between the braces and create a MarkerMatch
+/// 6. Extract the content between the braces and create a `MarkerMatch`
 ///
 /// # Examples
 /// ```
@@ -41,6 +41,7 @@ pub struct MarkerMatch {
 /// assert_eq!(matches[0].content, "world");
 /// assert_eq!(matches[1].content, "nested:{value}");
 /// ```
+#[must_use] 
 pub fn find_balanced_markers(content: &str, prefixes: &[&str]) -> Vec<MarkerMatch> {
     let mut matches = Vec::new();
     let bytes = content.as_bytes();

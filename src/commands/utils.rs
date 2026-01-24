@@ -2,6 +2,7 @@
 //!
 //! This module provides common functionality used across multiple command handlers,
 //! eliminating code duplication and ensuring consistent behavior.
+#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
@@ -35,7 +36,7 @@ pub fn create_keystore(matches: &ArgMatches) -> Result<Keystore> {
 
     // Get KDF level from config (checks CLI args, ENV vars, and user settings)
     // Note: CLI flag for --kdf-level would be checked here if it exists in matches
-    let kdf_level = config_manager.get_kdf_level(matches.get_one::<String>("kdf-level").map(|s| s.as_str()));
+    let kdf_level = config_manager.get_kdf_level(matches.get_one::<String>("kdf-level").map(std::string::String::as_str));
     let kdf_params = KdfParams::from_level(&kdf_level)?;
 
     // Get keyring preference
@@ -63,7 +64,7 @@ pub fn create_config_manager(matches: &ArgMatches) -> Result<ConfigManager> {
 /// Get the current username with proper precedence
 ///
 /// Precedence order:
-/// 1. SSS_USER environment variable (highest)
+/// 1. `SSS_USER` environment variable (highest)
 /// 2. Global config username (from user settings)
 /// 3. USER/USERNAME environment variables (lowest - fallback only)
 ///
@@ -81,12 +82,11 @@ pub fn get_system_username() -> Result<String> {
     // 2. Try to load config and get default username
     // Note: This may fail if config doesn't exist yet (e.g., during first init)
     // That's okay - we fall through to system username
-    if let Ok(config_manager) = ConfigManager::new() {
-        if let Some(username) = config_manager.get_default_username() {
+    if let Ok(config_manager) = ConfigManager::new()
+        && let Some(username) = config_manager.get_default_username() {
             validate_username(&username)?;
             return Ok(username);
         }
-    }
 
     // 3. Fall back to system username (USER/USERNAME env vars)
     let username = env::var("USER")
@@ -137,7 +137,7 @@ pub fn get_keypair_with_optional_password(
 
 /// Get password for current keypair if it's password protected
 ///
-/// Returns None if not password protected, Some(password_str) if protected.
+/// Returns None if not password protected, `Some(password_str)` if protected.
 /// Handles the common pattern of checking protection status and prompting.
 pub fn get_password_if_protected(
     keystore: &Keystore,
@@ -156,7 +156,7 @@ pub fn get_password_if_protected(
     }
 }
 
-/// Extract required string argument from ArgMatches
+/// Extract required string argument from `ArgMatches`
 ///
 /// This helper eliminates the common pattern of:
 /// `matches.get_one::<String>("arg").unwrap()`
@@ -164,9 +164,8 @@ pub fn get_password_if_protected(
 /// Returns an error if the argument is missing (which should be prevented by clap).
 pub fn get_required_string(matches: &ArgMatches, name: &str) -> Result<String> {
     matches
-        .get_one::<String>(name)
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow!("Missing required argument: {}", name))
+        .get_one::<String>(name).cloned()
+        .ok_or_else(|| anyhow!("Missing required argument: {name}"))
 }
 
 /// Load project configuration with consistent error handling

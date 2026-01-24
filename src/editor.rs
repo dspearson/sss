@@ -2,6 +2,7 @@
 //!
 //! This module handles launching external editors with appropriate security flags
 //! to prevent sensitive data from leaking via swap files, backups, or temp files.
+#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use std::env;
@@ -154,7 +155,7 @@ pub fn launch_editor(file_path: &Path) -> Result<()> {
     // Launch editor and wait for completion
     let status = cmd
         .status()
-        .map_err(|e| anyhow!("Failed to launch editor '{}': {}", editor, e))?;
+        .map_err(|e| anyhow!("Failed to launch editor '{editor}': {e}"))?;
 
     check_editor_exit_status(status, &editor)?;
 

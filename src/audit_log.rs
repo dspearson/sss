@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic)] // Agent modules are excluded from pedantic enforcement per REQUIREMENTS.md
+
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};

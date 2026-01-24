@@ -1,3 +1,14 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation, // intentional in color/art rendering code
+    clippy::cast_sign_loss,           // intentional in color rendering (f64->u8 after clamping)
+    clippy::cast_precision_loss,      // intentional: u64 hash bits to f64 for color math
+    clippy::many_single_char_names,   // r,g,b,h,s,v are standard color component names
+    clippy::unreadable_literal,       // cryptographic hash constants are intentionally compact
+    clippy::items_after_statements,   // use std::fmt::Write placed near usage for locality
+)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::io::{self, Write};
@@ -42,7 +53,7 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
     let keypair = KeyPair::generate()?;
     let key_id = keystore.store_keypair(&keypair, password_option.as_deref())?;
 
-    println!("Generated new keypair: {}", key_id);
+    println!("Generated new keypair: {key_id}");
     println!("Public key: {}", keypair.public_key.to_base64());
 
     if no_password {
@@ -150,7 +161,7 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
                 config
                     .users
                     .keys()
-                    .map(|k| k.as_str())
+                    .map(std::string::String::as_str)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -183,7 +194,7 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
         // Generate visual randomart with hex fingerprint (like SSH's VisualHostKey)
         generate_randomart(&hash, "SSS KEY");
     } else {
-        println!("{}", full_key);
+        println!("{full_key}");
     }
 
     Ok(())
@@ -194,8 +205,7 @@ fn handle_keys_delete(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
     let key_name = sub_matches.get_one::<String>("name").unwrap();
 
     print!(
-        "Are you sure you want to delete keypair '{}'? [y/N]: ",
-        key_name
+        "Are you sure you want to delete keypair '{key_name}'? [y/N]: "
     );
     io::stdout().flush()?;
 
@@ -204,7 +214,7 @@ fn handle_keys_delete(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 
     if input.trim().to_lowercase() == "y" {
         keystore.delete_keypair(key_name)?;
-        println!("Deleted keypair: {}", key_name);
+        println!("Deleted keypair: {key_name}");
     } else {
         println!("Cancelled");
     }
@@ -220,28 +230,25 @@ fn handle_keys_current(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
         let keys = keystore.list_key_ids()?;
         let key_to_set = keys.iter().find(|(id, _)| id.starts_with(key_name));
 
-        match key_to_set {
-            Some((key_id, _)) => {
-                keystore.set_current_key(key_id)?;
-                println!("Set current key to: {}", key_id);
-            }
-            None => {
-                println!("Key not found: {}", key_name);
-                println!("Available keys:");
-                for (key_id, stored) in keys {
-                    println!(
-                        "  {} (created: {})",
-                        &key_id[..KEY_ID_DISPLAY_LENGTH],
-                        stored.created_at.format("%Y-%m-%d")
-                    );
-                }
+        if let Some((key_id, _)) = key_to_set {
+            keystore.set_current_key(key_id)?;
+            println!("Set current key to: {key_id}");
+        } else {
+            println!("Key not found: {key_name}");
+            println!("Available keys:");
+            for (key_id, stored) in keys {
+                println!(
+                    "  {} (created: {})",
+                    &key_id[..KEY_ID_DISPLAY_LENGTH],
+                    stored.created_at.format("%Y-%m-%d")
+                );
             }
         }
     } else {
         // Show current key
         match keystore.get_current_key_id() {
             Ok(current_id) => {
-                println!("Current key ID: {}", current_id);
+                println!("Current key ID: {current_id}");
                 match keystore.get_current_keypair(None) {
                     Ok(keypair) => {
                         println!("Public key: {}", keypair.public_key.to_base64());
@@ -315,6 +322,7 @@ fn handle_keys_rotate_command(_main_matches: &ArgMatches, matches: &ArgMatches) 
     Ok(())
 }
 
+#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
 fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let key_id_partial = sub_matches.get_one::<String>("key-id")
         .ok_or_else(|| anyhow!("Key ID is required"))?;
@@ -384,6 +392,7 @@ fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatche
     Ok(())
 }
 
+#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
 fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let key_id_partial = sub_matches.get_one::<String>("key-id")
         .ok_or_else(|| anyhow!("Key ID is required"))?;
@@ -545,9 +554,9 @@ fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (u8, u8, u8) {
 
 /// Calculate relative luminance for contrast determination (WCAG)
 fn relative_luminance(r: u8, g: u8, b: u8) -> f64 {
-    let r = r as f64 / 255.0;
-    let g = g as f64 / 255.0;
-    let b = b as f64 / 255.0;
+    let r = f64::from(r) / 255.0;
+    let g = f64::from(g) / 255.0;
+    let b = f64::from(b) / 255.0;
 
     let r = if r <= 0.03928 {
         r / 12.92
@@ -581,7 +590,7 @@ fn byte_to_color(byte_val: u8) -> (u8, u8, u8) {
     let hue = hues[high as usize];
 
     // Checkerboard pattern for adjacent differentiation
-    let pattern = ((high + low) % 2) as f64;
+    let pattern = f64::from((high + low) % 2);
 
     let (sat, val) = if low < 4 {
         (0.9, if pattern > 0.5 { 0.45 } else { 0.55 })
@@ -599,7 +608,7 @@ fn byte_to_color(byte_val: u8) -> (u8, u8, u8) {
 /// Colorize a hex byte with background color and contrasting text
 fn colorize_hex_byte(byte_val: u8, use_colors: bool) -> String {
     if !use_colors {
-        return format!("{:02x}", byte_val);
+        return format!("{byte_val:02x}");
     }
 
     let (r, g, b) = byte_to_color(byte_val);
@@ -613,8 +622,7 @@ fn colorize_hex_byte(byte_val: u8, use_colors: bool) -> String {
     };
 
     format!(
-        "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{:02x}\x1b[0m",
-        fr, fg, fb, r, g, b, byte_val
+        "\x1b[38;2;{fr};{fg};{fb}m\x1b[48;2;{r};{g};{b}m{byte_val:02x}\x1b[0m"
     )
 }
 
@@ -631,8 +639,8 @@ fn generate_medallion(fingerprint: &[u8], use_colors: bool) -> Vec<String> {
     let mut state = [0u64; 4];
     for (i, chunk) in fingerprint.chunks(8).enumerate() {
         let mut val = 0u64;
-        for &b in chunk.iter() {
-            val = val.wrapping_shl(8) | (b as u64);
+        for &b in chunk {
+            val = val.wrapping_shl(8) | u64::from(b);
         }
         state[i % 4] ^= val.wrapping_mul(0x9E3779B97F4A7C15);
         state[i % 4] = state[i % 4].wrapping_add(state[(i + 1) % 4]);
@@ -673,7 +681,8 @@ fn generate_medallion(fingerprint: &[u8], use_colors: bool) -> Vec<String> {
                 4 => '▐', 5 => '░', 6 => '▒', _ => '▓',
             };
 
-            line.push_str(&format!("\x1b[38;2;{};{};{}m{}\x1b[0m", r, g, b, ch));
+            use std::fmt::Write as _;
+            let _ = write!(line, "\x1b[38;2;{r};{g};{b}m{ch}\x1b[0m");
         }
         *medallion_line = line;
     }
@@ -698,7 +707,7 @@ fn colorize_char(ch: char, count: u8, use_colors: bool) -> String {
         _ => "38;5;196",
     };
 
-    format!("\x1b[{}m{}\x1b[0m", color_code, ch)
+    format!("\x1b[{color_code}m{ch}\x1b[0m")
 }
 
 /// Main randomart generation function
@@ -711,7 +720,7 @@ fn generate_randomart(fingerprint: &[u8], key_type: &str) {
     let start_y = RANDOMART_HEIGHT / 2;
 
     // Print header
-    let header = format!("[{}]", key_type);
+    let header = format!("[{key_type}]");
     let padding = RANDOMART_WIDTH.saturating_sub(header.len()) / 2;
     let right_padding = RANDOMART_WIDTH - padding - header.len();
     println!(

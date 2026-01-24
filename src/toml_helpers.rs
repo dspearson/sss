@@ -2,6 +2,7 @@
 //!
 //! This module provides consistent error handling for TOML operations
 //! used throughout the SSS codebase.
+#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ use serde::{Deserialize, Serialize};
 /// assert_eq!(config.name, "test");
 /// ```
 pub fn parse_toml<T: for<'de> Deserialize<'de>>(content: &str, file_type: &str) -> Result<T> {
-    toml::from_str(content).map_err(|e| anyhow!("Failed to parse {} config file: {}", file_type, e))
+    toml::from_str(content).map_err(|e| anyhow!("Failed to parse {file_type} config file: {e}"))
 }
 
 /// Serialize structure to pretty TOML string
@@ -46,7 +47,7 @@ pub fn parse_toml<T: for<'de> Deserialize<'de>>(content: &str, file_type: &str) 
 /// ```
 pub fn serialize_toml<T: Serialize>(value: &T, config_type: &str) -> Result<String> {
     toml::to_string_pretty(value)
-        .map_err(|e| anyhow!("Failed to serialise {}: {}", config_type, e))
+        .map_err(|e| anyhow!("Failed to serialise {config_type}: {e}"))
 }
 
 #[cfg(test)]

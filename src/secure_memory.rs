@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use std::fmt;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -9,6 +10,7 @@ pub struct SecureString {
 
 impl SecureString {
     /// Create a new secure string from a regular string
+    #[must_use] 
     pub fn new(s: &str) -> Self {
         Self {
             data: s.as_bytes().to_vec(),
@@ -16,11 +18,13 @@ impl SecureString {
     }
 
     /// Create a new secure string from bytes
+    #[must_use] 
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self { data: bytes }
     }
 
     /// Create an empty secure string with the given capacity
+    #[must_use] 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
@@ -33,16 +37,19 @@ impl SecureString {
     }
 
     /// Get the bytes (use with caution)
+    #[must_use] 
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
 
     /// Get the length in bytes
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
     /// Check if the string is empty
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
@@ -59,6 +66,7 @@ impl SecureString {
     }
 
     /// Compare with a regular string in constant time
+    #[must_use] 
     pub fn constant_time_eq(&self, other: &str) -> bool {
         use subtle::ConstantTimeEq;
 
@@ -104,6 +112,7 @@ pub struct SecureBuffer {
 
 impl SecureBuffer {
     /// Create a new secure buffer with the given capacity
+    #[must_use] 
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             data: Vec::with_capacity(capacity),
@@ -111,11 +120,13 @@ impl SecureBuffer {
     }
 
     /// Create a new secure buffer from existing bytes
+    #[must_use] 
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self { data: bytes }
     }
 
     /// Get the bytes as a slice
+    #[must_use] 
     pub fn as_slice(&self) -> &[u8] {
         &self.data
     }
@@ -126,11 +137,13 @@ impl SecureBuffer {
     }
 
     /// Get the length
+    #[must_use] 
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
     /// Check if empty
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
@@ -181,6 +194,7 @@ pub mod password {
 
     impl PasswordStrength {
         /// Get a color code for terminal display
+        #[must_use] 
         pub fn color_code(&self) -> &'static str {
             match self {
                 PasswordStrength::VeryWeak => "\x1b[91m",   // Bright red
@@ -192,6 +206,7 @@ pub mod password {
         }
 
         /// Get a display name
+        #[must_use] 
         pub fn display_name(&self) -> &'static str {
             match self {
                 PasswordStrength::VeryWeak => "Very Weak",
@@ -203,6 +218,7 @@ pub mod password {
         }
 
         /// Get a recommendation message
+        #[must_use] 
         pub fn recommendation(&self) -> Option<&'static str> {
             match self {
                 PasswordStrength::VeryWeak => Some("Consider using at least 12 characters with mixed case, numbers, and symbols"),
@@ -214,11 +230,12 @@ pub mod password {
     }
 
     /// Analyze password strength
+    #[must_use] 
     pub fn analyze_password_strength(password: &str) -> PasswordStrength {
         let len = password.len();
-        let has_lowercase = password.chars().any(|c| c.is_lowercase());
-        let has_uppercase = password.chars().any(|c| c.is_uppercase());
-        let has_digit = password.chars().any(|c| c.is_numeric());
+        let has_lowercase = password.chars().any(char::is_lowercase);
+        let has_uppercase = password.chars().any(char::is_uppercase);
+        let has_digit = password.chars().any(char::is_numeric);
         let has_symbol = password.chars().any(|c| !c.is_alphanumeric());
 
         let char_variety = [has_lowercase, has_uppercase, has_digit, has_symbol]
@@ -275,10 +292,10 @@ pub mod password {
         let name = strength.display_name();
         let reset = "\x1b[0m";
 
-        eprintln!("\nPassword strength: {}{}{}", color, name, reset);
+        eprintln!("\nPassword strength: {color}{name}{reset}");
 
         if let Some(recommendation) = strength.recommendation() {
-            eprintln!("💡 Tip: {}", recommendation);
+            eprintln!("💡 Tip: {recommendation}");
         }
     }
 
@@ -289,7 +306,7 @@ pub mod password {
             return Ok(SecureString::new(&passphrase));
         }
 
-        print!("{}", prompt);
+        print!("{prompt}");
         io::stdout().flush()?;
 
         let password = rpassword::read_password()?;
@@ -313,8 +330,8 @@ pub mod password {
         let password = read_password(prompt)?;
 
         // Analyze and display strength for new passwords
-        if show_strength {
-            if let Ok(pwd_str) = password.as_str() {
+        if show_strength
+            && let Ok(pwd_str) = password.as_str() {
                 let strength = analyze_password_strength(pwd_str);
                 display_strength_indicator(strength);
 
@@ -324,7 +341,6 @@ pub mod password {
                     eprintln!("   For production use, choose a strong password (12+ characters).");
                 }
             }
-        }
 
         let confirm = read_password(confirm_prompt)?;
 
@@ -394,7 +410,6 @@ pub mod password {
                 }
                 (Ok(_), Ok(_)) => {
                     eprintln!("\n❌ Passwords do not match. Please try again.\n");
-                    continue;
                 }
                 (Err(_), _) | (_, Err(_)) => {
                     return Err(std::io::Error::new(

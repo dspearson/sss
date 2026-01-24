@@ -1,3 +1,9 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc, // regex expects are compile-time validated patterns
+    clippy::unnecessary_wraps,  // Result return kept for API consistency
+)]
+
 use anyhow::{anyhow, Result};
 use globset::GlobSet;
 use regex::Regex;
@@ -30,6 +36,7 @@ impl Default for FileScanner {
 }
 
 impl FileScanner {
+    #[must_use] 
     pub fn new() -> Self {
         let pattern_regex =
             Regex::new(r"(?:⊕|o\+|⊠)\{[^}]*\}").expect("Failed to compile SSS pattern regex");
@@ -60,8 +67,8 @@ impl FileScanner {
     ///
     /// # Arguments
     ///
-    /// * `ignore_set` - GlobSet containing patterns for files to ignore
-    /// * `negation_set` - GlobSet containing negation patterns (files that should NOT be ignored)
+    /// * `ignore_set` - `GlobSet` containing patterns for files to ignore
+    /// * `negation_set` - `GlobSet` containing negation patterns (files that should NOT be ignored)
     ///
     /// # Examples
     ///
@@ -88,6 +95,7 @@ impl FileScanner {
 
     /// When enabled, the scanner will not recurse into subdirectories
     /// that contain their own `.sss.toml` (nested project boundaries).
+    #[must_use] 
     pub fn with_project_boundaries(mut self, respect: bool) -> Self {
         self.respect_project_boundaries = respect;
         self
@@ -164,9 +172,8 @@ impl FileScanner {
     /// Returns true if the file should be ignored, false otherwise
     fn matches_ignore_patterns_relative(&self, _abs_path: &Path, rel_path: &Path) -> bool {
         // If no ignore patterns set, don't ignore
-        let ignore_set = match &self.ignore_patterns {
-            Some(set) => set,
-            None => return false,
+        let Some(ignore_set) = &self.ignore_patterns else {
+            return false;
         };
 
         // Try matching against relative path and filename
@@ -174,8 +181,7 @@ impl FileScanner {
         let matches_ignore = ignore_set.is_match(rel_path)
             || rel_path.file_name()
                 .and_then(|n| n.to_str())
-                .map(|name| ignore_set.is_match(name))
-                .unwrap_or(false);
+                .is_some_and(|name| ignore_set.is_match(name));
 
         // If doesn't match ignore patterns, don't ignore
         if !matches_ignore {
@@ -187,8 +193,7 @@ impl FileScanner {
             let matches_negation = negation_set.is_match(rel_path)
                 || rel_path.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|name| negation_set.is_match(name))
-                    .unwrap_or(false);
+                    .is_some_and(|name| negation_set.is_match(name));
 
             if matches_negation {
                 return false; // Negation pattern overrides ignore
@@ -239,12 +244,9 @@ impl FileScanner {
     /// Check if a file contains SSS patterns
     fn file_contains_patterns(&self, path: &Path) -> Result<bool> {
         // Read file content as string (will fail for binary files, which is what we want)
-        let content = match fs::read_to_string(path) {
-            Ok(content) => content,
-            Err(_) => {
-                // Probably a binary file or encoding issue, skip
-                return Ok(false);
-            }
+        let Ok(content) = fs::read_to_string(path) else {
+            // Probably a binary file or encoding issue, skip
+            return Ok(false);
         };
 
         // Search for SSS patterns
@@ -344,6 +346,7 @@ pub struct ScanResult {
 }
 
 impl ScanResult {
+    #[must_use] 
     pub fn files_count(&self) -> usize {
         self.files_with_patterns.len()
     }

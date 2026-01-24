@@ -93,8 +93,10 @@
 //!
 //! - **UTF-8 Safe**: All position tracking uses byte offsets with proper boundary validation
 //! - **Conservative**: Prefers over-marking to under-marking for security
-//! - **No Regex**: Uses deterministic parsing to avoid ReDoS attacks
-//! - **Memory Bounded**: Input size limits prevent DoS via large files
+//! - **No Regex**: Uses deterministic parsing to avoid `ReDoS` attacks
+//! - **Memory Bounded**: Input size limits prevent `DoS` via large files
+
+#![allow(clippy::missing_errors_doc)]
 
 pub mod types;
 pub mod error;

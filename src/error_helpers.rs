@@ -2,6 +2,7 @@
 //!
 //! This module provides common error handling patterns used throughout the SSS codebase
 //! to maintain consistency and reduce repetitive error conversion code.
+#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use std::path::Path;
@@ -19,7 +20,7 @@ use std::path::Path;
 /// assert_eq!(result.unwrap(), "Hello");
 /// ```
 pub fn utf8_from_bytes(bytes: Vec<u8>, context: &str) -> Result<String> {
-    String::from_utf8(bytes).map_err(|e| anyhow!("Invalid UTF-8 in {}: {}", context, e))
+    String::from_utf8(bytes).map_err(|e| anyhow!("Invalid UTF-8 in {context}: {e}"))
 }
 
 /// Convert bytes to UTF-8 string with simple error message
@@ -108,7 +109,7 @@ pub fn read_directory(dir: &Path) -> Result<std::fs::ReadDir> {
 /// ```
 pub fn create_directory(path: &Path, dir_type: &str) -> Result<()> {
     std::fs::create_dir_all(path)
-        .map_err(|e| anyhow!("Failed to create {} directory: {}", dir_type, e))
+        .map_err(|e| anyhow!("Failed to create {dir_type} directory: {e}"))
 }
 
 /// Canonicalize path with error context
@@ -123,7 +124,7 @@ pub fn create_directory(path: &Path, dir_type: &str) -> Result<()> {
 /// ```
 pub fn canonicalize_path(path: &Path) -> Result<std::path::PathBuf> {
     path.canonicalize()
-        .map_err(|e| anyhow!("Failed to canonicalize path {:?}: {}", path, e))
+        .map_err(|e| anyhow!("Failed to canonicalize path {}: {e}", path.display()))
 }
 
 /// Get current working directory with error context
@@ -137,7 +138,7 @@ pub fn canonicalize_path(path: &Path) -> Result<std::path::PathBuf> {
 /// assert!(cwd.is_ok());
 /// ```
 pub fn get_current_dir() -> Result<std::path::PathBuf> {
-    std::env::current_dir().map_err(|e| anyhow!("Failed to get current directory: {}", e))
+    std::env::current_dir().map_err(|e| anyhow!("Failed to get current directory: {e}"))
 }
 
 /// Decode base64 with typed error message
@@ -154,7 +155,7 @@ pub fn decode_base64(encoded: &str, data_type: &str) -> Result<Vec<u8>> {
     use base64::prelude::*;
     BASE64_STANDARD
         .decode(encoded)
-        .map_err(|e| anyhow!("Failed to decode base64 {}: {}", data_type, e))
+        .map_err(|e| anyhow!("Failed to decode base64 {data_type}: {e}"))
 }
 
 /// Decode base64 for specific user with error context
@@ -171,10 +172,7 @@ pub fn decode_base64_for_user(encoded: &str, data_type: &str, username: &str) ->
     use base64::prelude::*;
     BASE64_STANDARD.decode(encoded).map_err(|e| {
         anyhow!(
-            "Invalid base64 {} for user '{}': {}",
-            data_type,
-            username,
-            e
+            "Invalid base64 {data_type} for user '{username}': {e}"
         )
     })
 }
@@ -196,7 +194,7 @@ pub fn get_home_dir() -> Result<String> {
 /// Get the current username with proper precedence
 ///
 /// Precedence order:
-/// 1. SSS_USER environment variable (highest)
+/// 1. `SSS_USER` environment variable (highest)
 /// 2. Global config username (from user settings)
 /// 3. USER/USERNAME environment variables (lowest - fallback only)
 ///
@@ -221,12 +219,11 @@ pub fn get_username() -> Result<String> {
     }
 
     // 2. Try to load config and get default username
-    if let Ok(config_manager) = ConfigManager::new() {
-        if let Some(username) = config_manager.get_default_username() {
+    if let Ok(config_manager) = ConfigManager::new()
+        && let Some(username) = config_manager.get_default_username() {
             validate_username(&username)?;
             return Ok(username);
         }
-    }
 
     // 3. Fall back to system username (USER/USERNAME env vars)
     let username = std::env::var("USER")
@@ -247,8 +244,9 @@ pub fn get_username() -> Result<String> {
 /// let err = user_not_found_error("alice");
 /// assert_eq!(err.to_string(), "User 'alice' not found in project");
 /// ```
+#[must_use] 
 pub fn user_not_found_error(username: &str) -> anyhow::Error {
-    anyhow!("User '{}' not found in project", username)
+    anyhow!("User '{username}' not found in project")
 }
 
 /// Get user directories with error context

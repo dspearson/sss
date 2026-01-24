@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::unnecessary_wraps)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 
@@ -36,13 +38,13 @@ fn handle_settings_show(config_manager: &crate::config_manager::ConfigManager) -
 
     // Show username
     match config_manager.get_username(None) {
-        Ok(username) => println!("Default username: {}", username),
+        Ok(username) => println!("Default username: {username}"),
         Err(_) => println!("Default username: <not set>"),
     }
 
     // Show editor
     let editor = config_manager.get_editor(None);
-    println!("Editor: {}", editor);
+    println!("Editor: {editor}");
 
     // Show UI preferences
     println!("Coloured output: {}", config_manager.use_coloured_output());
@@ -76,7 +78,7 @@ fn handle_settings_show(config_manager: &crate::config_manager::ConfigManager) -
             Ok(users) => {
                 println!("Project users: {}", users.join(", "));
             }
-            Err(e) => eprintln!("Project users: <error: {}>", e),
+            Err(e) => eprintln!("Project users: <error: {e}>"),
         }
     } else {
         println!("No project loaded");
@@ -92,7 +94,7 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
         } else {
             validate_username(username)?;
             config_manager.set_default_username(Some(username.clone()))?;
-            println!("Set default username to: {}", username);
+            println!("Set default username to: {username}");
         }
     }
 
@@ -102,13 +104,13 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
             println!("Cleared editor preference (will use system default)");
         } else {
             config_manager.set_editor(Some(editor.clone()));
-            println!("Set editor to: {}", editor);
+            println!("Set editor to: {editor}");
         }
     }
 
     if let Some(coloured) = sub_matches.get_one::<bool>("coloured") {
         config_manager.set_coloured_output(*coloured);
-        println!("Set coloured output to: {}", coloured);
+        println!("Set coloured output to: {coloured}");
     }
 
     if let Some(filename) = sub_matches.get_one::<String>("secrets-filename") {
@@ -117,7 +119,7 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
             println!("Cleared secrets filename (will use default: 'secrets')");
         } else {
             config_manager.set_secrets_filename(Some(filename.clone()));
-            println!("Set secrets filename to: {}", filename);
+            println!("Set secrets filename to: {filename}");
         }
     }
 
@@ -127,7 +129,7 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
             println!("Cleared secrets suffix (will use default: '.secrets')");
         } else {
             config_manager.set_secrets_suffix(Some(suffix.clone()));
-            println!("Set secrets suffix to: {}", suffix);
+            println!("Set secrets suffix to: {suffix}");
         }
     }
 
@@ -141,7 +143,7 @@ fn handle_settings_set(config_manager: &mut crate::config_manager::ConfigManager
             println!("Cleared KDF level (will use default: 'sensitive')");
         } else {
             config_manager.set_kdf_level(Some(kdf_level.clone()));
-            println!("Set KDF security level to: {}", kdf_level);
+            println!("Set KDF security level to: {kdf_level}");
             println!("\nNote: This only affects newly generated keys.");
             println!("Existing keys will continue to use their original KDF parameters.");
         }

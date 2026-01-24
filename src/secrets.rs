@@ -1,5 +1,10 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::unnecessary_wraps,   // collect_multiline_value returns Result for API consistency
+    clippy::doc_markdown,        // doc_list_overindented false positive on YAML block scalars
+)]
+
 use anyhow::{anyhow, Result};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -10,7 +15,7 @@ use crate::crypto::{decrypt_from_base64, RepositoryKey};
 /// Trait for abstracting filesystem operations
 ///
 /// This allows the same code to work with both normal filesystem operations
-/// (using std::fs) and fd-based operations (using openat/faccessat) needed
+/// (using `std::fs`) and fd-based operations (using openat/faccessat) needed
 /// by FUSE in-place mounts to avoid deadlock.
 pub trait FileSystemOps {
     /// Check if a file exists at the given path
@@ -20,7 +25,7 @@ pub trait FileSystemOps {
     fn read_file(&self, path: &Path) -> Result<Vec<u8>>;
 }
 
-/// Standard filesystem operations using std::fs
+/// Standard filesystem operations using `std::fs`
 pub struct StdFileSystemOps;
 
 impl FileSystemOps for StdFileSystemOps {
@@ -29,30 +34,30 @@ impl FileSystemOps for StdFileSystemOps {
     }
 
     fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
-        fs::read(path).map_err(|e| anyhow!("Failed to read file {:?}: {}", path, e))
+        fs::read(path).map_err(|e| anyhow!("Failed to read file {}: {e}", path.display()))
     }
 }
 
-/// Regex for secret interpolation - matches ⊲{secret_name} or <{secret_name}
-pub static SECRETS_INTERPOLATION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
+/// Regex for secret interpolation - matches ⊲{`secret_name`} or <{`secret_name`}
+pub static SECRETS_INTERPOLATION_REGEX: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
 
 /// Regex for parsing secrets file format - single-line values
 /// Supports: name: value, "name": value, name: "value", "name": "value"
 /// Also supports: name: 'value', 'name': 'value'
-static SECRETS_LINE_REGEX: Lazy<Regex> = Lazy::new(|| {
+static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|(.*))\s*$"#)
         .expect("Failed to compile secrets line regex")
 });
 
 /// Regex for parsing YAML-style multi-line value indicator
 /// Matches: key: | or "key": | or 'key': |
-static MULTILINE_INDICATOR_REGEX: Lazy<Regex> = Lazy::new(|| {
+static MULTILINE_INDICATOR_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*\|\s*$"#)
         .expect("Failed to compile multiline indicator regex")
 });
 
-/// SecretsCache manages loading of secrets from files
+/// `SecretsCache` manages loading of secrets from files
 ///
 /// Note: Despite the name, this does NOT cache plaintext secrets in memory for security reasons.
 /// It only manages configuration (repository key, filename patterns) for secrets lookups.
@@ -70,6 +75,7 @@ impl Default for SecretsCache {
 }
 
 impl SecretsCache {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             repository_key: None,
@@ -78,7 +84,8 @@ impl SecretsCache {
         }
     }
 
-    /// Create a new SecretsCache with a repository key for unsealing encrypted secrets files
+    /// Create a new `SecretsCache` with a repository key for unsealing encrypted secrets files
+    #[must_use] 
     pub fn with_repository_key(repository_key: RepositoryKey) -> Self {
         Self {
             repository_key: Some(repository_key),
@@ -87,7 +94,8 @@ impl SecretsCache {
         }
     }
 
-    /// Create a new SecretsCache with a repository key and custom secrets filename
+    /// Create a new `SecretsCache` with a repository key and custom secrets filename
+    #[must_use] 
     pub fn with_repository_key_and_filename(repository_key: RepositoryKey, secrets_filename: String) -> Self {
         Self {
             repository_key: Some(repository_key),
@@ -96,7 +104,8 @@ impl SecretsCache {
         }
     }
 
-    /// Create a new SecretsCache with a repository key and custom secrets filename and suffix
+    /// Create a new `SecretsCache` with a repository key and custom secrets filename and suffix
+    #[must_use] 
     pub fn with_repository_key_and_config(
         repository_key: RepositoryKey,
         secrets_filename: String,
@@ -120,7 +129,7 @@ impl SecretsCache {
     }
 
     /// Find secrets file using the lookup hierarchy with generic filesystem operations
-    /// Searches for: $filename{secrets_suffix}, {secrets_filename}, ../{secrets_filename}, up to git root
+    /// Searches for: $`filename{secrets_suffix`}, {`secrets_filename`}, ../{`secrets_filename`}, up to git root
     pub fn find_secrets_file_with_ops<P: AsRef<Path>, F: FileSystemOps>(
         &self,
         file_path: P,
@@ -197,7 +206,7 @@ impl SecretsCache {
     }
 
     /// Find secrets file using the lookup hierarchy (uses standard filesystem operations)
-    /// Searches for: $filename{secrets_suffix}, {secrets_filename}, ../{secrets_filename}, up to git root
+    /// Searches for: $`filename{secrets_suffix`}, {`secrets_filename`}, ../{`secrets_filename`}, up to git root
     pub fn find_secrets_file<P: AsRef<Path>>(
         &self,
         file_path: P,
@@ -266,14 +275,14 @@ impl SecretsCache {
 
 /// Unified secret interpolation function that works with any filesystem operations
 ///
-/// This replaces ⊲{secret_name} and <{secret_name} markers with actual values from .secrets files.
-/// Uses the FileSystemOps trait to support both normal filesystem and fd-based operations (for FUSE).
+/// This replaces ⊲{`secret_name`} and <{`secret_name`} markers with actual values from .secrets files.
+/// Uses the `FileSystemOps` trait to support both normal filesystem and fd-based operations (for FUSE).
 ///
 /// # Arguments
 /// * `content` - The content containing interpolation markers
 /// * `file_path` - Path to the file being processed (used to locate secrets files)
 /// * `project_root` - Project root directory
-/// * `secrets_cache` - SecretsCache for finding and loading secrets
+/// * `secrets_cache` - `SecretsCache` for finding and loading secrets
 /// * `fs_ops` - Filesystem operations implementation
 ///
 /// # Returns
@@ -293,7 +302,7 @@ pub fn interpolate_secrets<P: AsRef<Path>, F: FileSystemOps>(
         match secrets_cache.lookup_secret_with_ops(secret_name, file_path, project_root, fs_ops) {
             Ok(value) => value,
             Err(e) => {
-                eprintln!("Warning: Failed to lookup secret '{}': {}", secret_name, e);
+                eprintln!("Warning: Failed to lookup secret '{secret_name}': {e}");
                 caps[0].to_string() // Return original marker on error
             }
         }
@@ -317,12 +326,11 @@ fn decrypt_secrets_content(content: &str, key: &RepositoryKey) -> Result<String>
     }
 }
 
-/// Parse secrets content string into a HashMap
+/// Parse secrets content string into a `HashMap`
+///
 /// Supports both single-line and YAML-style multi-line values:
-/// - Single-line: name: value
-/// - Multi-line:  name: |
-///                  line1
-///                  line2
+/// - Single-line: `name: value`
+/// - Multi-line: `name: |` followed by indented lines
 pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<String, String>> {
     let mut secrets = HashMap::new();
     let lines: Vec<&str> = content.lines().collect();
@@ -385,8 +393,7 @@ pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<Strin
                 .get(4)
                 .or_else(|| caps.get(5))
                 .or_else(|| caps.get(6))
-                .map(|m| m.as_str().trim())
-                .unwrap_or("");
+                .map_or("", |m| m.as_str().trim());
 
             secrets.insert(key.to_string(), value.to_string());
             i += 1;
@@ -404,7 +411,7 @@ pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<Strin
 }
 
 /// Collect a multi-line value (YAML-style with indentation)
-/// Returns (value, number_of_lines_consumed)
+/// Returns (value, `number_of_lines_consumed`)
 fn collect_multiline_value(lines: &[&str], _start_line: usize) -> Result<(String, usize)> {
     if lines.is_empty() {
         // Empty multi-line value

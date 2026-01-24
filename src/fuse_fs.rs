@@ -101,8 +101,8 @@ trait FileOperations: Send + Sync {
     /// Should this file be hidden from directory listings?
     fn should_hide(&self, name: &str) -> bool;
 
-    /// Get file permissions (may adjust based on secrets, etc.)
-    fn get_permissions(&self, metadata: &fs::Metadata, has_secrets: bool) -> u16;
+    /// Get file permissions — always mirrors the source file's original mode
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16;
 }
 
 /// SSS operations - renders ⊠{} to plaintext on read, seals to ⊠{} on write
@@ -116,9 +116,9 @@ impl FileOperations for SssOperations {
         )
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() as u16
+        (metadata.permissions().mode() & 0o7777) as u16
     }
 }
 
@@ -130,9 +130,9 @@ impl FileOperations for PassthroughOperations {
         false  // Show everything including .git
     }
 
-    fn get_permissions(&self, metadata: &fs::Metadata, _has_secrets: bool) -> u16 {
+    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() as u16
+        (metadata.permissions().mode() & 0o7777) as u16
     }
 }
 
@@ -611,7 +611,9 @@ impl SssFS {
         self.metadata_to_attr_with_secrets(ino, metadata, size_override, force_writable, false)
     }
 
-    fn metadata_to_attr_with_secrets(&self, ino: u64, metadata: &fs::Metadata, size_override: Option<u64>, force_writable: bool, has_secrets: bool) -> FileAttr {
+    /// Convert filesystem metadata to FUSE FileAttr — always mirrors original metadata.
+    /// Only `size` may differ (via size_override) because rendered content length differs from on-disk.
+    fn metadata_to_attr_with_secrets(&self, ino: u64, metadata: &fs::Metadata, size_override: Option<u64>, _force_writable: bool, _has_secrets: bool) -> FileAttr {
         let kind = if metadata.is_dir() {
             FileType::Directory
         } else if metadata.is_symlink() {
@@ -623,38 +625,21 @@ impl SssFS {
         // Use override size for rendered content
         let size = size_override.unwrap_or(metadata.len());
 
-        // Get base permissions
-        let mut perm = Self::get_permissions(metadata);
-
-        // If file contains rendered secrets, restrict permissions for security
-        // chmod 600 for non-executable files, 700 for executable files
-        if has_secrets && kind == FileType::RegularFile {
-            let has_execute = (perm & 0o111) != 0;
-            perm = if has_execute {
-                0o700  // Owner read/write/execute only
-            } else {
-                0o600  // Owner read/write only
-            };
-        } else if force_writable && kind == FileType::RegularFile {
-            // Ensure owner write permission (0o200) for non-secret files
-            perm |= 0o200;
-        }
-
         FileAttr {
             ino,
             size,
-            blocks: size.div_ceil(512),
+            blocks: Self::get_blocks(metadata),
             atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
             mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
-            ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+            ctime: Self::get_ctime(metadata),
             crtime: metadata.created().unwrap_or(UNIX_EPOCH),
             kind,
-            perm,
+            perm: Self::get_permissions(metadata),
             nlink: Self::get_nlink(metadata) as u32,
             uid: Self::get_uid(metadata),
             gid: Self::get_gid(metadata),
-            rdev: 0,
-            blksize: 512,
+            rdev: Self::get_rdev(metadata),
+            blksize: Self::get_blksize(metadata),
             flags: 0,
         }
     }
@@ -701,6 +686,56 @@ impl SssFS {
     #[cfg(not(unix))]
     fn get_nlink(_metadata: &fs::Metadata) -> u64 {
         1
+    }
+
+    #[cfg(unix)]
+    fn get_ctime(metadata: &fs::Metadata) -> std::time::SystemTime {
+        use std::os::unix::fs::MetadataExt;
+        let secs = metadata.ctime();
+        let nsecs = metadata.ctime_nsec() as u32;
+        if secs >= 0 {
+            UNIX_EPOCH + Duration::new(secs as u64, nsecs)
+        } else {
+            UNIX_EPOCH
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn get_ctime(metadata: &fs::Metadata) -> std::time::SystemTime {
+        metadata.created().unwrap_or(UNIX_EPOCH)
+    }
+
+    #[cfg(unix)]
+    fn get_blocks(metadata: &fs::Metadata) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        metadata.blocks()
+    }
+
+    #[cfg(not(unix))]
+    fn get_blocks(metadata: &fs::Metadata) -> u64 {
+        metadata.len().div_ceil(512)
+    }
+
+    #[cfg(unix)]
+    fn get_blksize(metadata: &fs::Metadata) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        metadata.blksize() as u32
+    }
+
+    #[cfg(not(unix))]
+    fn get_blksize(_metadata: &fs::Metadata) -> u32 {
+        512
+    }
+
+    #[cfg(unix)]
+    fn get_rdev(metadata: &fs::Metadata) -> u32 {
+        use std::os::unix::fs::MetadataExt;
+        metadata.rdev() as u32
+    }
+
+    #[cfg(not(unix))]
+    fn get_rdev(_metadata: &fs::Metadata) -> u32 {
+        0
     }
 
     /// Check if a file has encrypted markers (should be processed)
@@ -1682,24 +1717,24 @@ impl Filesystem for SssFS {
         fuse_debug!("getattr ino={}", ino);
         // Handle synthetic .overlay directory
         if ino == SYNTHETIC_OVERLAY_DIR_INO {
-            // Get attributes from the actual source directory
+            // Get attributes from the actual source directory — mirror all metadata
             match self.metadata_via_fd(Path::new(".")) {
                 Ok(metadata) => {
                     let attr = FileAttr {
                         ino: SYNTHETIC_OVERLAY_DIR_INO,
-                        size: 0,
-                        blocks: 0,
+                        size: metadata.len(),
+                        blocks: Self::get_blocks(&metadata),
                         atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
                         mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
-                        ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        ctime: Self::get_ctime(&metadata),
                         crtime: metadata.created().unwrap_or(UNIX_EPOCH),
                         kind: FileType::Directory,
-                        perm: 0o755,  // rwxr-xr-x
-                        nlink: 2,
-                        uid: self.uid,
-                        gid: self.gid,
-                        rdev: 0,
-                        blksize: 512,
+                        perm: Self::get_permissions(&metadata),
+                        nlink: Self::get_nlink(&metadata) as u32,
+                        uid: Self::get_uid(&metadata),
+                        gid: Self::get_gid(&metadata),
+                        rdev: Self::get_rdev(&metadata),
+                        blksize: Self::get_blksize(&metadata),
                         flags: 0,
                     };
                     reply.attr(&TTL, &attr);
@@ -1739,13 +1774,7 @@ impl Filesystem for SssFS {
                     self.compute_size_override(ino, &metadata)
                 };
 
-                let has_secrets = metadata.is_file() && !is_passthrough &&
-                    self.file_has_secrets(&source_rel_path);
-
-                // Use operations to get permissions
-                let perm = pinned.operations.get_permissions(&metadata, has_secrets);
-
-                // Build FileAttr
+                // Build FileAttr — mirror all original metadata
                 let kind = if metadata.is_dir() {
                     FileType::Directory
                 } else if metadata.is_symlink() {
@@ -1759,18 +1788,18 @@ impl Filesystem for SssFS {
                 let attr = FileAttr {
                     ino,
                     size,
-                    blocks: size.div_ceil(512),
+                    blocks: Self::get_blocks(&metadata),
                     atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
                     mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
-                    ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    ctime: Self::get_ctime(&metadata),
                     crtime: metadata.created().unwrap_or(UNIX_EPOCH),
                     kind,
-                    perm,
+                    perm: Self::get_permissions(&metadata),
                     nlink: Self::get_nlink(&metadata) as u32,
                     uid: Self::get_uid(&metadata),
                     gid: Self::get_gid(&metadata),
-                    rdev: 0,
-                    blksize: 512,
+                    rdev: Self::get_rdev(&metadata),
+                    blksize: Self::get_blksize(&metadata),
                     flags: 0,
                 };
 
@@ -1789,24 +1818,31 @@ impl Filesystem for SssFS {
 
         // Special case: looking up ".overlay" from root
         if parent == ROOT_INO && name == ".overlay" {
-            let attr = FileAttr {
-                ino: SYNTHETIC_OVERLAY_DIR_INO,
-                size: 0,
-                blocks: 0,
-                atime: UNIX_EPOCH,
-                mtime: UNIX_EPOCH,
-                ctime: UNIX_EPOCH,
-                crtime: UNIX_EPOCH,
-                kind: FileType::Directory,
-                perm: 0o755,
-                nlink: 2,
-                uid: self.uid,
-                gid: self.gid,
-                rdev: 0,
-                blksize: 512,
-                flags: 0,
-            };
-            reply.entry(&TTL, &attr, 0);
+            match self.metadata_via_fd(Path::new(".")) {
+                Ok(metadata) => {
+                    let attr = FileAttr {
+                        ino: SYNTHETIC_OVERLAY_DIR_INO,
+                        size: metadata.len(),
+                        blocks: Self::get_blocks(&metadata),
+                        atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
+                        mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
+                        ctime: Self::get_ctime(&metadata),
+                        crtime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        kind: FileType::Directory,
+                        perm: Self::get_permissions(&metadata),
+                        nlink: Self::get_nlink(&metadata) as u32,
+                        uid: Self::get_uid(&metadata),
+                        gid: Self::get_gid(&metadata),
+                        rdev: Self::get_rdev(&metadata),
+                        blksize: Self::get_blksize(&metadata),
+                        flags: 0,
+                    };
+                    reply.entry(&TTL, &attr, 0);
+                }
+                Err(_) => {
+                    reply.error(libc::EIO);
+                }
+            }
             return;
         }
 
@@ -1867,12 +1903,7 @@ impl Filesystem for SssFS {
                     self.compute_size_override(ino, &metadata)
                 };
 
-                let has_secrets = metadata.is_file() && !is_passthrough &&
-                    self.file_has_secrets(&source_rel_path);
-
-                let perm = pinned.operations.get_permissions(&metadata, has_secrets);
-
-                // Build FileAttr inline (same as getattr)
+                // Build FileAttr — mirror all original metadata
                 let kind = if metadata.is_dir() {
                     FileType::Directory
                 } else if metadata.is_symlink() {
@@ -1886,18 +1917,18 @@ impl Filesystem for SssFS {
                 let attr = FileAttr {
                     ino,
                     size,
-                    blocks: size.div_ceil(512),
+                    blocks: Self::get_blocks(&metadata),
                     atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
                     mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
-                    ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                    ctime: Self::get_ctime(&metadata),
                     crtime: metadata.created().unwrap_or(UNIX_EPOCH),
                     kind,
-                    perm,
+                    perm: Self::get_permissions(&metadata),
                     nlink: Self::get_nlink(&metadata) as u32,
                     uid: Self::get_uid(&metadata),
                     gid: Self::get_gid(&metadata),
-                    rdev: 0,
-                    blksize: 512,
+                    rdev: Self::get_rdev(&metadata),
+                    blksize: Self::get_blksize(&metadata),
                     flags: 0,
                 };
 
@@ -2524,19 +2555,19 @@ impl Filesystem for SssFS {
                 Ok(metadata) => {
                     let attr = FileAttr {
                         ino: SYNTHETIC_OVERLAY_DIR_INO,
-                        size: 0,
-                        blocks: 0,
+                        size: metadata.len(),
+                        blocks: Self::get_blocks(&metadata),
                         atime: metadata.accessed().unwrap_or(UNIX_EPOCH),
                         mtime: metadata.modified().unwrap_or(UNIX_EPOCH),
-                        ctime: metadata.created().unwrap_or(UNIX_EPOCH),
+                        ctime: Self::get_ctime(&metadata),
                         crtime: metadata.created().unwrap_or(UNIX_EPOCH),
                         kind: FileType::Directory,
-                        perm: 0o755,
-                        nlink: 2,
-                        uid: self.uid,
-                        gid: self.gid,
-                        rdev: 0,
-                        blksize: 512,
+                        perm: Self::get_permissions(&metadata),
+                        nlink: Self::get_nlink(&metadata) as u32,
+                        uid: Self::get_uid(&metadata),
+                        gid: Self::get_gid(&metadata),
+                        rdev: Self::get_rdev(&metadata),
+                        blksize: Self::get_blksize(&metadata),
                         flags: 0,
                     };
                     reply.attr(&TTL, &attr);

@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc, clippy::items_after_statements)]
+
 use anyhow::{anyhow, Result};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -30,9 +32,8 @@ pub fn find_project_root_from(start_dir: &Path) -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "No SSS project found. Could not locate {} in {:?} or any parent directory.",
-        DEFAULT_CONFIG_FILE,
-        start_dir
+        "No SSS project found. Could not locate {DEFAULT_CONFIG_FILE} in {} or any parent directory.",
+        start_dir.display()
     ))
 }
 
@@ -40,7 +41,7 @@ pub fn find_project_root_from(start_dir: &Path) -> Result<PathBuf> {
 /// Similar to how git finds the repository root by searching for .git
 pub fn find_project_root() -> Result<PathBuf> {
     let current_dir =
-        env::current_dir().map_err(|e| anyhow!("Failed to get current directory: {}", e))?;
+        env::current_dir().map_err(|e| anyhow!("Failed to get current directory: {e}"))?;
     find_project_root_from(&current_dir)
 }
 
@@ -63,7 +64,7 @@ pub fn get_project_config_path_from(start_dir: &Path) -> Result<PathBuf> {
 ///
 /// # Returns
 ///
-/// Returns a tuple of (config_path, config) for commands that need both.
+/// Returns a tuple of (`config_path`, config) for commands that need both.
 ///
 /// # Errors
 ///
@@ -167,7 +168,7 @@ pub fn init_project_config<P: AsRef<Path>>(
     config.save_to_file(&config_path)?;
 
     println!("Created {}", config_path.as_ref().display());
-    println!("Added user '{}' to project", username);
+    println!("Added user '{username}' to project");
 
     Ok(())
 }
@@ -177,20 +178,17 @@ fn load_keypair_with_password_retry() -> Result<crate::crypto::KeyPair> {
     let keystore = crate::keystore::Keystore::new()?;
 
     // Try without password first
-    match keystore.get_current_keypair(None) {
-        Ok(keypair) => Ok(keypair),
-        Err(_) => {
-            // Try with password from SSS_PASSPHRASE environment variable or prompt
-            let password = get_passphrase_or_prompt(
-                "Enter your passphrase (or press Enter if none): ",
-            )?;
-            let password_opt = if password.is_empty() {
-                None
-            } else {
-                Some(password.as_str())
-            };
-            keystore.get_current_keypair(password_opt)
-        }
+    if let Ok(keypair) = keystore.get_current_keypair(None) { Ok(keypair) } else {
+        // Try with password from SSS_PASSPHRASE environment variable or prompt
+        let password = get_passphrase_or_prompt(
+            "Enter your passphrase (or press Enter if none): ",
+        )?;
+        let password_opt = if password.is_empty() {
+            None
+        } else {
+            Some(password.as_str())
+        };
+        keystore.get_current_keypair(password_opt)
     }
 }
 
@@ -264,7 +262,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
                 if let Ok(all_keypairs) = keystore.get_all_keypairs(password_opt) {
                     for keypair in all_keypairs {
                         if let Some(username) = config.find_user_by_public_key(&keypair.public_key) {
-                            eprintln!("✓ Found matching key for user: {}", username);
+                            eprintln!("✓ Found matching key for user: {username}");
                             username_opt = Some(username);
                             matched_keypair = keypair;
                             break;
@@ -303,8 +301,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
                     Ok(key) => key,
                     Err(e) => {
                         eprintln!(
-                            "Agent unsealing failed: {}, falling back to local keystore",
-                            e
+                            "Agent unsealing failed: {e}, falling back to local keystore"
                         );
                         // Use the already-loaded keypair
                         crate::crypto::open_repository_key(&sealed_key, &user_keypair)?

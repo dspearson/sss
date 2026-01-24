@@ -1,3 +1,10 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::struct_excessive_bools, // RotationOptions bools match distinct orthogonal flags
+    clippy::unused_self,            // self kept for future extensibility in rotation methods
+    clippy::unnecessary_wraps,      // create_empty_rotation_result may error in future
+)]
+
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -24,7 +31,7 @@ pub enum RotationReason {
 impl std::fmt::Display for RotationReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UserRemoved(user) => write!(f, "User '{}' removed", user),
+            Self::UserRemoved(user) => write!(f, "User '{user}' removed"),
             Self::ManualRotation => write!(f, "Manual rotation"),
             Self::SecurityIncident => write!(f, "Security incident"),
             Self::ScheduledRotation => write!(f, "Scheduled rotation"),
@@ -78,6 +85,7 @@ pub struct RotationManager {
 }
 
 impl RotationManager {
+    #[must_use] 
     pub fn new(options: RotationOptions) -> Self {
         Self { options }
     }
@@ -96,7 +104,7 @@ impl RotationManager {
         }
 
         println!("🔄 Starting key rotation...");
-        println!("   Reason: {}", reason);
+        println!("   Reason: {reason}");
 
         // Step 1: Find all files with SSS patterns
         let scan_result =
@@ -113,10 +121,10 @@ impl RotationManager {
         );
 
         // Step 2: Create backup if requested
-        let backup_path = if !self.options.no_backup {
-            Some(self.create_backup(&scan_result.files_with_patterns)?)
-        } else {
+        let backup_path = if self.options.no_backup {
             None
+        } else {
+            Some(self.create_backup(&scan_result.files_with_patterns)?)
         };
 
         // Step 3: Load project config for timestamp
@@ -156,7 +164,7 @@ impl RotationManager {
         };
 
         if files_failed > 0 {
-            println!("⚠️  {} files failed to re-encrypt", files_failed);
+            println!("⚠️  {files_failed} files failed to re-encrypt");
             if let Some(ref backup_path) = backup_path {
                 println!(
                     "   Consider restoring from backup: {}",
@@ -183,7 +191,7 @@ impl RotationManager {
             self.scan_repository_files(config_path.parent().unwrap_or(Path::new(".")))?;
 
         println!("📋 Dry run results:");
-        println!("   Would rotate key due to: {}", reason);
+        println!("   Would rotate key due to: {reason}");
         println!("   Would process {} files", scan_result.files_count());
 
         if !self.options.no_backup {
@@ -196,10 +204,10 @@ impl RotationManager {
         // Load config to show users that would be updated
         let config = ProjectConfig::load_from_file(config_path)?;
         let user_count = config.users.len();
-        println!("   Would update sealed keys for {} users", user_count);
+        println!("   Would update sealed keys for {user_count} users");
 
         for username in config.list_users() {
-            println!("     - {}", username);
+            println!("     - {username}");
         }
 
         Ok(RotationResult {
@@ -235,10 +243,10 @@ impl RotationManager {
         }
 
         let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
-        let backup_dir = PathBuf::from(format!(".sss_backup_{}", timestamp));
+        let backup_dir = PathBuf::from(format!(".sss_backup_{timestamp}"));
 
         fs::create_dir_all(&backup_dir)
-            .map_err(|e| anyhow!("Failed to create backup directory: {}", e))?;
+            .map_err(|e| anyhow!("Failed to create backup directory: {e}"))?;
 
         for file_path in files {
             if let Some(file_name) = file_path.file_name() {
@@ -400,7 +408,7 @@ pub fn confirm_rotation(reason: &RotationReason, force: bool) -> Result<bool> {
     }
 
     println!("⚠️  This will rotate the repository encryption key");
-    println!("   Reason: {}", reason);
+    println!("   Reason: {reason}");
     println!("   All secrets will be re-encrypted with a new key");
     println!("   This operation cannot be undone without a backup");
     println!();

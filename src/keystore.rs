@@ -1,3 +1,9 @@
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value, // KdfParams is kept by value for API clarity
+)]
+
 use anyhow::{anyhow, Result};
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -98,9 +104,7 @@ impl Keystore {
             .join("Application Support");
 
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        let config_dir = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| user_dirs.home_dir().join(".config"));
+        let config_dir = std::env::var("XDG_CONFIG_HOME").map_or_else(|_| user_dirs.home_dir().join(".config"), PathBuf::from);
 
         Ok(config_dir.join("sss").join("keys"))
     }
@@ -164,7 +168,7 @@ impl Keystore {
         };
 
         // Write keypair to file
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = toml::to_string_pretty(&stored_keypair)?;
         fs::write(&key_file, content)?;
 
@@ -187,7 +191,7 @@ impl Keystore {
     /// Set the current key by creating/updating the "current" symlink
     pub fn set_current_key(&self, key_id: &str) -> Result<()> {
         let current_link = self.keys_dir.join("current");
-        let target = format!("{}.toml", key_id);
+        let target = format!("{key_id}.toml");
 
         // Remove existing symlink if it exists
         if current_link.exists() {
@@ -224,10 +228,10 @@ impl Keystore {
 
     /// Load a specific keypair by ID
     pub fn load_keypair(&self, key_id: &str, password: Option<&str>) -> Result<KeyPair> {
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
 
         if !key_file.exists() {
-            return Err(anyhow!("Key file not found: {}", key_id));
+            return Err(anyhow!("Key file not found: {key_id}"));
         }
 
         let content = fs::read_to_string(&key_file)?;
@@ -280,10 +284,10 @@ impl Keystore {
 
     /// Delete a keypair by ID
     pub fn delete_keypair(&self, key_id: &str) -> Result<()> {
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
 
         if !key_file.exists() {
-            return Err(anyhow!("Key file not found: {}", key_id));
+            return Err(anyhow!("Key file not found: {key_id}"));
         }
 
         fs::remove_file(&key_file)?;
@@ -320,7 +324,7 @@ impl Keystore {
         let keypair = self.load_keypair(key_id, old_password)?;
 
         // Load the stored keypair metadata to preserve other fields
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = fs::read_to_string(&key_file)?;
         let mut stored: StoredKeyPair = toml::from_str(&content)?;
 
@@ -366,7 +370,7 @@ impl Keystore {
         let keypair = self.load_keypair(key_id, Some(current_password))?;
 
         // Load the stored keypair metadata
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = fs::read_to_string(&key_file)?;
         let mut stored: StoredKeyPair = toml::from_str(&content)?;
 
@@ -400,10 +404,10 @@ impl Keystore {
     /// Check if the current key is password protected
     pub fn is_current_key_password_protected(&self) -> Result<bool> {
         let key_id = self.read_current_key_id()?;
-        let key_file = self.keys_dir.join(format!("{}.toml", key_id));
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
 
         if !key_file.exists() {
-            return Err(anyhow!("Key file not found: {}", key_id));
+            return Err(anyhow!("Key file not found: {key_id}"));
         }
 
         let content = fs::read_to_string(&key_file)?;
@@ -510,14 +514,14 @@ impl Keystore {
     }
 }
 
-/// Get password/passphrase from SSS_PASSPHRASE environment variable or prompt user
+/// Get password/passphrase from `SSS_PASSPHRASE` environment variable or prompt user
 ///
 /// This is the primary method for obtaining passphrases for password-protected keys.
-/// It checks the SSS_PASSPHRASE environment variable first (useful for automation and testing),
+/// It checks the `SSS_PASSPHRASE` environment variable first (useful for automation and testing),
 /// then falls back to an interactive prompt if not set.
 ///
-/// In non-interactive mode (SSS_NONINTERACTIVE=1 or --non-interactive flag), this function
-/// will fail if SSS_PASSPHRASE is not set, rather than prompting the user.
+/// In non-interactive mode (`SSS_NONINTERACTIVE=1` or --non-interactive flag), this function
+/// will fail if `SSS_PASSPHRASE` is not set, rather than prompting the user.
 ///
 /// # Arguments
 /// * `prompt` - The prompt to show when environment variable is not set
@@ -553,7 +557,7 @@ pub fn get_passphrase_or_prompt(prompt: &str) -> Result<String> {
     }
 
     // Fall back to interactive prompt
-    rpassword::prompt_password(prompt).map_err(|e| anyhow!("Failed to read passphrase: {}", e))
+    rpassword::prompt_password(prompt).map_err(|e| anyhow!("Failed to read passphrase: {e}"))
 }
 
 impl Default for Keystore {

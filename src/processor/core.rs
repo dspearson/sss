@@ -1,4 +1,7 @@
+#![allow(clippy::missing_errors_doc)] // Public API doc sections managed separately
+
 use anyhow::{anyhow, Result};
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -136,6 +139,7 @@ pub struct Processor {
 
 impl Processor {
     /// Helper to handle oversized marker content with consistent warning
+    #[allow(clippy::unused_self)]
     fn check_marker_size(&self, content: &str, marker_type: &str) -> bool {
         if content.len() > MAX_MARKER_CONTENT_SIZE {
             eprintln!(
@@ -150,21 +154,22 @@ impl Processor {
     }
 
     /// Helper to handle encryption errors with consistent warning
+    #[allow(clippy::unused_self)]
     fn handle_encrypt_error(&self, error: &anyhow::Error, original: &str) -> String {
-        eprintln!("Warning: Failed to encrypt plaintext: {}", error);
+        eprintln!("Warning: Failed to encrypt plaintext: {error}");
         original.to_string()
     }
 
     /// Helper to handle decryption errors with consistent warning
+    #[allow(clippy::unused_self)]
     fn handle_decrypt_error(&self, error: &anyhow::Error, original: &str, context: &str) -> String {
         let context_str = if context.is_empty() {
             String::new()
         } else {
-            format!(" {}", context)
+            format!(" {context}")
         };
         eprintln!(
-            "Warning: Failed to decrypt ciphertext{}: {}",
-            context_str, error
+            "Warning: Failed to decrypt ciphertext{context_str}: {error}"
         );
         original.to_string()
     }
@@ -177,20 +182,18 @@ impl Processor {
     /// Convert an absolute path to a relative path from the project root
     /// Returns a path in the form "./dir/file.txt"
     fn make_relative_path(&self, path: &Path) -> Result<String> {
-        let project_root = if let Some(ref root) = self.project_root {
-            root
-        } else {
+        let Some(ref project_root) = self.project_root else {
             return Ok(path.to_string_lossy().to_string());
         };
 
         let canonical_path = path.canonicalize()
-            .map_err(|e| anyhow!("Failed to canonicalize path {:?}: {}", path, e))?;
+            .map_err(|e| anyhow!("Failed to canonicalize path {}: {e}", path.display()))?;
 
         let canonical_root = project_root.canonicalize()
-            .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;
+            .map_err(|e| anyhow!("Failed to canonicalize project root: {e}"))?;
 
         let relative = canonical_path.strip_prefix(&canonical_root)
-            .map_err(|_| anyhow!("Path {:?} is not within project root {:?}", path, project_root))?;
+            .map_err(|_| anyhow!("Path {} is not within project root {}", path.display(), project_root.display()))?;
 
         // Format as ./path/to/file.txt
         Ok(format!("./{}", relative.to_string_lossy().replace('\\', "/")))
@@ -213,7 +216,7 @@ impl Processor {
                 content,
                 file_path,
                 &project_root,
-                &mut *secrets_cache,
+                &mut secrets_cache,
                 &StdFileSystemOps,
             )
         }
@@ -374,8 +377,7 @@ impl Processor {
         path.as_ref()
             .file_name()
             .and_then(|name| name.to_str())
-            .map(|name| name.ends_with(".secrets") || name == "secrets")
-            .unwrap_or(false)
+            .is_some_and(|name| name.ends_with(".secrets") || name == "secrets")
     }
 
     /// Process .secrets file content - encrypt or decrypt the entire file without markers
@@ -398,23 +400,23 @@ impl Processor {
         // Check if already encrypted (idempotent seal)
         if trimmed.starts_with("⊠{") && trimmed.ends_with('}') {
             // Already encrypted, ensure POSIX newline and return
-            return Ok(format!("{}\n", trimmed));
+            return Ok(format!("{trimmed}\n"));
         }
 
         // Not encrypted yet, encrypt the content with deterministic nonce
-        let encrypted = if !self.project_created.is_empty() {
+        let encrypted = if self.project_created.is_empty() {
+            // Fall back to random nonce if no project context
+            encrypt_to_base64(content, &self.repository_key)?
+        } else {
             encrypt_to_base64_deterministic(
                 content,
                 &self.repository_key,
                 &self.project_created,
                 file_path,
             )?
-        } else {
-            // Fall back to random nonce if no project context
-            encrypt_to_base64(content, &self.repository_key)?
         };
         // Add trailing newline for POSIX compliance
-        Ok(format!("⊠{{{}}}\n", encrypted))
+        Ok(format!("⊠{{{encrypted}}}\n"))
     }
 
     /// Decrypt entire .secrets file content, detecting and removing encrypted marker
@@ -484,6 +486,7 @@ impl Processor {
         let file = fs::File::open(path_ref)
             .map_err(|e| anyhow!("Failed to open file {}: {}", path_ref.display(), e))?;
         let mut reader = BufReader::new(file);
+        #[allow(clippy::cast_possible_truncation)] // file size fits in usize on all supported platforms
         let mut content = String::with_capacity(metadata.len() as usize);
         reader
             .read_to_string(&mut content)
@@ -541,21 +544,21 @@ impl Processor {
         }
 
         // Use deterministic encryption if we have project_created timestamp
-        let encrypted_result = if !self.project_created.is_empty() {
+        let encrypted_result = if self.project_created.is_empty() {
+            // Fall back to random nonce if no project context
+            encrypt_to_base64(&marker.content, &self.repository_key)
+        } else {
             encrypt_to_base64_deterministic(
                 &marker.content,
                 &self.repository_key,
                 &self.project_created,
                 file_path,
             )
-        } else {
-            // Fall back to random nonce if no project context
-            encrypt_to_base64(&marker.content, &self.repository_key)
         };
 
         // Format result or handle error
         match encrypted_result {
-            Ok(encrypted) => format!("⊠{{{}}}", encrypted),
+            Ok(encrypted) => format!("⊠{{{encrypted}}}"),
             Err(e) => {
                 let original = &original_text[marker.start..marker.end];
                 self.handle_encrypt_error(&e, original)
@@ -608,17 +611,17 @@ impl Processor {
             result.push_str(&content[last_end..marker.start]);
 
             // Process this marker
-            if !self.check_marker_size(&marker.content, "Ciphertext") {
-                // Keep original marker if too large
-                result.push_str(&content[marker.start..marker.end]);
-            } else {
+            if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
-                    Ok(decrypted) => result.push_str(&format!("⊕{{{}}}", decrypted)),
+                    Ok(decrypted) => { let _ = write!(result, "⊕{{{decrypted}}}"); }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
                         result.push_str(&self.handle_decrypt_error(&e, original, ""));
                     }
                 }
+            } else {
+                // Keep original marker if too large
+                result.push_str(&content[marker.start..marker.end]);
             }
 
             last_end = marker.end;
@@ -645,17 +648,17 @@ impl Processor {
             result.push_str(&content[last_end..marker.start]);
 
             // Process this marker
-            if !self.check_marker_size(&marker.content, "Ciphertext") {
-                // Keep original marker if too large
-                result.push_str(&content[marker.start..marker.end]);
-            } else {
+            if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
-                    Ok(decrypted) => result.push_str(&format!("⊕{{{}}}", decrypted)),
+                    Ok(decrypted) => { let _ = write!(result, "⊕{{{decrypted}}}"); }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
                         result.push_str(&self.handle_decrypt_error(&e, original, "for editing"));
                     }
                 }
+            } else {
+                // Keep original marker if too large
+                result.push_str(&content[marker.start..marker.end]);
             }
 
             last_end = marker.end;
@@ -680,9 +683,7 @@ impl Processor {
         for marker in markers {
             result.push_str(&content[last_end..marker.start]);
 
-            if !self.check_marker_size(&marker.content, "Ciphertext") {
-                result.push_str(&content[marker.start..marker.end]);
-            } else {
+            if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
                     Ok(decrypted) => result.push_str(&decrypted),
                     Err(e) => {
@@ -690,6 +691,8 @@ impl Processor {
                         result.push_str(&self.handle_decrypt_error(&e, original, ""));
                     }
                 }
+            } else {
+                result.push_str(&content[marker.start..marker.end]);
             }
 
             last_end = marker.end;
@@ -708,10 +711,10 @@ impl Processor {
         for marker in plaintext_markers {
             final_result.push_str(&result[last_end..marker.start]);
 
-            if !self.check_marker_size(&marker.content, "Plaintext") {
-                final_result.push_str(&result[marker.start..marker.end]);
-            } else {
+            if self.check_marker_size(&marker.content, "Plaintext") {
                 final_result.push_str(&marker.content);
+            } else {
+                final_result.push_str(&result[marker.start..marker.end]);
             }
 
             last_end = marker.end;

@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 use anyhow::{anyhow, Result};
 use keyring::Entry;
 use std::path::Path;
@@ -41,6 +43,7 @@ impl UserProfile {
         Self(name.into())
     }
 
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -82,6 +85,7 @@ impl Default for KeyringManager {
 }
 
 impl KeyringManager {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             service_name: SERVICE_NAME.to_string(),
@@ -96,12 +100,12 @@ impl KeyringManager {
     /// Store a key in the system keyring for a specific user/profile
     pub fn store_key_for_user(&self, user: &str, key: &Key) -> Result<()> {
         let entry = Entry::new(&self.service_name, user)
-            .map_err(|e| anyhow!("Failed to create keyring entry for user '{}': {}", user, e))?;
+            .map_err(|e| anyhow!("Failed to create keyring entry for user '{user}': {e}"))?;
 
         let key_b64 = key.to_base64();
         entry
             .set_password(&key_b64)
-            .map_err(|e| anyhow!("Failed to store key in keyring for user '{}': {}", user, e))?;
+            .map_err(|e| anyhow!("Failed to store key in keyring for user '{user}': {e}"))?;
 
         Ok(())
     }
@@ -114,13 +118,11 @@ impl KeyringManager {
     /// Retrieve a key from the system keyring for a specific user/profile
     pub fn get_key_for_user(&self, user: &str) -> Result<Key> {
         let entry = Entry::new(&self.service_name, user)
-            .map_err(|e| anyhow!("Failed to create keyring entry for user '{}': {}", user, e))?;
+            .map_err(|e| anyhow!("Failed to create keyring entry for user '{user}': {e}"))?;
 
         let key_b64 = entry.get_password().map_err(|e| {
             anyhow!(
-                "Failed to retrieve key from keyring for user '{}': {}",
-                user,
-                e
+                "Failed to retrieve key from keyring for user '{user}': {e}"
             )
         })?;
 
@@ -135,13 +137,11 @@ impl KeyringManager {
     /// Delete a key from the system keyring for a specific user/profile
     pub fn delete_key_for_user(&self, user: &str) -> Result<()> {
         let entry = Entry::new(&self.service_name, user)
-            .map_err(|e| anyhow!("Failed to create keyring entry for user '{}': {}", user, e))?;
+            .map_err(|e| anyhow!("Failed to create keyring entry for user '{user}': {e}"))?;
 
         entry.delete_credential().map_err(|e| {
             anyhow!(
-                "Failed to delete key from keyring for user '{}': {}",
-                user,
-                e
+                "Failed to delete key from keyring for user '{user}': {e}"
             )
         })?;
 
@@ -149,11 +149,13 @@ impl KeyringManager {
     }
 
     /// Check if a key exists in the keyring for the default user
+    #[must_use] 
     pub fn has_key(&self) -> bool {
         self.has_key_for_user(DEFAULT_USER)
     }
 
     /// Check if a key exists in the keyring for a specific user/profile
+    #[must_use] 
     pub fn has_key_for_user(&self, user: &str) -> bool {
         self.get_key_for_user(user).is_ok()
     }

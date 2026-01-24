@@ -62,7 +62,7 @@ pub fn detect_marker_start(text: &str) -> Option<MarkerFormat> {
 
 /// Check if position starts with escaped marker
 ///
-/// Returns Some((escaped_str, byte_len)) if text starts with escaped marker.
+/// Returns `Some((escaped_str`, `byte_len`)) if text starts with escaped marker.
 pub fn is_escaped_marker(text: &str) -> Option<(&'static str, usize)> {
     if text.starts_with("o+\\{") {
         Some(("o+\\{", 4))

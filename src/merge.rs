@@ -1,8 +1,16 @@
-/// Smart merge and reconstruction algorithms for sss
-///
-/// This module provides intelligent merging of encrypted content with edited versions,
-/// preserving encryption markers for unchanged lines while handling additions/deletions.
+//! Smart merge and reconstruction algorithms for sss
+//!
+//! This module provides intelligent merging of encrypted content with edited versions,
+//! preserving encryption markers for unchanged lines while handling additions/deletions.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::too_many_lines,      // reconstruction functions are long by necessity
+    clippy::format_collect,      // push_str(&format!()) kept for readability in marker building
+)]
+
 use anyhow::Result;
+use std::fmt::Write as FmtWrite;
 use similar::TextDiff;
 use regex::Regex;
 
@@ -120,7 +128,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
                     } else {
                         // Close previous marker if any
                         if let Some(prev_marker) = current_marker.take() {
-                            result.push_str(&format!("{}{{{}}}", prev_marker, marker_content));
+                            let _ = write!(result, "{prev_marker}{{{marker_content}}}");
                             marker_content.clear();
                         }
                         // Start new marker
@@ -131,7 +139,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
                     // Not in marker
                     // Close previous marker if any
                     if let Some(prev_marker) = current_marker.take() {
-                        result.push_str(&format!("{}{{{}}}", prev_marker, marker_content));
+                        let _ = write!(result, "{prev_marker}{{{marker_content}}}");
                         marker_content.clear();
                     }
                     result.push(ch);
@@ -174,7 +182,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
                     } else {
                         // Close previous marker if any
                         if let Some(prev_marker) = current_marker.take() {
-                            result.push_str(&format!("{}{{{}}}", prev_marker, marker_content));
+                            let _ = write!(result, "{prev_marker}{{{marker_content}}}");
                             marker_content.clear();
                         }
                         // Start new marker with this inserted char
@@ -185,7 +193,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
                     // Not adjacent to any marker (or between different markers)
                     // Close previous marker if any
                     if let Some(prev_marker) = current_marker.take() {
-                        result.push_str(&format!("{}{{{}}}", prev_marker, marker_content));
+                        let _ = write!(result, "{prev_marker}{{{marker_content}}}");
                         marker_content.clear();
                     }
                     result.push(ch);
@@ -196,7 +204,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
 
     // Close final marker if any
     if let Some(marker_type) = current_marker {
-        result.push_str(&format!("{}{{{}}}", marker_type, marker_content));
+        let _ = write!(result, "{marker_type}{{{marker_content}}}");
     }
 
     Some(result)
@@ -300,7 +308,7 @@ pub fn smart_reconstruct(
                         let old_content = &caps[2];
                         if old_content == old_rendered.trim() {
                             // Old line was entirely encrypted, wrap new content too
-                            result_lines.push(format!("⊕{{{}}}", new_line));
+                            result_lines.push(format!("⊕{{{new_line}}}"));
                             continue;
                         }
                     }
@@ -310,17 +318,13 @@ pub fn smart_reconstruct(
                     // This implements: "region being written, if inside a marker, extend that marker"
                     if has_markers(old_opened) {
                         // Try to reconstruct multi-marker lines by mapping rendered positions to markers
-                        match reconstruct_multimarker_line(old_opened, old_rendered, new_line) {
-                            Some(reconstructed) => {
-                                result_lines.push(reconstructed);
-                                continue;
-                            }
-                            None => {
-                                // Fallback: treat as new line without markers
-                                result_lines.push(new_line.to_string());
-                                continue;
-                            }
+                        if let Some(reconstructed) = reconstruct_multimarker_line(old_opened, old_rendered, new_line) {
+                            result_lines.push(reconstructed);
+                            continue;
                         }
+                        // Fallback: treat as new line without markers
+                        result_lines.push(new_line.to_string());
+                        continue;
                     }
                 }
 

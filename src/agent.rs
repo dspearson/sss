@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic)] // Agent modules are excluded from pedantic enforcement per REQUIREMENTS.md
+
 use anyhow::{anyhow, Result};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

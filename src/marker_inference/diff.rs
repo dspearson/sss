@@ -1,6 +1,7 @@
 //! Diff computation (Step 2)
 //!
 //! Compute the differences between rendered and edited text using the similar crate.
+#![allow(clippy::unnecessary_wraps)] // Result return matches trait/API contract for error propagation
 
 use super::error::Result;
 use super::types::ChangeHunk;
@@ -9,9 +10,9 @@ use similar::{ChangeTag, TextDiff};
 /// Compute diff between rendered and edited text
 ///
 /// Uses the Myers diff algorithm to find the minimal set of changes.
-/// Consecutive insertions and deletions are merged into single ChangeHunk entries.
+/// Consecutive insertions and deletions are merged into single `ChangeHunk` entries.
 ///
-/// Returns a vector of ChangeHunk structs representing the modifications.
+/// Returns a vector of `ChangeHunk` structs representing the modifications.
 pub fn compute_diff(rendered: &str, edited: &str) -> Result<Vec<ChangeHunk>> {
     let diff = TextDiff::from_chars(rendered, edited);
     let mut changes = Vec::new();

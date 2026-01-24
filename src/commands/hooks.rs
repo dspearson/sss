@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::fs;
@@ -82,8 +84,7 @@ for hook in "$hook_dir"/*; do
 done
 
 exit 0
-"#,
-        hook_name = hook_name
+"#
     )
 }
 
@@ -95,13 +96,14 @@ fn is_multiplexed(hooks_dir: &Path) -> bool {
 }
 
 /// Install hooks to a directory with multiplex support
+#[allow(clippy::similar_names)] // hook_dir vs hooks_dir are intentionally distinct
 fn install_hooks_to_directory(
     hooks_dir: &PathBuf,
     use_multiplex: bool,
     check_existing: bool,
 ) -> Result<(usize, usize)> {
     fs::create_dir_all(hooks_dir)
-        .map_err(|e| anyhow!("Failed to create hooks directory: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create hooks directory: {e}"))?;
 
     let mut installed_count = 0;
     let mut skipped_count = 0;
@@ -201,8 +203,7 @@ fn install_hooks_to_repo(use_multiplex: bool) -> Result<()> {
 
     println!();
     println!(
-        "Summary: {} installed, {} skipped",
-        installed_count, skipped_count
+        "Summary: {installed_count} installed, {skipped_count} skipped"
     );
 
     if installed_count > 0 {
@@ -311,8 +312,7 @@ fn install_hooks_to_template(use_multiplex: bool) -> Result<()> {
 
     println!();
     println!(
-        "Summary: {} installed, {} skipped",
-        installed_count, skipped_count
+        "Summary: {installed_count} installed, {skipped_count} skipped"
     );
 
     if installed_count > 0 {
@@ -333,7 +333,7 @@ fn export_hooks_to_config() -> Result<()> {
 
     // Create hooks directory
     fs::create_dir_all(&config_dir)
-        .map_err(|e| anyhow!("Failed to create hooks directory: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create hooks directory: {e}"))?;
 
     println!("Exporting sss git hooks to: {}", config_dir.display());
     println!();
@@ -385,6 +385,7 @@ fn export_hooks_to_config() -> Result<()> {
 }
 
 /// Show information about available hooks without installing
+#[allow(clippy::unnecessary_wraps)]
 fn show_hooks_info() -> Result<()> {
     println!("sss Git Hooks Management");
     println!("========================");
@@ -405,6 +406,7 @@ fn show_hooks_info() -> Result<()> {
 }
 
 /// List all available hooks
+#[allow(clippy::unnecessary_wraps)]
 fn list_hooks() -> Result<()> {
     println!("Available sss Git Hooks:");
     println!("=======================");
@@ -423,7 +425,7 @@ fn show_hook(hook_name: &str) -> Result<()> {
     let hook = HOOKS
         .iter()
         .find(|h| h.name == hook_name)
-        .ok_or_else(|| anyhow!("Hook '{}' not found", hook_name))?;
+        .ok_or_else(|| anyhow!("Hook '{hook_name}' not found"))?;
 
     println!("Hook: {}", hook.name);
     println!("Description: {}", hook.description);
@@ -434,6 +436,7 @@ fn show_hook(hook_name: &str) -> Result<()> {
 }
 
 /// Find the .git directory for the current repository
+#[allow(clippy::similar_names)] // git_dir, gitdir_line, gitdir are all distinct git path concepts
 fn find_git_dir() -> Result<PathBuf> {
     let current_dir = std::env::current_dir()?;
     let mut dir = current_dir.as_path();

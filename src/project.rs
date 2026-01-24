@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -97,6 +98,7 @@ pub struct HooksConfig {
 }
 
 impl HooksConfig {
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.git_pre_commit.is_none() && self.git_post_checkout.is_none()
     }
@@ -115,6 +117,7 @@ pub struct RotationMetadata {
 }
 
 impl RotationMetadata {
+    #[must_use] 
     pub fn is_empty(&self) -> bool {
         self.last_rotation.is_none()
             && self.rotation_count == 0
@@ -189,7 +192,7 @@ impl ProjectConfig {
         repository_key: &RepositoryKey,
     ) -> Result<()> {
         if self.users.contains_key(username) {
-            return Err(anyhow!("User '{}' already exists in project", username));
+            return Err(anyhow!("User '{username}' already exists in project"));
         }
 
         // Seal the repository key for this new user
@@ -218,7 +221,7 @@ impl ProjectConfig {
     /// Remove a user from the project
     pub fn remove_user(&mut self, username: &str) -> Result<()> {
         if !self.users.contains_key(username) {
-            return Err(anyhow!("User '{}' not found in project", username));
+            return Err(anyhow!("User '{username}' not found in project"));
         }
 
         self.users.remove(username);
@@ -236,6 +239,7 @@ impl ProjectConfig {
     }
 
     /// List all users in the project
+    #[must_use] 
     pub fn list_users(&self) -> Vec<String> {
         let mut users: Vec<String> = self.users.keys().cloned().collect();
         users.sort();
@@ -243,6 +247,7 @@ impl ProjectConfig {
     }
 
     /// Find username by matching public key
+    #[must_use] 
     pub fn find_user_by_public_key(&self, public_key: &PublicKey) -> Option<String> {
         let public_key_str = public_key.to_base64();
         for (username, user_config) in &self.users {
@@ -254,11 +259,13 @@ impl ProjectConfig {
     }
 
     /// Check if this is an old-format config with a raw key
+    #[must_use] 
     pub fn is_legacy_format(&self) -> bool {
         self.key.is_some()
     }
 
     /// Get the legacy key (for migration)
+    #[must_use] 
     pub fn legacy_key(&self) -> Option<&str> {
         self.key.as_deref()
     }
@@ -269,6 +276,7 @@ impl ProjectConfig {
     }
 
     /// Check if the project has any users
+    #[must_use] 
     pub fn has_users(&self) -> bool {
         !self.users.is_empty()
     }
@@ -299,12 +307,13 @@ impl ProjectConfig {
     /// let patterns = config.get_ignore_pattern_strings();
     /// assert_eq!(patterns, vec!["*.log", "build/", "!important.log"]);
     /// ```
+    #[must_use] 
     pub fn get_ignore_pattern_strings(&self) -> Vec<String> {
         match &self.ignore {
             Some(s) => s
                 .split(|c: char| c.is_whitespace() || c == ',')
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect(),
             None => vec![],
         }
@@ -322,6 +331,7 @@ impl ProjectConfig {
     /// config.set_ignore_patterns(vec!["*.log".to_string(), "build/".to_string()]);
     /// assert_eq!(config.ignore, Some("*.log build/".to_string()));
     /// ```
+    #[allow(clippy::needless_pass_by_value)] // Vec ownership consumed for API simplicity with many callers
     pub fn set_ignore_patterns(&mut self, patterns: Vec<String>) {
         if patterns.is_empty() {
             self.ignore = None;
@@ -330,7 +340,7 @@ impl ProjectConfig {
         }
     }
 
-    /// Parse ignore patterns from the config and build a GlobSet
+    /// Parse ignore patterns from the config and build a `GlobSet`
     ///
     /// Supports gitignore-style patterns:
     /// - Simple patterns: `*.log`, `build/`, `temp*.txt`
@@ -339,9 +349,9 @@ impl ProjectConfig {
     ///
     /// # Returns
     ///
-    /// Returns (GlobSet, GlobSet) where:
-    /// - First GlobSet contains positive patterns to match files to ignore
-    /// - Second GlobSet contains negation patterns that override ignores (files matching these should NOT be ignored)
+    /// Returns (`GlobSet`, `GlobSet`) where:
+    /// - First `GlobSet` contains positive patterns to match files to ignore
+    /// - Second `GlobSet` contains negation patterns that override ignores (files matching these should NOT be ignored)
     ///
     /// # Examples
     ///
@@ -352,9 +362,8 @@ impl ProjectConfig {
     /// let (ignore_set, negations) = config.parse_ignore_patterns().unwrap();
     /// ```
     pub fn parse_ignore_patterns(&self) -> Result<(GlobSet, GlobSet)> {
-        let ignore_str = match &self.ignore {
-            Some(s) => s,
-            None => return Ok((GlobSet::empty(), GlobSet::empty())),
+        let Some(ignore_str) = &self.ignore else {
+            return Ok((GlobSet::empty(), GlobSet::empty()));
         };
 
         let mut positive_builder = GlobSetBuilder::new();
@@ -372,13 +381,13 @@ impl ProjectConfig {
                 if !neg_pattern.is_empty() {
                     // Transform directory patterns: "dir/" -> "dir/**"
                     let glob_pattern = if neg_pattern.ends_with('/') {
-                        format!("{}**", neg_pattern)
+                        format!("{neg_pattern}**")
                     } else {
                         neg_pattern.to_string()
                     };
 
                     let glob = Glob::new(&glob_pattern).map_err(|e| {
-                        anyhow!("Invalid negation ignore pattern '{}': {}", neg_pattern, e)
+                        anyhow!("Invalid negation ignore pattern '{neg_pattern}': {e}")
                     })?;
                     negative_builder.add(glob);
                 }
@@ -386,23 +395,23 @@ impl ProjectConfig {
                 // Positive pattern - files matching this should be ignored
                 // Transform directory patterns: "dir/" -> "dir/**"
                 let glob_pattern = if pattern.ends_with('/') {
-                    format!("{}**", pattern)
+                    format!("{pattern}**")
                 } else {
                     pattern.to_string()
                 };
 
                 let glob =
-                    Glob::new(&glob_pattern).map_err(|e| anyhow!("Invalid ignore pattern '{}': {}", pattern, e))?;
+                    Glob::new(&glob_pattern).map_err(|e| anyhow!("Invalid ignore pattern '{pattern}': {e}"))?;
                 positive_builder.add(glob);
             }
         }
 
         let positive_set = positive_builder
             .build()
-            .map_err(|e| anyhow!("Failed to build ignore GlobSet: {}", e))?;
+            .map_err(|e| anyhow!("Failed to build ignore GlobSet: {e}"))?;
         let negative_set = negative_builder
             .build()
-            .map_err(|e| anyhow!("Failed to build negation GlobSet: {}", e))?;
+            .map_err(|e| anyhow!("Failed to build negation GlobSet: {e}"))?;
 
         Ok((positive_set, negative_set))
     }
@@ -441,8 +450,7 @@ impl ProjectConfig {
         let matches_ignore = positive_set.is_match(path)
             || path.file_name()
                 .and_then(|n| n.to_str())
-                .map(|name| positive_set.is_match(name))
-                .unwrap_or(false);
+                .is_some_and(|name| positive_set.is_match(name));
 
         // If doesn't match ignore patterns, don't ignore
         if !matches_ignore {
@@ -454,8 +462,7 @@ impl ProjectConfig {
             let matches_negation = negative_set.is_match(path)
                 || path.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|name| negative_set.is_match(name))
-                    .unwrap_or(false);
+                    .is_some_and(|name| negative_set.is_match(name));
 
             if matches_negation {
                 return Ok(false); // Negation overrides ignore
@@ -474,11 +481,11 @@ impl ProjectConfig {
             use base64::Engine;
             base64::prelude::BASE64_STANDARD
                 .decode(&user_config.sealed_key)
-                .map_err(|e| anyhow!("Invalid base64 sealed key for user '{}': {}", username, e))?;
+                .map_err(|e| anyhow!("Invalid base64 sealed key for user '{username}': {e}"))?;
 
             // Validate public key
             PublicKey::from_base64(&user_config.public)
-                .map_err(|e| anyhow!("Invalid public key for user '{}': {}", username, e))?;
+                .map_err(|e| anyhow!("Invalid public key for user '{username}': {e}"))?;
         }
 
         // Warn about legacy format
@@ -497,6 +504,7 @@ impl ProjectConfig {
     }
 
     /// Get rotation history information
+    #[must_use] 
     pub fn get_rotation_info(&self) -> String {
         if self.rotation.rotation_count == 0 {
             "No key rotations performed".to_string()
@@ -516,6 +524,7 @@ impl ProjectConfig {
     }
 
     /// Get the secrets filename (defaults to "secrets" if not configured)
+    #[must_use] 
     pub fn get_secrets_filename(&self) -> &str {
         self.secrets_filename.as_deref().unwrap_or("secrets")
     }
@@ -531,6 +540,7 @@ impl ProjectConfig {
     }
 
     /// Get the ignore patterns as a single string
+    #[must_use] 
     pub fn get_ignore_patterns(&self) -> Option<&str> {
         self.ignore.as_deref()
     }

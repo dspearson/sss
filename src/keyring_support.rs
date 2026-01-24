@@ -3,6 +3,7 @@
 //! This module provides optional integration with the OS keyring (macOS Keychain,
 //! Windows Credential Manager, Linux Secret Service) for storing private keys
 //! without password protection while maintaining security.
+#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use keyring::Entry;
@@ -14,6 +15,7 @@ const SERVICE_NAME: &str = "sss";
 ///
 /// This function attempts to create a test entry to verify the keyring is accessible.
 /// Returns true if keyring operations are supported on this system.
+#[must_use] 
 pub fn is_keyring_available() -> bool {
     // Try to create a test entry
     match Entry::new(SERVICE_NAME, "availability_test") {
@@ -40,11 +42,11 @@ pub fn is_keyring_available() -> bool {
 /// Ok(()) if stored successfully, Err if keyring is unavailable or storage fails
 pub fn store_key_in_keyring(key_id: &str, secret_key: &str) -> Result<()> {
     let entry = Entry::new(SERVICE_NAME, key_id)
-        .map_err(|e| anyhow!("Failed to create keyring entry: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create keyring entry: {e}"))?;
 
     entry
         .set_password(secret_key)
-        .map_err(|e| anyhow!("Failed to store key in keyring: {}", e))?;
+        .map_err(|e| anyhow!("Failed to store key in keyring: {e}"))?;
 
     Ok(())
 }
@@ -58,11 +60,11 @@ pub fn store_key_in_keyring(key_id: &str, secret_key: &str) -> Result<()> {
 /// The secret key (base64 encoded) if found, error if not found or keyring unavailable
 pub fn get_key_from_keyring(key_id: &str) -> Result<String> {
     let entry = Entry::new(SERVICE_NAME, key_id)
-        .map_err(|e| anyhow!("Failed to create keyring entry: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create keyring entry: {e}"))?;
 
     entry
         .get_password()
-        .map_err(|e| anyhow!("Failed to retrieve key from keyring: {}", e))
+        .map_err(|e| anyhow!("Failed to retrieve key from keyring: {e}"))
 }
 
 /// Delete a key from the system keyring
@@ -74,17 +76,17 @@ pub fn get_key_from_keyring(key_id: &str) -> Result<String> {
 /// Ok(()) if deleted successfully or not found, Err if keyring operation fails
 pub fn delete_key_from_keyring(key_id: &str) -> Result<()> {
     let entry = Entry::new(SERVICE_NAME, key_id)
-        .map_err(|e| anyhow!("Failed to create keyring entry: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create keyring entry: {e}"))?;
 
     // Ignore "not found" errors - deletion is idempotent
     match entry.delete_credential() {
-        Ok(_) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(anyhow!("Failed to delete key from keyring: {}", e)),
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow!("Failed to delete key from keyring: {e}")),
     }
 }
 
 /// Check if a key exists in the keyring
+#[must_use] 
 pub fn key_exists_in_keyring(key_id: &str) -> bool {
     get_key_from_keyring(key_id).is_ok()
 }

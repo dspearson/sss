@@ -34,9 +34,7 @@ fn main() {
                 .status()
                 .expect("Failed to execute git clone");
 
-            if !status.success() {
-                panic!("Failed to clone pfpacket/rust-9p");
-            }
+            assert!(status.success(), "Failed to clone pfpacket/rust-9p");
 
             println!("cargo:warning=Successfully cloned pfpacket/rust-9p");
 

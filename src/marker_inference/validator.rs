@@ -10,9 +10,9 @@ use super::types::{UserMarker, ValidatedEdit};
 
 /// Validate user-inserted markers in edited text
 ///
-/// Validates markers and escapes invalid ones. Returns ValidatedEdit with:
+/// Validates markers and escapes invalid ones. Returns `ValidatedEdit` with:
 /// - text: Edited text with invalid markers escaped
-/// - user_markers: Valid user-inserted markers
+/// - `user_markers`: Valid user-inserted markers
 /// - warnings: List of validation warnings
 pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
     let mut validated = String::new();
@@ -79,7 +79,7 @@ fn process_marker(
         } else {
             // Valid marker - add to list
             add_user_marker(
-                &edited[marker_start..abs_close + 1],
+                &edited[marker_start..=abs_close],
                 prefix_len,
                 content,
                 validated,
@@ -108,8 +108,7 @@ fn handle_nested_user_marker(
     validated.push_str(&escaped_content);
     validated.push('}');
     warnings.push(format!(
-        "Escaped nested marker at position {}",
-        content_start
+        "Escaped nested marker at position {content_start}"
     ));
 }
 
@@ -122,8 +121,7 @@ fn handle_unclosed_marker(
 ) {
     validated.push_str(format.escaped());
     warnings.push(format!(
-        "Escaped unclosed marker at position {}",
-        marker_start
+        "Escaped unclosed marker at position {marker_start}"
     ));
 }
 

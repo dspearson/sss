@@ -1,6 +1,11 @@
 //! Marker expansion rules (Step 5)
 //!
 //! Apply the 5 core expansion rules to determine which content should be marked.
+#![allow(
+    clippy::cast_possible_wrap,  // usize→isize for signed offset arithmetic
+    clippy::cast_sign_loss,      // isize→usize after .max(0) guard
+    clippy::needless_continue,   // explicit continue after early-return improves rule readability
+)]
 
 use super::types::{Marker, MappedChange, UserMarker};
 
@@ -13,6 +18,7 @@ use super::types::{Marker, MappedChange, UserMarker};
 /// 3. **Ambiguous Adjacency (Left-Bias)**: Adjacent to multiple markers → merge with left
 /// 4. **Preservation of Separate Markers**: Change affects only one → preserve separation
 /// 5. **Unmarked Content Modifications**: No adjacent/overlapping markers → handled by propagation
+#[allow(clippy::needless_pass_by_value)] // Vec owned by caller; slice would require caller refactor
 pub fn apply_expansion_rules(
     changes: Vec<MappedChange>,
     original_markers: &[Marker],
@@ -134,6 +140,7 @@ fn is_only_adjacent(
 }
 
 /// Process all grouped changes according to expansion rules
+#[allow(clippy::if_not_else)] // early-continue then else-if is clearest flow for rule dispatch
 fn process_grouped_changes(
     grouped: std::collections::HashMap<Vec<usize>, Vec<&MappedChange>>,
     original_markers: &[Marker],
@@ -392,7 +399,7 @@ fn apply_single_marker_rule(
         // (These are separate phrases/words that should be handled by propagation)
         let is_phrase_insertion = is_insertion_at_marker_end &&
             change.new_content.starts_with(|c: char| c.is_whitespace()) &&
-            change.new_content.trim().len() > 0; // Has actual content after whitespace
+            !change.new_content.trim().is_empty(); // Has actual content after whitespace
 
         if !is_phrase_insertion {
             new_end = new_end.max(change_end_edited);
@@ -530,11 +537,10 @@ fn shrink_to_exclude_delimiters(text: &str, mut start: usize, mut end: usize) ->
                         end -= 1;
                         found_pair = true;
                         break;
-                    } else {
-                        // Content is only delimiter characters - don't shrink
-                        // Example: [{()}] should not be shrunk to nothing
-                        break;
                     }
+                    // Content is only delimiter characters - don't shrink
+                    // Example: [{()}] should not be shrunk to nothing
+                    break;
                 }
         }
 

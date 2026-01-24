@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::fs;
@@ -25,13 +27,13 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     use std::mem;
     use std::os::unix::ffi::OsStrExt;
 
-    const FUSE_SUPER_MAGIC: i64 = 0x65735546;
+    const FUSE_SUPER_MAGIC: i64 = 0x6573_5546;
 
     let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
 
     unsafe {
         let mut stat: libc::statfs = mem::zeroed();
-        let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
+        let result = libc::statfs(path_cstr.as_ptr(), &raw mut stat);
 
         if result != 0 {
             return Err(anyhow!("Failed to stat filesystem"));
@@ -98,7 +100,7 @@ fn handle_stdin_process(matches: &ArgMatches) -> Result<()> {
     };
 
     // Write to stdout
-    print!("{}", output);
+    print!("{output}");
     io::stdout().flush()?;
 
     Ok(())
@@ -122,7 +124,7 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             // Processor already created above
 
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {:?}", file_path));
+                return Err(anyhow!("File does not exist: {}", file_path.display()));
             }
 
             // Read and process the file content to raw text
@@ -132,10 +134,10 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             if in_place {
                 // In-place render: replace file with rendered content
                 fs::write(&file_path, raw_content)?;
-                eprintln!("File rendered in-place: {:?}", file_path);
+                eprintln!("File rendered in-place: {}", file_path.display());
             } else {
                 // Output to stdout
-                print!("{}", raw_content);
+                print!("{raw_content}");
             }
             return Ok(());
         }
@@ -145,7 +147,7 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         if edit {
             // Edit mode: decrypt -> edit -> encrypt
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {:?}", file_path));
+                return Err(anyhow!("File does not exist: {}", file_path.display()));
             }
 
             // Read and prepare content for editing
@@ -181,11 +183,11 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             fs::write(&file_path, final_content)?;
             fs::remove_file(temp_path)?;
 
-            println!("File edited and encrypted: {:?}", file_path);
+            println!("File edited and encrypted: {}", file_path.display());
         } else {
             // Regular processing mode
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {:?}", file_path));
+                return Err(anyhow!("File does not exist: {}", file_path.display()));
             }
 
             let content = fs::read_to_string(&file_path)?;
@@ -193,10 +195,10 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 
             if in_place {
                 fs::write(&file_path, processed_content)?;
-                println!("File processed in-place: {:?}", file_path);
+                println!("File processed in-place: {}", file_path.display());
             } else {
                 // Output to stdout
-                print!("{}", processed_content);
+                print!("{processed_content}");
                 io::stdout().flush()?;
             }
         }
@@ -231,7 +233,7 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
             _ => unreachable!(),
         };
 
-        print!("{}", output);
+        print!("{output}");
         io::stdout().flush()?;
         return Ok(());
     }
@@ -240,7 +242,7 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
     let file_path = validate_file_path(file_path_str)?;
 
     if !file_path.exists() {
-        return Err(anyhow!("File does not exist: {:?}", file_path));
+        return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
 
     let content = fs::read_to_string(&file_path)?;
@@ -253,9 +255,9 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
 
     if in_place {
         fs::write(&file_path, &output)?;
-        eprintln!("File processed in-place: {:?}", file_path);
+        eprintln!("File processed in-place: {}", file_path.display());
     } else {
-        print!("{}", output);
+        print!("{output}");
         io::stdout().flush()?;
     }
 
@@ -292,7 +294,7 @@ pub fn handle_render(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
     process_file_or_stdin(sub_matches, "render")
 }
 
-/// Build a GlobSet from ignore patterns in the project config
+/// Build a `GlobSet` from ignore patterns in the project config
 /// Returns None if no patterns are configured or if building fails
 fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globset::GlobSet> {
     use globset::{Glob, GlobSetBuilder};
@@ -309,7 +311,7 @@ fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globse
                 builder.add(glob);
             }
             Err(e) => {
-                eprintln!("Warning: Invalid ignore pattern '{}': {}", pattern, e);
+                eprintln!("Warning: Invalid ignore pattern '{pattern}': {e}");
             }
         }
     }
@@ -317,7 +319,7 @@ fn build_ignore_globset(config: &crate::project::ProjectConfig) -> Option<globse
     match builder.build() {
         Ok(globset) => Some(globset),
         Err(e) => {
-            eprintln!("Warning: Failed to build ignore pattern matcher: {}", e);
+            eprintln!("Warning: Failed to build ignore pattern matcher: {e}");
             None
         }
     }
@@ -354,6 +356,7 @@ fn find_project_for_path<'a>(
 /// Detects nested project boundaries and uses each project's own key.
 /// Projects where the current user has no keys are silently skipped.
 /// IMPORTANT: Does not follow symlinks outside the project boundary.
+#[allow(clippy::too_many_lines)]
 fn process_project_recursively(operation: &str) -> Result<()> {
     use std::fs;
     use walkdir::WalkDir;
@@ -394,7 +397,7 @@ fn process_project_recursively(operation: &str) -> Result<()> {
 
     // Canonicalize the project root to get absolute path for boundary checking
     let canonical_project_root = fs::canonicalize(&project_root)
-        .map_err(|e| anyhow!("Failed to canonicalize project root: {}", e))?;
+        .map_err(|e| anyhow!("Failed to canonicalize project root: {e}"))?;
 
     // Load root project config and processor
     let (config, processor, _) = utils::create_processor_from_project_config()?;
@@ -440,7 +443,7 @@ fn process_project_recursively(operation: &str) -> Result<()> {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                eprintln!("Warning: Error accessing entry: {}", e);
+                eprintln!("Warning: Error accessing entry: {e}");
                 error_count += 1;
                 continue;
             }
@@ -482,20 +485,18 @@ fn process_project_recursively(operation: &str) -> Result<()> {
         }
 
         // Find the nearest project for this file
-        let (proj_root, proj_processor, proj_ignore) =
-            match find_project_for_path(path, &projects, &passthrough_roots) {
-                Some(found) => found,
-                None => continue, // in a passthrough zone — skip silently
-            };
+        let Some((proj_root, proj_processor, proj_ignore)) =
+            find_project_for_path(path, &projects, &passthrough_roots)
+        else {
+            continue; // in a passthrough zone — skip silently
+        };
 
         // Check per-project ignore patterns
-        if let Some(globset) = proj_ignore {
-            if let Ok(rel_path) = path.strip_prefix(proj_root) {
-                if globset.is_match(rel_path) {
+        if let Some(globset) = proj_ignore
+            && let Ok(rel_path) = path.strip_prefix(proj_root)
+                && globset.is_match(rel_path) {
                     continue;
                 }
-            }
-        }
 
         // Additional safety: Check if the entry is a symlink and resolve it
         // to ensure it stays within project boundaries
@@ -520,12 +521,9 @@ fn process_project_recursively(operation: &str) -> Result<()> {
         }
 
         // Skip files that don't have any markers
-        let content = match fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => {
-                // Likely binary or unreadable
-                continue;
-            }
+        let Ok(content) = fs::read_to_string(path) else {
+            // Likely binary or unreadable
+            continue;
         };
 
         // Check if file has any SSS markers
@@ -549,11 +547,11 @@ fn process_project_recursively(operation: &str) -> Result<()> {
     }
 
     if processed_count > 0 {
-        println!("\n{} {} file(s)", operation_verb, processed_count);
+        println!("\n{operation_verb} {processed_count} file(s)");
     }
 
     if error_count > 0 {
-        return Err(anyhow!("Failed to {} {} file(s)", operation, error_count));
+        return Err(anyhow!("Failed to {operation} {error_count} file(s)"));
     }
 
     Ok(())
@@ -576,7 +574,7 @@ fn process_file_in_place(path: &Path, processor: &crate::processor::core::Proces
         "seal" => processor.seal_content_with_path(&original_content, path)?,
         "open" => processor.open_content_with_path(&original_content, path)?,
         "render" => processor.decrypt_to_raw_with_path(&original_content, path)?,
-        _ => return Err(anyhow!("Unknown operation: {}", operation)),
+        _ => return Err(anyhow!("Unknown operation: {operation}")),
     };
 
     // Check if content actually changed
@@ -655,26 +653,28 @@ fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
     fuse_file.write_all(final_sealed_content.as_bytes())?;
     fuse_file.flush()?;
 
-    eprintln!("File edited and encrypted: {:?}", file_path);
+    eprintln!("File edited and encrypted: {}", file_path.display());
     Ok(())
 }
 
 /// Create secure temp file path in /dev/shm (Linux) or /tmp (macOS)
 #[cfg(target_os = "linux")]
+#[allow(clippy::unnecessary_wraps)]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
 
     if Path::new("/dev/shm").exists() {
-        Ok(format!("/dev/shm/.sss-edit-{}-{}", file_name, pid))
+        Ok(format!("/dev/shm/.sss-edit-{file_name}-{pid}"))
     } else {
         eprintln!("[WARN] /dev/shm not available, using /tmp (insecure!)");
-        Ok(format!("/tmp/.sss-edit-{}-{}", file_name, pid))
+        Ok(format!("/tmp/.sss-edit-{file_name}-{pid}"))
     }
 }
 
 /// Create secure temp file path in /tmp (macOS)
 #[cfg(target_os = "macos")]
+#[allow(clippy::unnecessary_wraps)]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
@@ -743,7 +743,7 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
     // Write back to original file
     fs::write(file_path, final_content)?;
 
-    eprintln!("File edited and encrypted: {:?}", file_path);
+    eprintln!("File edited and encrypted: {}", file_path.display());
     Ok(())
 }
 
@@ -758,7 +758,7 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     let file_path = validate_file_path(file_path_str)?;
 
     if !file_path.exists() {
-        return Err(anyhow!("File does not exist: {:?}", file_path));
+        return Err(anyhow!("File does not exist: {}", file_path.display()));
     }
 
     // Find project config and load repository key

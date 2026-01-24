@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 use anyhow::Result;
 use clap::ArgMatches;
 use std::process;

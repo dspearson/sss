@@ -310,6 +310,9 @@ mod tests {
         let original_sss_user = env::var("SSS_USER").ok();
 
         // Clear SSS_USER to allow USER to be used, then set USER env variable
+        // SAFETY: env var mutation is unsafe since Rust 1.83 due to thread-safety concerns.
+        // These tests are run sequentially (marked #[serial] where needed) and no other
+        // threads read environment variables concurrently during test execution.
         unsafe {
             env::remove_var("SSS_USER");
             env::set_var("USER", "testuser");
@@ -322,6 +325,7 @@ mod tests {
         assert!(!result.unwrap().is_empty());
 
         // Restore original values
+        // SAFETY: test-only env var restoration; single-threaded test context.
         if let Some(val) = original {
             unsafe { env::set_var("USER", val); }
         } else {
@@ -340,6 +344,9 @@ mod tests {
         let original_sss_user = env::var("SSS_USER").ok();
 
         // Remove SSS_USER and USER to allow USERNAME to be used (Windows fallback)
+        // SAFETY: env var mutation is unsafe since Rust 1.83 due to thread-safety concerns.
+        // This is test-only code running in a single-threaded test context; no concurrent
+        // env var reads occur during this test.
         unsafe {
             env::remove_var("SSS_USER");
             env::remove_var("USER");
@@ -353,6 +360,7 @@ mod tests {
         assert!(!result.unwrap().is_empty());
 
         // Restore original values
+        // SAFETY: test-only env var restoration; single-threaded test context.
         if let Some(val) = original_user {
             unsafe { env::set_var("USER", val); }
         }

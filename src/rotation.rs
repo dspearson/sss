@@ -444,4 +444,111 @@ mod tests {
         assert!(!options.dry_run);
         assert!(!options.show_progress);
     }
+
+    // =========================================================================
+    // Rotation correctness tests (CORR-03)
+    // =========================================================================
+
+    /// Generate a processor for use in rotation tests.
+    fn make_processor_for_key(key: RepositoryKey, root: std::path::PathBuf) -> Processor {
+        Processor::new_with_context(key, root, "2025-06-01T00:00:00Z".to_string()).unwrap()
+    }
+
+    /// Test: re-encrypting content with a new key produces content that the new
+    /// key can decrypt, and the old key cannot.
+    #[test]
+    fn test_rotation_reencrypt_old_key_invalidated() {
+        use std::path::PathBuf;
+
+        let old_key = RepositoryKey::new();
+        let new_key = RepositoryKey::new();
+
+        let root = PathBuf::from(".");
+        let old_proc = make_processor_for_key(old_key.clone(), root.clone());
+        let new_proc = make_processor_for_key(new_key.clone(), root.clone());
+
+        // Seal with old key
+        let plaintext = "password = ⊕{topsecret}\nuser = admin\n";
+        let sealed_old = old_proc
+            .seal_content_with_path(plaintext, std::path::Path::new("config.txt"))
+            .unwrap();
+        assert!(sealed_old.contains("⊠{"), "old sealed content must contain ciphertext marker");
+
+        // Re-encrypt: decrypt with old key, then encrypt with new key
+        let decrypted = old_proc
+            .open_content_with_path(&sealed_old, std::path::Path::new("config.txt"))
+            .unwrap();
+        assert_eq!(decrypted, plaintext, "old key must decrypt original plaintext");
+
+        let sealed_new = new_proc
+            .seal_content_with_path(&decrypted, std::path::Path::new("config.txt"))
+            .unwrap();
+
+        // New key can open the rotated content
+        let opened_with_new = new_proc
+            .open_content_with_path(&sealed_new, std::path::Path::new("config.txt"))
+            .unwrap();
+        assert_eq!(opened_with_new, plaintext, "new key must decrypt rotated content");
+
+        // Old key cannot open the new ciphertext (should return error or corrupted plaintext)
+        let old_attempt = old_proc.open_content_with_path(&sealed_new, std::path::Path::new("config.txt"));
+        // The old processor will fail to decrypt the new ciphertext (returns a warning and keeps marker)
+        // Either it returns Err or it returns the unchanged ciphertext marker (not the plaintext)
+        match old_attempt {
+            Err(_) => {} // hard error is fine
+            Ok(content) => {
+                // Must NOT produce the original plaintext
+                assert!(
+                    !content.contains("topsecret"),
+                    "old key must not recover plaintext from rotated ciphertext, got: {content}"
+                );
+            }
+        }
+    }
+
+    /// Test: rotating a RepositoryKey produces a genuinely different new key.
+    #[test]
+    fn test_rotation_produces_different_key() {
+        let old_key = RepositoryKey::new();
+        let (returned_old, new_key) = old_key.rotate();
+
+        // Old key returned intact
+        assert_eq!(returned_old.to_base64(), old_key.to_base64());
+
+        // New key is genuinely different
+        assert_ne!(new_key.to_base64(), old_key.to_base64(), "rotated key must differ from original");
+    }
+
+    /// Test: re-encrypting with reencrypt_content produces content that opens
+    /// to the same plaintext under the new key.
+    #[test]
+    fn test_rotation_reencrypt_content_roundtrip() {
+        use std::path::PathBuf;
+
+        let old_key = RepositoryKey::new();
+        let (_, new_key) = old_key.rotate();
+
+        let root = PathBuf::from(".");
+        let old_proc = make_processor_for_key(old_key, root.clone());
+        let new_proc = make_processor_for_key(new_key, root);
+
+        let plaintext = "token = ⊕{bearer_abc123}\nenv = production\n";
+
+        // Seal with old key
+        let sealed = old_proc
+            .seal_content_with_path(plaintext, std::path::Path::new("app.txt"))
+            .unwrap();
+
+        // Use reencrypt_content to re-key atomically
+        let reencrypted = new_proc.reencrypt_content(&sealed, &old_proc).unwrap();
+
+        // New key opens rotated content to original plaintext
+        let final_plain = new_proc
+            .open_content_with_path(&reencrypted, std::path::Path::new("app.txt"))
+            .unwrap();
+        assert_eq!(final_plain, plaintext, "reencrypt_content round-trip must recover original plaintext");
+
+        // Ciphertext changed after rotation
+        assert_ne!(sealed, reencrypted, "ciphertext must change after key rotation");
+    }
 }

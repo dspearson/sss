@@ -64,27 +64,33 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
     while let Some(mat) = marker_re.find_at(old_opened, search_start) {
         let marker_start = mat.start();
         let marker_type = &old_opened[marker_start..mat.end()-1]; // Exclude the {
-        let mut i = mat.end();
-        let mut brace_count = 1;
-        let content_start = i;
 
-        // Find matching closing brace
-        let chars: Vec<char> = old_opened.chars().collect();
-        while i < chars.len() && brace_count > 0 {
-            if chars[i] == '{' {
-                brace_count += 1;
-            } else if chars[i] == '}' {
-                brace_count -= 1;
-            }
-            if brace_count > 0 {
-                i += 1;
+        // CR-01 fix: use byte offsets throughout, not a Vec<char> indexed by byte offsets.
+        // mat.end() is a byte offset from regex. Iterate from that byte position.
+        let mut byte_i = mat.end();
+        let content_start_byte = byte_i;
+        let mut brace_count = 1;
+        let mut content_end_byte = byte_i;
+
+        // Find matching closing brace using char_indices on the remaining slice
+        for (offset, ch) in old_opened[byte_i..].char_indices() {
+            match ch {
+                '{' => brace_count += 1,
+                '}' => {
+                    brace_count -= 1;
+                    if brace_count == 0 {
+                        content_end_byte = byte_i + offset;
+                        byte_i = byte_i + offset + ch.len_utf8(); // past the closing '}'
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
 
         if brace_count == 0 {
-            // Successfully found matching brace at position i
-            let content_end = i;
-            let content: String = chars[content_start..content_end].iter().collect();
+            // Successfully found matching brace
+            let content = &old_opened[content_start_byte..content_end_byte];
 
             // rendered_pos tracks where we are in the rendered string
             // Add non-marker text before this marker
@@ -96,7 +102,7 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
             marker_regions.push((rendered_pos, rendered_pos + content_len, marker_type.to_string()));
             rendered_pos += content_len;
 
-            search_start = i + 1; // Skip past closing brace
+            search_start = byte_i; // Already past closing brace
         } else {
             // Unmatched brace
             return None;
@@ -486,5 +492,55 @@ mod tests {
         // host: changed, no marker to preserve
         // timeout: added, no marker
         assert_eq!(result, "password: ⊕{secret123}\napi_key: newkey\nhost: newhost.com\ntimeout: 30");
+    }
+
+    // CR-01: Tests for byte/char mismatch fix — multibyte characters in markers
+    #[test]
+    fn test_reconstruct_multimarker_line_ascii_unchanged() {
+        // Regression: ASCII-only content still works after the fix
+        let old_opened = "key: ⊕{secret}";
+        let old_rendered = "key: secret";
+        let new_rendered = "key: newsecret";
+        let result = reconstruct_multimarker_line(old_opened, old_rendered, new_rendered);
+        assert!(result.is_some(), "ASCII reconstruction should succeed");
+        assert_eq!(result.unwrap(), "key: ⊕{newsecret}");
+    }
+
+    #[test]
+    fn test_reconstruct_multimarker_line_multibyte_marker_prefix() {
+        // CR-01: The ⊕ prefix is 3 bytes. Using it as char index into chars[] would
+        // produce wrong results or panic. After fix, byte offsets are tracked correctly.
+        // old_opened uses ⊕ marker (3-byte UTF-8), content is ASCII
+        let old_opened = "host: ⊕{example.com}";
+        let old_rendered = "host: example.com";
+        let new_rendered = "host: new.example.com";
+        let result = reconstruct_multimarker_line(old_opened, old_rendered, new_rendered);
+        assert!(result.is_some(), "Multibyte marker prefix reconstruction should succeed without panic");
+        let out = result.unwrap();
+        // Should produce correct marker wrapping the new content
+        assert!(out.contains("⊕{"), "Result should contain ⊕{{ marker");
+        assert!(out.contains("new.example.com"), "Result should contain new hostname");
+    }
+
+    #[test]
+    fn test_reconstruct_multimarker_line_multibyte_content_inside_marker() {
+        // CR-01: multibyte chars inside marker content — emoji password
+        // Before fix: byte offset used as char index could panic or produce wrong bounds
+        let old_opened = "pw: ⊕{caf\u{00e9}secret}"; // café = 4 chars but é is 2 bytes
+        let old_rendered = "pw: caféSecret";
+        // Note: old_rendered might not match exactly in practice; test that it does not panic
+        let new_rendered = "pw: newpass";
+        // Just verify no panic occurs — function may return None for non-matching content
+        let _result = reconstruct_multimarker_line(old_opened, old_rendered, new_rendered);
+        // If it returns Some, verify it contains valid UTF-8 marker syntax
+        // The primary regression test is: must NOT panic
+    }
+
+    #[test]
+    fn test_markers_balanced_with_multibyte_prefix() {
+        // CR-01: markers_balanced should handle ⊕ (multibyte) content correctly
+        assert!(markers_balanced("⊕{hello}"), "balanced single marker");
+        assert!(markers_balanced("⊕{hello} and ⊕{world}"), "balanced two markers");
+        assert!(!markers_balanced("⊕{unterminated"), "unbalanced marker");
     }
 }

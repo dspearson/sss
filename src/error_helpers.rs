@@ -234,6 +234,28 @@ pub fn get_username() -> Result<String> {
     Ok(username)
 }
 
+/// Format a user-facing error with action guidance.
+///
+/// Use this to produce actionable error messages that tell the user both
+/// what went wrong and what they can do to fix it.
+///
+/// # Examples
+///
+/// ```
+/// use sss::error_helpers::user_error;
+///
+/// let err = user_error(
+///     "No project configuration found",
+///     "Run 'sss init' to initialise a project in the current directory",
+/// );
+/// assert!(err.to_string().contains("No project configuration found"));
+/// assert!(err.to_string().contains("Run 'sss init'"));
+/// ```
+#[must_use]
+pub fn user_error(what: &str, action: &str) -> anyhow::Error {
+    anyhow!("{what}. {action}")
+}
+
 /// Create user not found error
 ///
 /// # Examples
@@ -244,7 +266,7 @@ pub fn get_username() -> Result<String> {
 /// let err = user_not_found_error("alice");
 /// assert_eq!(err.to_string(), "User 'alice' not found in project");
 /// ```
-#[must_use] 
+#[must_use]
 pub fn user_not_found_error(username: &str) -> anyhow::Error {
     anyhow!("User '{username}' not found in project")
 }
@@ -318,6 +340,14 @@ mod tests {
     fn test_decode_base64_invalid() {
         let result = decode_base64("invalid!@#", "test");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_user_error() {
+        let err = user_error("Key 'mykey' not found", "Run 'sss keys list' to see available keys");
+        let msg = err.to_string();
+        assert!(msg.contains("Key 'mykey' not found"));
+        assert!(msg.contains("Run 'sss keys list'"));
     }
 
     #[test]

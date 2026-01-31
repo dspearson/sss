@@ -609,4 +609,119 @@ mod tests {
         );
         assert_eq!(loaded_settings.editor, Some("vim".to_string()));
     }
+
+    // --- CORR-10: Config loading precedence tests ---
+
+    /// Build a ConfigManager backed by a fresh temp dir (no real user config)
+    fn make_config_manager_with_user_editor(editor: Option<&str>) -> (ConfigManager, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
+
+        // Write settings.toml with the requested editor value using the proper serialization
+        // path (round-trip through UserSettings) to guarantee valid TOML structure.
+        if let Some(ed) = editor {
+            let settings = UserSettings {
+                editor: Some(ed.to_string()),
+                ..Default::default()
+            };
+            settings.save(&config_dir).unwrap();
+        }
+
+        let manager = ConfigManager::new_with_config_dir(config_dir).unwrap();
+        (manager, temp_dir)
+    }
+
+    #[test]
+    fn test_editor_precedence_cli_override_wins() {
+        // CORR-10: CLI override must be the highest-priority source.
+        let (manager, _dir) = make_config_manager_with_user_editor(Some("nano"));
+        let editor = manager.get_editor(Some("emacs"));
+        assert_eq!(editor, "emacs", "CLI override must take precedence over user settings");
+    }
+
+    #[test]
+    fn test_editor_precedence_user_settings_used_when_no_env() {
+        // CORR-10: when no CLI override is provided and no EDITOR/VISUAL env var is set,
+        // the value from user settings (settings.toml) must be returned.
+        // We temporarily remove EDITOR/VISUAL from the environment for this test.
+        let (manager, _dir) = make_config_manager_with_user_editor(Some("vim"));
+
+        // Guard: only run this check when the environment doesn't already set EDITOR/VISUAL,
+        // since we cannot safely mutate env vars in a multi-threaded test binary.
+        if env::var("EDITOR").is_err() && env::var("VISUAL").is_err() {
+            let editor = manager.get_editor(None);
+            assert_eq!(editor, "vim", "User settings editor should be returned when no env var is set");
+        }
+        // If EDITOR/VISUAL are set by the test environment, the env-var layer will win
+        // (which is correct behaviour — this is documented in the else branch below).
+        else {
+            // Verify that the env var is indeed returned (env wins over user settings).
+            let editor = manager.get_editor(None);
+            let env_editor = env::var("EDITOR")
+                .or_else(|_| env::var("VISUAL"))
+                .unwrap();
+            assert_eq!(editor, env_editor, "EDITOR/VISUAL env var must override user settings");
+        }
+    }
+
+    #[test]
+    fn test_editor_precedence_system_default_when_no_config() {
+        // CORR-10: when no CLI override, no env var (tested conditionally), and no user
+        // setting, the system default must be returned.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+
+        if env::var("EDITOR").is_err() && env::var("VISUAL").is_err() {
+            let editor = manager.get_editor(None);
+            // System default is platform-dependent ("nano" on Linux/macOS, "notepad" on Windows)
+            assert!(!editor.is_empty(), "System default editor must not be empty");
+            // Verify it's the platform default (not an empty string or a user value)
+            #[cfg(windows)]
+            assert_eq!(editor, "notepad");
+            #[cfg(not(windows))]
+            assert_eq!(editor, "nano");
+        }
+    }
+
+    #[test]
+    fn test_kdf_level_precedence_cli_wins_over_env_and_config() {
+        // CORR-10: KDF level has the same CLI > ENV > Config > Default precedence.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+        let level = manager.get_kdf_level(Some("interactive"));
+        assert_eq!(level, "interactive", "CLI override must win for KDF level");
+    }
+
+    #[test]
+    fn test_kdf_level_precedence_default_is_sensitive() {
+        // CORR-10: when nothing is configured, KDF level must default to "sensitive"
+        // for maximum security.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+        if env::var("SSS_KDF_LEVEL").is_err() {
+            let level = manager.get_kdf_level(None);
+            assert_eq!(level, "sensitive", "Default KDF level must be 'sensitive'");
+        }
+    }
+
+    #[test]
+    fn test_username_precedence_cli_over_env() {
+        // CORR-10: CLI username must override SSS_USER env var.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+        let username = manager.get_username(Some("cli_user")).unwrap();
+        assert_eq!(username, "cli_user", "CLI username must take highest precedence");
+    }
+
+    #[test]
+    fn test_secrets_filename_precedence_default() {
+        // CORR-10: when no project config or user settings define secrets_filename,
+        // the default "secrets" must be returned.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+        assert_eq!(manager.get_secrets_filename(), "secrets");
+    }
+
+    #[test]
+    fn test_secrets_suffix_precedence_default() {
+        // CORR-10: when no project config or user settings define secrets_suffix,
+        // the default ".secrets" must be returned.
+        let (manager, _dir) = make_config_manager_with_user_editor(None);
+        assert_eq!(manager.get_secrets_suffix(), ".secrets");
+    }
 }

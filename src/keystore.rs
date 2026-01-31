@@ -292,12 +292,14 @@ impl Keystore {
 
         fs::remove_file(&key_file)?;
 
-        // If this was the current key, remove the current link
-        let current_key_id = self.read_current_key_id();
-        if current_key_id.is_ok() && current_key_id.unwrap() == key_id {
-            let current_link = self.keys_dir.join("current");
-            if current_link.exists() {
-                fs::remove_file(&current_link)?;
+        // If this was the current key, remove the current link.
+        // WR-01 fix: bind read_current_key_id once via if-let to avoid TOCTOU double-call.
+        if let Ok(current_id) = self.read_current_key_id() {
+            if current_id == key_id {
+                let current_link = self.keys_dir.join("current");
+                if current_link.exists() {
+                    fs::remove_file(&current_link)?;
+                }
             }
         }
 

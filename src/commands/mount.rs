@@ -118,6 +118,10 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
         // Daemonize: fork and detach from terminal
         eprintln!("Daemonizing and mounting in background...");
 
+        // SAFETY: `fork()` is a standard POSIX syscall. After fork, only the child process
+        // continues execution in this process image; the parent exits via `process::exit`.
+        // All file descriptors are valid at fork time. `setsid()` is called in the child
+        // to detach from the controlling terminal — standard daemonization pattern.
         unsafe {
             let pid = libc::fork();
 

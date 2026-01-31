@@ -80,6 +80,26 @@ fn to_9p_error(err: impl std::fmt::Display) -> rs9p::Error {
     std::io::Error::other(err.to_string()).into()
 }
 
+/// Parse a 9P filename to extract the base name and access mode.
+///
+/// This is the pure logic extracted from `SssNinepFS::parse_filename` so it can be
+/// unit-tested without constructing a full filesystem instance.
+///
+/// Returns: `(basename, mode, is_sealed_request, is_confirm)`
+fn parse_ninep_filename(name: &str) -> (String, FileMode, bool, bool) {
+    if let Some(base) = name.strip_suffix(".sealed-confirm") {
+        (base.to_string(), FileMode::Sealed, false, true)
+    } else if let Some(base) = name.strip_suffix(".sealed-request") {
+        (base.to_string(), FileMode::Sealed, true, false)
+    } else if let Some(base) = name.strip_suffix(".sealed") {
+        (base.to_string(), FileMode::Sealed, false, false)
+    } else if let Some(base) = name.strip_suffix(".open") {
+        (base.to_string(), FileMode::Opened, false, false)
+    } else {
+        (name.to_string(), FileMode::Rendered, false, false)
+    }
+}
+
 /// Filter supported UNIX flags to avoid compatibility issues
 const UNIX_FLAGS: u32 = {
     use nix::fcntl::OFlag;
@@ -321,17 +341,7 @@ impl SssNinepFS {
     ///
     /// Returns: (basename, mode, is_sealed_request, is_confirm)
     fn parse_filename(&self, name: &str) -> (String, FileMode, bool, bool) {
-        if let Some(base) = name.strip_suffix(".sealed-confirm") {
-            (base.to_string(), FileMode::Sealed, false, true)
-        } else if let Some(base) = name.strip_suffix(".sealed-request") {
-            (base.to_string(), FileMode::Sealed, true, false)
-        } else if let Some(base) = name.strip_suffix(".sealed") {
-            (base.to_string(), FileMode::Sealed, false, false)
-        } else if let Some(base) = name.strip_suffix(".open") {
-            (base.to_string(), FileMode::Opened, false, false)
-        } else {
-            (name.to_string(), FileMode::Rendered, false, false)
-        }
+        parse_ninep_filename(name)
     }
 
     /// Check if a path has sealed mode protocol suffixes
@@ -1203,5 +1213,82 @@ mod tests {
     // - write_*() methods require file I/O
     // - All Filesystem trait methods (attach, walk, open, read, write, etc.)
     //   require a 9P server context and are better tested via integration tests
-    // - parse_filename() is a private method on SssFid, tested indirectly
+
+    // --- CORR-08: 9P file access mode selection tests ---
+    // These tests exercise parse_ninep_filename(), the pure function that drives
+    // access-mode dispatch in the 9P server.  The function is tested directly
+    // (no server context needed) via the free-function extraction.
+
+    #[test]
+    fn test_access_mode_default_is_rendered() {
+        // CORR-08: a plain filename with no recognised suffix must map to Rendered mode
+        // (fully decrypted output, no markers visible).
+        let (base, mode, is_req, is_conf) = parse_ninep_filename("file.txt");
+        assert_eq!(base, "file.txt");
+        assert_eq!(mode, FileMode::Rendered);
+        assert!(!is_req);
+        assert!(!is_conf);
+    }
+
+    #[test]
+    fn test_access_mode_open_suffix_gives_opened_mode() {
+        // CORR-08: filename ending in ".open" must map to Opened mode (⊕{} markers visible).
+        let (base, mode, is_req, is_conf) = parse_ninep_filename("config.yml.open");
+        assert_eq!(base, "config.yml");
+        assert_eq!(mode, FileMode::Opened);
+        assert!(!is_req);
+        assert!(!is_conf);
+    }
+
+    #[test]
+    fn test_access_mode_sealed_suffix_gives_sealed_mode() {
+        // CORR-08: filename ending in ".sealed" must map to Sealed mode (⊠{} markers returned).
+        let (base, mode, is_req, is_conf) = parse_ninep_filename("secrets.txt.sealed");
+        assert_eq!(base, "secrets.txt");
+        assert_eq!(mode, FileMode::Sealed);
+        assert!(!is_req);
+        assert!(!is_conf);
+    }
+
+    #[test]
+    fn test_access_mode_open_not_suffix_is_rendered() {
+        // CORR-08: ".open" in the middle of a filename must NOT trigger Opened mode —
+        // only a trailing ".open" suffix counts.
+        let (base, mode, _is_req, _is_conf) = parse_ninep_filename("file.open.txt");
+        assert_eq!(base, "file.open.txt", "Basename must be unchanged when .open is not a trailing suffix");
+        assert_eq!(mode, FileMode::Rendered, "Mode must be Rendered when .open is not the final component");
+    }
+
+    #[test]
+    fn test_access_mode_sealed_request_sets_request_flag() {
+        // CORR-08: ".sealed-request" suffix must map to Sealed mode with is_sealed_request=true
+        // (first step of the two-factor sealed-mode handshake).
+        let (base, mode, is_req, is_conf) = parse_ninep_filename("db.conf.sealed-request");
+        assert_eq!(base, "db.conf");
+        assert_eq!(mode, FileMode::Sealed);
+        assert!(is_req, "is_sealed_request must be true for .sealed-request suffix");
+        assert!(!is_conf);
+    }
+
+    #[test]
+    fn test_access_mode_sealed_confirm_sets_confirm_flag() {
+        // CORR-08: ".sealed-confirm" suffix must map to Sealed mode with is_confirm=true
+        // (second step of the two-factor sealed-mode handshake).
+        let (base, mode, is_req, is_conf) = parse_ninep_filename("db.conf.sealed-confirm");
+        assert_eq!(base, "db.conf");
+        assert_eq!(mode, FileMode::Sealed);
+        assert!(!is_req);
+        assert!(is_conf, "is_confirm must be true for .sealed-confirm suffix");
+    }
+
+    #[test]
+    fn test_ninep_is_sealed_protocol_path_detection() {
+        // CORR-08: sealed-protocol paths must be identified correctly so they are
+        // excluded from directory listings and handled specially.
+        assert!(SssNinepFS::is_sealed_protocol_path("file.txt.sealed-request"));
+        assert!(SssNinepFS::is_sealed_protocol_path("file.txt.sealed-confirm"));
+        assert!(!SssNinepFS::is_sealed_protocol_path("file.txt.sealed"));
+        assert!(!SssNinepFS::is_sealed_protocol_path("file.txt.open"));
+        assert!(!SssNinepFS::is_sealed_protocol_path("file.txt"));
+    }
 }

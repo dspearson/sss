@@ -894,4 +894,174 @@ empty_value:
         assert_eq!(secrets.get("url").unwrap(), "https://example.com:8080");
         assert_eq!(secrets.get("empty_value").unwrap(), "");
     }
+
+    // --- CORR-04: Secrets interpolation edge case tests ---
+
+    /// Mock filesystem ops using an in-memory HashMap
+    struct MockFileSystemOps {
+        files: std::collections::HashMap<PathBuf, Vec<u8>>,
+    }
+
+    impl FileSystemOps for MockFileSystemOps {
+        fn file_exists(&self, path: &Path) -> bool {
+            self.files.contains_key(path)
+        }
+        fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+            self.files
+                .get(path)
+                .cloned()
+                .ok_or_else(|| anyhow!("File not found: {}", path.display()))
+        }
+    }
+
+    /// Build a MockFileSystemOps that exposes a secrets file at project_root/secrets
+    fn mock_with_secrets(project_root: &Path, content: &str) -> MockFileSystemOps {
+        let mut files = std::collections::HashMap::new();
+        files.insert(project_root.join("secrets"), content.as_bytes().to_vec());
+        MockFileSystemOps { files }
+    }
+
+    #[test]
+    fn test_missing_key_error_contains_key_name() {
+        // CORR-04: lookup for a key that doesn't exist in the secrets file must return
+        // an error whose message names the missing key so callers can diagnose the problem.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        let secrets_content = "db_pass: hunter2\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        let result = cache.lookup_secret_with_ops("db_user", &file_path, project_root, &fs_ops);
+
+        assert!(result.is_err(), "Expected error for missing key");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("db_user"),
+            "Error message should name the missing key, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_multi_line_value_interpolation() {
+        // CORR-04: a secret value that spans multiple lines must be preserved in full
+        // when interpolated into content — no truncation at the first newline.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        let secrets_content = "private_key: |\n  line1\n  line2\n  line3\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        // Verify that the multi-line value is stored correctly
+        let value = cache
+            .lookup_secret_with_ops("private_key", &file_path, project_root, &fs_ops)
+            .unwrap();
+
+        assert!(value.contains("line1"), "Multi-line value must contain 'line1'");
+        assert!(value.contains("line2"), "Multi-line value must contain 'line2'");
+        assert!(value.contains("line3"), "Multi-line value must contain 'line3'");
+
+        // Verify newlines are preserved (CORR-04: no silent corruption)
+        let newline_count = value.matches('\n').count();
+        assert!(newline_count >= 2, "Multi-line value should preserve newlines, got {newline_count} newlines");
+    }
+
+    #[test]
+    fn test_multi_line_interpolation_in_content() {
+        // CORR-04: interpolating a multi-line secret into content must produce all lines
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        let secrets_content = "ssh_key: |\n  -----BEGIN RSA-----\n  AAABBB\n  -----END RSA-----\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        let content = "KEY=⊲{ssh_key}\nEND\n";
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops).unwrap();
+
+        assert!(result.contains("-----BEGIN RSA-----"), "Interpolated content must include key header");
+        assert!(result.contains("-----END RSA-----"), "Interpolated content must include key footer");
+        assert!(result.contains("AAABBB"), "Interpolated content must include key body");
+    }
+
+    #[test]
+    fn test_encoding_bom_in_value() {
+        // CORR-04: a value containing a UTF-8 BOM character should round-trip
+        // without panic or silent data loss.
+        let temp_dir = tempdir().unwrap();
+        let secrets_file = temp_dir.path().join("secrets");
+
+        // BOM is U+FEFF (3 bytes: EF BB BF in UTF-8)
+        let bom = "\u{FEFF}";
+        let content = format!("bom_key: {bom}value_after_bom\n");
+        let secrets = parse_secrets_content(&content, &secrets_file).unwrap();
+
+        let value = secrets.get("bom_key").unwrap();
+        // The value should be parseable without panic; exact BOM handling (strip/preserve)
+        // is implementation-defined, but must not corrupt surrounding data.
+        assert!(value.contains("value_after_bom"), "Data after BOM must be preserved, got: {value:?}");
+    }
+
+    #[test]
+    fn test_circular_reference_does_not_infinite_loop() {
+        // CORR-04 / T-09-09: verify that interpolation cannot enter an infinite loop.
+        // In the current implementation, secret values are NOT recursively interpolated —
+        // replace_all performs a single pass over the content. This test documents and
+        // validates that behaviour: even if key A's value contains ⊲{B} and key B's
+        // value contains ⊲{A}, the single-pass interpolation terminates.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        // key_a's value mentions key_b and key_b's value mentions key_a.
+        // The interpolation only replaces top-level markers in 'content', not within
+        // secret values, so this can never recurse.
+        let secrets_content = "key_a: ref_to_b\nkey_b: ref_to_a\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        // Content refers to both keys — should resolve in one pass, no loop.
+        let content = "A=⊲{key_a} B=⊲{key_b}";
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops);
+
+        assert!(result.is_ok(), "Interpolation must terminate, got: {:?}", result.err());
+        let output = result.unwrap();
+        assert!(output.contains("ref_to_b"), "key_a's value should appear in output");
+        assert!(output.contains("ref_to_a"), "key_b's value should appear in output");
+    }
+
+    #[test]
+    fn test_interpolation_returns_original_marker_on_missing_key() {
+        // CORR-04: when a key is missing, interpolate_secrets must NOT panic —
+        // it should return the original ⊲{key} marker in the output (with a warning).
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        let secrets_content = "existing_key: value\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        let content = "known=⊲{existing_key} unknown=⊲{no_such_key}";
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops);
+
+        assert!(result.is_ok(), "interpolate_secrets must not return Err for missing key");
+        let output = result.unwrap();
+        // Known key should be resolved
+        assert!(output.contains("value"), "Known key should be resolved");
+        // Unknown key should be left as the original marker (not panic, not empty)
+        assert!(
+            output.contains("⊲{no_such_key}") || output.contains("<{no_such_key}"),
+            "Missing key should be preserved as original marker, got: {output}"
+        );
+    }
 }

@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::ArgMatches;
 use std::fs;
 use std::io::{self, Read, Write};
@@ -36,7 +36,11 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
         let result = libc::statfs(path_cstr.as_ptr(), &raw mut stat);
 
         if result != 0 {
-            return Err(anyhow!("Failed to stat filesystem"));
+            return Err(anyhow!(
+                "Failed to stat filesystem for '{}': {}",
+                file_path.display(),
+                std::io::Error::last_os_error()
+            ));
         }
 
         Ok(stat.f_type as i64 == FUSE_SUPER_MAGIC)
@@ -57,7 +61,11 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
         let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
 
         if result != 0 {
-            return Err(anyhow!("Failed to stat filesystem"));
+            return Err(anyhow!(
+                "Failed to stat filesystem for '{}': {}",
+                file_path.display(),
+                std::io::Error::last_os_error()
+            ));
         }
 
         // On macOS, check if the filesystem type name contains "fuse" or "osxfuse" or "macfuse"
@@ -124,11 +132,15 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
             // Processor already created above
 
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {}", file_path.display()));
+                return Err(anyhow!(
+                    "File '{}' does not exist. Check the path and try again.",
+                    file_path.display()
+                ));
             }
 
             // Read and process the file content to raw text
-            let content = fs::read_to_string(&file_path)?;
+            let content = fs::read_to_string(&file_path)
+                .with_context(|| format!("Failed to read '{}'", file_path.display()))?;
             let raw_content = processor.decrypt_to_raw_with_path(&content, &file_path)?;
 
             if in_place {
@@ -147,11 +159,15 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         if edit {
             // Edit mode: decrypt -> edit -> encrypt
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {}", file_path.display()));
+                return Err(anyhow!(
+                    "File '{}' does not exist. Check the path and try again.",
+                    file_path.display()
+                ));
             }
 
             // Read and prepare content for editing
-            let content = fs::read_to_string(&file_path)?;
+            let content = fs::read_to_string(&file_path)
+                .with_context(|| format!("Failed to read '{}'", file_path.display()))?;
             let edit_content = processor.prepare_for_editing(&content)?;
 
             // Write to temporary file
@@ -187,10 +203,14 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
         } else {
             // Regular processing mode
             if !file_path.exists() {
-                return Err(anyhow!("File does not exist: {}", file_path.display()));
+                return Err(anyhow!(
+                    "File '{}' does not exist. Check the path and try again.",
+                    file_path.display()
+                ));
             }
 
-            let content = fs::read_to_string(&file_path)?;
+            let content = fs::read_to_string(&file_path)
+                .with_context(|| format!("Failed to read '{}'", file_path.display()))?;
             let processed_content = processor.process_content(&content)?;
 
             if in_place {
@@ -205,7 +225,10 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 
         Ok(())
     } else {
-        Err(anyhow!("No file specified for processing"))
+        Err(anyhow!(
+            "No file specified. Provide a file path or '-' for stdin.\n\
+            Usage: sss process <file> [--in-place] [--render] [--edit]"
+        ))
     }
 }
 
@@ -242,10 +265,14 @@ fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()
     let file_path = validate_file_path(file_path_str)?;
 
     if !file_path.exists() {
-        return Err(anyhow!("File does not exist: {}", file_path.display()));
+        return Err(anyhow!(
+            "File '{}' does not exist. Check the path and try again.",
+            file_path.display()
+        ));
     }
 
-    let content = fs::read_to_string(&file_path)?;
+    let content = fs::read_to_string(&file_path)
+        .with_context(|| format!("Failed to read '{}'", file_path.display()))?;
     let output = match operation {
         "seal" => processor.seal_content_with_path(&content, &file_path)?,
         "open" => processor.open_content_with_path(&content, &file_path)?,
@@ -716,7 +743,9 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
     // Write with restrictive permissions
     #[cfg(unix)]
     {
-        write_temp_file_secure(temp_path.to_str().unwrap(), &edit_content)?;
+        let temp_path_str = temp_path.to_str()
+            .ok_or_else(|| anyhow!("Temp file path contains invalid UTF-8"))?;
+        write_temp_file_secure(temp_path_str, &edit_content)?;
     }
 
     #[cfg(not(unix))]
@@ -758,11 +787,17 @@ pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     let file_path = validate_file_path(file_path_str)?;
 
     if !file_path.exists() {
-        return Err(anyhow!("File does not exist: {}", file_path.display()));
+        return Err(anyhow!(
+            "File '{}' does not exist. Check the path and try again.",
+            file_path.display()
+        ));
     }
 
     // Find project config and load repository key
-    let file_dir = file_path.parent().ok_or_else(|| anyhow!("File has no parent directory"))?;
+    let file_dir = file_path.parent().ok_or_else(|| anyhow!(
+        "Cannot determine parent directory of '{}'. Ensure the path is not a filesystem root.",
+        file_path.display()
+    ))?;
     let config_path = crate::config::get_project_config_path_from(file_dir)?;
     let (config, repository_key, project_root) = load_project_config_with_repository_key(config_path)?;
     let secrets_filename = config.get_secrets_filename().to_string();

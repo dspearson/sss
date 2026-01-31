@@ -1273,5 +1273,127 @@ mod tests {
         let opened_again = processor.open_content_with_path(&sealed, &secrets_file).unwrap();
         assert_eq!(opened_again, plaintext);
     }
+
+    // =========================================================================
+    // Round-trip correctness tests (CORR-01)
+    // Each test seals content then opens it and asserts byte-identical output.
+    // =========================================================================
+
+    fn make_processor() -> Processor {
+        let key = RepositoryKey::new();
+        Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap()
+    }
+
+    /// Inline marker: single-line ⊕{secret}
+    #[test]
+    fn round_trip_inline_marker() {
+        let proc = make_processor();
+        let original = "password = ⊕{hunter2}\nuser = admin\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("config.txt"),
+        ).unwrap();
+        // Sealed content must contain ciphertext marker and no plaintext of the secret
+        assert!(sealed.contains("⊠{"), "sealed output should contain ciphertext marker");
+        assert!(!sealed.contains("hunter2"), "secret must not appear in sealed output");
+        // Open must produce byte-identical original
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("config.txt")).unwrap();
+        assert_eq!(opened, original, "inline round-trip: opened != original");
+    }
+
+    /// Block marker: multi-line ⊕{…} spanning several lines
+    #[test]
+    fn round_trip_block_marker() {
+        let proc = make_processor();
+        let original = "config:\n⊕{\n  db_host: secret.example.com\n  db_pass: s3cret\n}\nother: value\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("config.txt"),
+        ).unwrap();
+        assert!(sealed.contains("⊠{"), "sealed output should contain ciphertext marker");
+        assert!(!sealed.contains("s3cret"), "secret must not appear in sealed output");
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("config.txt")).unwrap();
+        assert_eq!(opened, original, "block round-trip: opened != original");
+    }
+
+    /// File-level marker: entire file content is one ⊕{…} block (secrets file)
+    #[test]
+    fn round_trip_file_level_marker() {
+        use tempfile::tempdir;
+        let temp_dir = tempdir().unwrap();
+        let secrets_path = temp_dir.path().join("app.secrets");
+
+        let proc = make_processor();
+        let original = "db_url: postgresql://localhost/mydb\napi_key: supersecret\n";
+        let sealed = proc.seal_content_with_path(original, &secrets_path).unwrap();
+        assert!(sealed.contains("⊠{"), "sealed secrets file should contain ciphertext marker");
+        assert!(!sealed.contains("supersecret"), "secret must not appear in sealed output");
+        let opened = proc.open_content_with_path(&sealed, &secrets_path).unwrap();
+        assert_eq!(opened, original, "file-level round-trip: opened != original");
+    }
+
+    /// Mixed markers: inline + block in one file
+    #[test]
+    fn round_trip_mixed_markers() {
+        let proc = make_processor();
+        let original = "line1: ⊕{inline_secret}\nblock:\n⊕{\n  key: block_secret\n}\nend\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("mixed.txt"),
+        ).unwrap();
+        assert!(sealed.contains("⊠{"), "sealed output should contain ciphertext marker");
+        assert!(!sealed.contains("inline_secret"), "inline secret must not appear");
+        assert!(!sealed.contains("block_secret"), "block secret must not appear");
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("mixed.txt")).unwrap();
+        assert_eq!(opened, original, "mixed round-trip: opened != original");
+    }
+
+    /// Empty marker ⊕{} — surrounding content must not be corrupted
+    #[test]
+    fn round_trip_empty_marker() {
+        let proc = make_processor();
+        let original = "before ⊕{} after\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("empty_marker.txt"),
+        ).unwrap();
+        assert!(sealed.contains("⊠{"), "sealed output should contain ciphertext marker");
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("empty_marker.txt")).unwrap();
+        assert_eq!(opened, original, "empty-marker round-trip: opened != original");
+    }
+
+    /// Nested braces ⊕{{"key": "value"}} — balanced brace parser must handle JSON-like content
+    #[test]
+    fn round_trip_nested_braces_marker() {
+        let proc = make_processor();
+        let original = "data = ⊕{{\"key\": \"value\"}}\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("nested.txt"),
+        ).unwrap();
+        assert!(sealed.contains("⊠{"), "sealed output should contain ciphertext marker");
+        assert!(!sealed.contains("\"key\""), "secret must not appear in sealed output");
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("nested.txt")).unwrap();
+        assert_eq!(opened, original, "nested-braces round-trip: opened != original");
+    }
+
+    /// Unicode content in markers round-trips correctly
+    #[test]
+    fn round_trip_unicode_marker() {
+        let proc = make_processor();
+        // NFC-composed café
+        let original = "secret = ⊕{cafe\u{0301} unicode content}\nother: plain\n";
+        let sealed = proc.seal_content_with_path(
+            original,
+            std::path::Path::new("unicode.txt"),
+        ).unwrap();
+        let opened = proc.open_content_with_path(&sealed, std::path::Path::new("unicode.txt")).unwrap();
+        assert_eq!(opened.as_bytes(), original.as_bytes(), "unicode round-trip: byte mismatch");
+    }
 }
 

@@ -1,3 +1,5 @@
+// This module contains 3 unsafe blocks for libsodium FFI calls (random bytes, Argon2id KDF,
+// sodium_init). Each is documented with a SAFETY comment. See STRUCT-04 audit.
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
@@ -23,6 +25,9 @@ impl Salt {
     pub fn new() -> Self {
         ensure_sodium_init();
         let mut salt = [0u8; SALT_SIZE];
+        // SAFETY: `salt` is a valid SALT_SIZE-byte stack buffer. `randombytes_buf` writes
+        // exactly `SALT_SIZE` bytes of cryptographically secure random data into it.
+        // libsodium is initialised before this call via `ensure_sodium_init()`.
         unsafe {
             sodium::randombytes_buf(salt.as_mut_ptr().cast::<std::ffi::c_void>(), SALT_SIZE);
         }
@@ -88,6 +93,13 @@ impl DerivedKey {
 
         let mut key = [0u8; KEY_SIZE];
 
+        // SAFETY: All pointer arguments are valid for the duration of the call:
+        //   - `key` is a KEY_SIZE (32) byte stack buffer; output length matches.
+        //   - `passphrase` is a valid UTF-8 str; pointer and length are consistent.
+        //   - `salt.0` is a SALT_SIZE byte array matching libsodium's expected salt size.
+        //   - `params` values come from libsodium constants (ops_limit, mem_limit, algorithm).
+        // libsodium is initialised before this call via `ensure_sodium_init()`.
+        // On failure (ret != 0), an error is returned immediately — no UB.
         unsafe {
             let ret = sodium::crypto_pwhash(
                 key.as_mut_ptr(),                          // output key
@@ -126,6 +138,9 @@ impl DerivedKey {
 /// Ensure libsodium is initialised
 fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
+    // SAFETY: `sodium_init()` is safe to call from multiple threads — libsodium guarantees
+    // thread safety for initialisation. `Once` ensures we call it exactly once. Calling
+    // `sodium_init()` multiple times is safe per libsodium docs, but we avoid it anyway.
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });

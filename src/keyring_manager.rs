@@ -209,7 +209,11 @@ impl KeyringManager {
         }
 
         // Fall back to environment variable
+        // WR-03 fix: warn that SSS_KEY exposes raw key material in the process environment
+        // (visible via /proc/self/environ on Linux). Users should migrate to keypairs.
         if let Ok(env_key) = std::env::var("SSS_KEY") {
+            eprintln!("WARNING: Loading key from SSS_KEY environment variable.");
+            eprintln!("This exposes your key to other processes via /proc. Migrate to keypairs (sss keys generate).");
             return Key::from_base64(&env_key);
         }
 

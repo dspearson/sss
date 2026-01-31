@@ -1,3 +1,8 @@
+// This module contains multiple unsafe blocks for libc FFI calls (openat, faccessat,
+// fstatat, open, close, read, write, opendir, fdopendir, closedir, getuid, getgid).
+// All are necessary for FUSE filesystem implementation using fd-relative syscalls.
+// Each unsafe block is documented with a SAFETY comment. See STRUCT-04 audit.
+
 use anyhow::{anyhow, Result};
 use fuser::{
     FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
@@ -249,6 +254,9 @@ impl FileSystemOps for FdFileSystemOps {
             Err(_) => return false,
         };
 
+        // SAFETY: `self.source_fd` is a valid open directory fd obtained in `new()`.
+        // `path_cstr` is a valid NUL-terminated C string derived from a Rust Path.
+        // `faccessat` does not retain the pointer after returning.
         let result = unsafe {
             libc::faccessat(
                 self.source_fd,
@@ -266,6 +274,8 @@ impl FileSystemOps for FdFileSystemOps {
         let path_bytes = rel.as_os_str().as_bytes();
         let path_cstr = std::ffi::CString::new(path_bytes)?;
 
+        // SAFETY: `self.source_fd` is a valid open directory fd. `path_cstr` is a valid
+        // NUL-terminated path. `openat` returns a new fd or -1 on error.
         let fd = unsafe {
             libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
         };
@@ -275,12 +285,16 @@ impl FileSystemOps for FdFileSystemOps {
         }
 
         // Read file contents
+        // SAFETY: `fd` is a valid file descriptor returned by `openat` above (fd >= 0).
+        // `File::from_raw_fd` takes ownership; `mem::forget` prevents double-close since
+        // we close `fd` manually below after reading.
         let mut file = unsafe { fs::File::from_raw_fd(fd) };
         let mut contents = Vec::new();
         std::io::Read::read_to_end(&mut file, &mut contents)?;
         std::mem::forget(file); // Don't close fd automatically
 
         // Close fd manually
+        // SAFETY: `fd` was opened above, `mem::forget` on `file` means it was not closed.
         unsafe { libc::close(fd); }
 
         Ok(contents)
@@ -337,6 +351,9 @@ impl SssFS {
 
         // Open a file descriptor to the source directory before mounting
         // This allows us to access files even if we mount over the source location
+        // SAFETY: `source_path` was verified to exist and be a directory above.
+        // `CString::new` is called inside the block; the pointer is valid for the duration
+        // of the `open` syscall. The returned fd is checked for errors immediately.
         let source_fd = unsafe {
             let path_cstr = std::ffi::CString::new(source_path.to_str().unwrap())?;
             libc::open(path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
@@ -358,6 +375,8 @@ impl SssFS {
         // - Allows full read/write operations through the /proc path
         // - The actual permissions are determined by the directory's mode and user's access
         let mount_fd = if let Some(ref mount_path) = mount_path {
+            // SAFETY: `mount_path` exists (checked by caller). `CString::new` is called inside
+            // the block; pointer is valid for the duration of `open`. The fd is checked immediately.
             let fd = unsafe {
                 let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
                 // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
@@ -371,6 +390,8 @@ impl SssFS {
 
             if fd < 0 {
                 // Clean up source_fd before returning error
+                // SAFETY: `source_fd` is valid (checked above, fd >= 0); closing it here
+                // because we are about to return an error without storing it in `self`.
                 unsafe { libc::close(source_fd); }
                 return Err(anyhow!(
                     "Failed to open mount point directory: {}",
@@ -412,6 +433,8 @@ impl SssFS {
         ];
 
         // Get current process uid/gid for synthetic directories
+        // SAFETY: `getuid()` and `getgid()` are always safe to call — they have no
+        // preconditions, cannot fail, and do not dereference any pointers.
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
 
@@ -858,6 +881,8 @@ impl SssFS {
 
             if rel_path == Path::new(".") {
                 // For root directory, use fstat directly on source_fd
+                // SAFETY: `self.source_fd` is a valid open fd held for the lifetime of SssFS.
+                // `mem::forget` prevents File from closing the fd — it is managed by SssFS::drop.
                 let file = unsafe { std::fs::File::from_raw_fd(self.source_fd) };
                 let metadata = file.metadata()?;
                 std::mem::forget(file); // Don't close source_fd
@@ -869,6 +894,9 @@ impl SssFS {
             let path_bytes = rel_path.as_os_str().as_bytes();
             let path_cstr = std::ffi::CString::new(path_bytes)?;
 
+            // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated.
+            // `stat` is zeroed stack memory of the correct size for `libc::stat`.
+            // `fstatat` writes into `stat` and returns 0 on success, -1 on error.
             let mut stat: libc::stat = unsafe { std::mem::zeroed() };
             let result = unsafe {
                 libc::fstatat(self.source_fd, path_cstr.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
@@ -897,6 +925,8 @@ impl SssFS {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
+            // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated.
+            // `flags` are platform-appropriate open flags computed above.
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
@@ -907,11 +937,14 @@ impl SssFS {
                 // If this is a symlink and openat failed, try with O_SYMLINK | O_NOFOLLOW
                 #[cfg(target_os = "macos")]
                 if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    // SAFETY: retry with O_SYMLINK flag; same preconditions as above.
                     let retry_fd = unsafe {
                         libc::openat(self.source_fd, path_cstr.as_ptr(),
                                    libc::O_RDONLY | libc::O_SYMLINK | libc::O_NOFOLLOW)
                     };
                     if retry_fd >= 0 {
+                        // SAFETY: `retry_fd` is valid (>= 0). File takes ownership and
+                        // will close it when dropped.
                         let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
                         let metadata = file.metadata()?;
                         return Ok(metadata);
@@ -921,6 +954,7 @@ impl SssFS {
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
 
+            // SAFETY: `fd` is valid (>= 0). File takes ownership and closes it when dropped.
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             let metadata = file.metadata()?;
             return Ok(metadata);
@@ -933,6 +967,8 @@ impl SssFS {
             let path_bytes = rel_path.as_os_str().as_bytes();
             let path_cstr = std::ffi::CString::new(path_bytes)?;
 
+            // SAFETY: `stat` is zeroed stack memory of the correct size. `self.source_fd`
+            // is valid. `path_cstr` is NUL-terminated. Result checked immediately.
             let mut stat: libc::stat = unsafe { std::mem::zeroed() };
 
             let result = unsafe {
@@ -961,6 +997,8 @@ impl SssFS {
                 libc::O_RDONLY | libc::O_NOFOLLOW
             };
 
+            // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated.
+            // `flags` are computed above based on file type from `fstatat` result.
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), flags)
             };
@@ -971,10 +1009,12 @@ impl SssFS {
                 // If this is a symlink and openat failed with ELOOP, try O_PATH | O_NOFOLLOW
                 // as a fallback (in case the first attempt didn't use those flags)
                 if is_symlink && err.raw_os_error() == Some(libc::ELOOP) {
+                    // SAFETY: retry with O_PATH|O_NOFOLLOW; same source_fd/path preconditions.
                     let retry_fd = unsafe {
                         libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW)
                     };
                     if retry_fd >= 0 {
+                        // SAFETY: `retry_fd` is valid (>= 0). File takes ownership and closes on drop.
                         let file = unsafe { std::fs::File::from_raw_fd(retry_fd) };
                         let metadata = file.metadata()?;
                         return Ok(metadata);
@@ -984,6 +1024,7 @@ impl SssFS {
                 return Err(anyhow!("Failed to open file for metadata: {}", err));
             }
 
+            // SAFETY: `fd` is valid (>= 0). File takes ownership and closes it when dropped.
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             let metadata = file.metadata()?;
             Ok(metadata)
@@ -1000,6 +1041,8 @@ impl SssFS {
         };
 
         // Use faccessat to check if file exists without deadlocking
+        // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+        // `faccessat` does not retain the pointer after returning.
         let result = unsafe {
             libc::faccessat(
                 self.source_fd,
@@ -1035,6 +1078,8 @@ impl SssFS {
 
             // Open file relative to source_fd
             fuse_debug!("      read_file_via_fd: calling openat(fd={}, {:?}, O_RDONLY)", self.source_fd, rel_path);
+            // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+            // The returned fd is checked for errors before use.
             let fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY)
             };
@@ -1048,6 +1093,8 @@ impl SssFS {
             // Read file contents
             fuse_debug!("      read_file_via_fd: reading contents");
             let mut buffer = Vec::new();
+            // SAFETY: `fd` is valid (>= 0). File takes ownership and closes it when dropped
+            // (via BufReader, which consumes File).
             let file = unsafe { std::fs::File::from_raw_fd(fd) };
             use std::io::Read;
             std::io::BufReader::new(file).read_to_end(&mut buffer)?;
@@ -1203,6 +1250,8 @@ impl SssFS {
         let path_cstr = CString::new(rel_path.as_os_str().as_bytes())?;
 
         // Write directly via fd
+        // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+        // Mode 0o600 restricts access to the file owner. Error checked immediately.
         let fd = unsafe {
             libc::openat(
                 self.source_fd,
@@ -1216,6 +1265,8 @@ impl SssFS {
             return Err(anyhow!("Failed to open file for writing"));
         }
 
+        // SAFETY: `fd` is valid (>= 0). `content.as_ptr()` points to `content.len()` valid bytes.
+        // `libc::write` does not retain the pointer. `close` is called after write completes.
         let write_result = unsafe {
             let bytes_written = libc::write(
                 fd,
@@ -1251,6 +1302,8 @@ impl SssFS {
         let (_temp_path, temp_path_cstr) = self.create_temp_file_path(rel_path)?;
 
         // Write to temp file
+        // SAFETY: `self.source_fd` is a valid directory fd. `temp_path_cstr` is NUL-terminated.
+        // Mode 0o600 restricts access to the file owner. Error checked immediately.
         let temp_fd = unsafe {
             libc::openat(
                 self.source_fd,
@@ -1264,6 +1317,8 @@ impl SssFS {
             return Err(anyhow!("Failed to create temp file"));
         }
 
+        // SAFETY: `temp_fd` is valid (>= 0). `content.as_ptr()` points to `content.len()` valid
+        // UTF-8 bytes. `libc::write` does not retain the pointer. `close` follows immediately.
         let write_result = unsafe {
             let bytes_written = libc::write(
                 temp_fd,
@@ -1276,6 +1331,8 @@ impl SssFS {
 
         if write_result < 0 || write_result != content.len() as isize {
             // Clean up temp file
+            // SAFETY: `self.source_fd` is valid. `temp_path_cstr` is NUL-terminated.
+            // `unlinkat` is best-effort cleanup on error path; ignoring return value is intentional.
             unsafe {
                 libc::unlinkat(self.source_fd, temp_path_cstr.as_ptr(), 0);
             }
@@ -1283,6 +1340,8 @@ impl SssFS {
         }
 
         // Atomically rename temp to target
+        // SAFETY: both `temp_path_cstr` and `path_cstr` are NUL-terminated. `self.source_fd`
+        // is the same directory fd for both paths (relative rename within one directory).
         let result = unsafe {
             libc::renameat(
                 self.source_fd,
@@ -1294,6 +1353,7 @@ impl SssFS {
 
         if result < 0 {
             // Clean up temp file
+            // SAFETY: `self.source_fd` valid. `temp_path_cstr` NUL-terminated. Best-effort cleanup.
             unsafe {
                 libc::unlinkat(self.source_fd, temp_path_cstr.as_ptr(), 0);
             }
@@ -1533,6 +1593,8 @@ impl SssFS {
             let path_cstr = std::ffi::CString::new(full_path.as_os_str().as_bytes())
                 .map_err(|_| anyhow!("Invalid path for CString"))?;
 
+            // SAFETY: `path_cstr` is a valid NUL-terminated absolute path.
+            // `opendir` returns a DIR* or NULL on error; checked immediately.
             let dir_ptr = unsafe { libc::opendir(path_cstr.as_ptr()) };
             if dir_ptr.is_null() {
                 return Err(anyhow!("opendir failed: {}", std::io::Error::last_os_error()));
@@ -1548,6 +1610,8 @@ impl SssFS {
             let path_cstr = std::ffi::CString::new(path_bytes)
                 .map_err(|_| anyhow!("Invalid path for CString"))?;
 
+            // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated.
+            // O_RDONLY|O_DIRECTORY ensures we only open a directory. Error checked immediately.
             let dir_fd = unsafe {
                 libc::openat(self.source_fd, path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
             };
@@ -1556,8 +1620,11 @@ impl SssFS {
                 return Err(anyhow!("openat failed: {}", std::io::Error::last_os_error()));
             }
 
+            // SAFETY: `dir_fd` is a valid directory fd (>= 0). `fdopendir` takes ownership;
+            // if it fails (returns NULL) we close `dir_fd` manually to avoid a leak.
             let dir_ptr = unsafe { libc::fdopendir(dir_fd) };
             if dir_ptr.is_null() {
+                // SAFETY: `dir_fd` is still valid; fdopendir failed so we own it.
                 unsafe { libc::close(dir_fd); }
                 return Err(anyhow!("fdopendir failed"));
             }
@@ -1572,6 +1639,12 @@ impl SssFS {
         let mut items = Vec::new();
         let mut _count = 0;
 
+        // SAFETY: `dir_ptr` is a valid non-null DIR* obtained from `open_dir_fd`.
+        // `readdir` returns a pointer to a static dirent buffer owned by the DIR stream;
+        // the pointer is valid until the next `readdir`/`closedir` call. We copy all
+        // needed fields (d_name, d_type) before the next iteration. `__errno_location`
+        // and `__error` return a valid per-thread errno pointer; dereferencing to reset
+        // it is safe in a single-threaded FUSE callback context.
         unsafe {
             loop {
                 // Reset errno before readdir
@@ -2007,6 +2080,8 @@ impl Filesystem for SssFS {
         }
 
         // Close directory
+        // SAFETY: `dir_ptr` is a valid non-null DIR* from `open_dir_fd`; closedir is the
+        // matching cleanup call. Not called again after this point.
         unsafe { libc::closedir(dir_ptr); }
 
         // Send entries to FUSE
@@ -2137,6 +2212,9 @@ impl Filesystem for SssFS {
                 }
             };
 
+            // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+            // `open_flags` are caller-supplied FUSE open flags. Mode 0o666 applies only with
+            // O_CREAT; the actual mode is masked by umask. Error checked immediately.
             let fd = unsafe {
                 if (open_flags & libc::O_CREAT) != 0 {
                     libc::openat(self.source_fd, path_cstr.as_ptr(), open_flags, 0o666)
@@ -2349,6 +2427,9 @@ impl Filesystem for SssFS {
             // Use pwrite() for atomic seek+write operation
             // Note: pwrite() may do partial writes, but FUSE handles retries,
             // so we just report how many bytes were actually written
+            // SAFETY: `fd` is a valid open file descriptor from `passthrough_fd` (opened in
+            // `open`). `data.as_ptr()` points to `data.len()` valid bytes. `pwrite` does
+            // not retain the pointer. `offset` is the FUSE-supplied byte offset.
             let bytes_written = unsafe {
                 libc::pwrite(
                     fd,
@@ -2410,6 +2491,9 @@ impl Filesystem for SssFS {
         if let Some(handle) = handles.remove(&fh) {
             // Close passthrough fd if present
             if let Some(fd) = handle.passthrough_fd {
+                // SAFETY: `fd` is a valid open file descriptor stored in `FileHandle`.
+                // We have exclusive access here (handle removed from the map).
+                // Not closed anywhere else after removal.
                 unsafe {
                     libc::close(fd);
                 }
@@ -2600,6 +2684,8 @@ impl Filesystem for SssFS {
             };
 
             // Open file and truncate via fd
+            // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+            // Error checked immediately; `fd` is closed after use.
             let fd = unsafe {
                 libc::openat(
                     self.source_fd,
@@ -2613,7 +2699,10 @@ impl Filesystem for SssFS {
                 return;
             }
 
+            // SAFETY: `fd` is valid (>= 0). `ftruncate` adjusts the file size.
+            // `close` is called unconditionally after (regardless of ftruncate result).
             let result = unsafe { libc::ftruncate(fd, new_size as i64) };
+            // SAFETY: `fd` is valid and not closed yet.
             unsafe { libc::close(fd) };
 
             if result != 0 {
@@ -2650,6 +2739,8 @@ impl Filesystem for SssFS {
                 }
             };
 
+            // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+            // `new_mode` is a valid mode_t from the FUSE request. Error checked immediately.
             let result = unsafe {
                 libc::fchmodat(
                     self.source_fd,
@@ -2696,6 +2787,8 @@ impl Filesystem for SssFS {
         let handles = self.file_handles.read();
         if let Some(handle) = handles.get(&fh)
             && let Some(fd) = handle.passthrough_fd {
+                // SAFETY: `fd` is a valid open file descriptor stored in `passthrough_fd`.
+                // `fdatasync`/`fsync` are always safe to call on a valid fd.
                 let result = if datasync {
                     // macOS doesn't have fdatasync, use fsync or F_FULLFSYNC
                     #[cfg(target_os = "linux")]
@@ -2762,6 +2855,8 @@ impl Filesystem for SssFS {
             };
 
             // faccessat checks access permissions relative to source_fd
+            // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+            // `mask` is a valid access mode from the FUSE request. Flags=0 uses normal behavior.
             let result = unsafe {
                 libc::faccessat(
                     self.source_fd,
@@ -2774,6 +2869,8 @@ impl Filesystem for SssFS {
             if result == 0 {
                 reply.ok();
             } else {
+                // SAFETY: `__errno_location`/`__error` return the per-thread errno pointer.
+                // Dereferencing to read errno immediately after the failed syscall is safe.
                 let errno = unsafe {
                     #[cfg(target_os = "linux")]
                     { *libc::__errno_location() }
@@ -2803,6 +2900,8 @@ impl Filesystem for SssFS {
             if let Some(fd) = handle.passthrough_fd {
                 // Use fdatasync for better performance (only data, not metadata)
                 // macOS doesn't have fdatasync, use fsync instead
+                // SAFETY: `fd` is a valid open file descriptor stored in `passthrough_fd`.
+                // `fdatasync`/`fsync` are safe to call on any valid fd.
                 #[cfg(target_os = "linux")]
                 let result = unsafe { libc::fdatasync(fd) };
                 #[cfg(target_os = "macos")]
@@ -2870,6 +2969,8 @@ impl Filesystem for SssFS {
         };
 
         // Check if file already exists
+        // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated. `stat_buf` is
+        // zeroed stack memory. Result is only used as a boolean (== 0 means exists).
         let exists = unsafe {
             let mut stat_buf: libc::stat = std::mem::zeroed();
             libc::fstatat(
@@ -2892,6 +2993,8 @@ impl Filesystem for SssFS {
             libc::O_CREAT | libc::O_EXCL | flags
         };
 
+        // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated. `open_flags`
+        // are FUSE-supplied flags. Mode 0o600 restricts to file owner; masked by umask.
         let fd = unsafe {
             libc::openat(
                 self.source_fd,
@@ -2912,6 +3015,7 @@ impl Filesystem for SssFS {
         let passthrough_fd = if is_passthrough && writable {
             Some(fd)
         } else {
+            // SAFETY: `fd` is valid (>= 0); not stored anywhere; closing here to avoid leak.
             unsafe { libc::close(fd) };
             None
         };
@@ -2996,6 +3100,8 @@ impl Filesystem for SssFS {
             }
         };
 
+        // SAFETY: `self.source_fd` is valid. `path_cstr` is NUL-terminated. `mode` is from
+        // FUSE request; cast to `mode_t` is valid (both are unsigned integers). Error checked.
         let result = unsafe {
             libc::mkdirat(self.source_fd, path_cstr.as_ptr(), mode as libc::mode_t)
         };
@@ -3044,6 +3150,8 @@ impl Filesystem for SssFS {
             }
         };
 
+        // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+        // flags=0 means unlink the file (not the directory). Error checked immediately.
         let result = unsafe { libc::unlinkat(self.source_fd, path_cstr.as_ptr(), 0) };
 
         if result == 0 {
@@ -3096,6 +3204,8 @@ impl Filesystem for SssFS {
         };
 
         // Use AT_REMOVEDIR flag for rmdir
+        // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+        // `AT_REMOVEDIR` tells `unlinkat` to remove the directory (equivalent to rmdir).
         let result = unsafe {
             libc::unlinkat(self.source_fd, path_cstr.as_ptr(), libc::AT_REMOVEDIR)
         };
@@ -3188,6 +3298,8 @@ impl Filesystem for SssFS {
         };
 
         // Create hard link using linkat()
+        // SAFETY: `self.source_fd` is a valid directory fd for both old and new paths.
+        // Both `old_cstr` and `new_cstr` are NUL-terminated. flags=0 means no special behavior.
         let result = unsafe {
             libc::linkat(
                 self.source_fd,
@@ -3291,6 +3403,8 @@ impl Filesystem for SssFS {
         };
 
 
+        // SAFETY: `self.source_fd` is a valid directory fd for both paths.
+        // Both `old_cstr` and `new_cstr` are NUL-terminated. `renameat` is atomic on POSIX.
         let result = unsafe {
             libc::renameat(
                 self.source_fd,
@@ -3420,6 +3534,8 @@ impl Filesystem for SssFS {
             }
         };
 
+        // SAFETY: `link_cstr` (the symlink target) and `name_cstr` (the symlink name) are both
+        // NUL-terminated. `self.source_fd` is a valid directory fd. Error checked immediately.
         let result = unsafe {
             libc::symlinkat(
                 link_cstr.as_ptr(),
@@ -3470,6 +3586,9 @@ impl Filesystem for SssFS {
         };
 
         let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: `self.source_fd` is a valid directory fd. `path_cstr` is NUL-terminated.
+        // `buf` is a heap-allocated slice of `PATH_MAX` bytes — sufficient for any symlink target.
+        // `readlinkat` writes at most `buf.len()` bytes; we truncate to `len` afterwards.
         let len = unsafe {
             libc::readlinkat(
                 self.source_fd,
@@ -3491,6 +3610,9 @@ impl Filesystem for SssFS {
     fn statfs(&mut self, _req: &Request, _ino: u64, reply: fuser::ReplyStatfs) {
 
         // Get statfs from the underlying filesystem
+        // SAFETY: `stat` is zeroed stack memory of the correct size for `libc::statfs`.
+        // `self.source_fd` is a valid file descriptor (the source directory fd).
+        // `fstatfs` writes filesystem statistics into `stat`; result checked before use.
         let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
         let result = unsafe {
             libc::fstatfs(self.source_fd, &mut stat)
@@ -3530,11 +3652,15 @@ impl Filesystem for SssFS {
 impl Drop for SssFS {
     fn drop(&mut self) {
         // Close the source directory file descriptor
+        // SAFETY: `self.source_fd` is a valid open fd opened in `new()`. Drop is called
+        // exactly once, so there is no double-close. No other code closes `source_fd`.
         unsafe {
             libc::close(self.source_fd);
         }
         // Close the mount point directory file descriptor if present
         if let Some(mount_fd) = self.mount_fd {
+            // SAFETY: `mount_fd` is a valid open fd opened in `new()`. Drop is called
+            // exactly once. The Option ensures we only close it if it was opened.
             unsafe {
                 libc::close(mount_fd);
             }
@@ -3657,4 +3783,97 @@ mod tests {
     // - write_*() methods require file I/O
     // - FUSE operations (lookup, getattr, read, write) require FUSE context
     // These are better tested through integration tests with actual filesystems
+
+    // --- CORR-07: FUSE data integrity tests ---
+    // Tests for the pure logic layer (mode parsing, file filtering) that guards
+    // the read/write transformation pipeline.  Full mount tests live in
+    // tests/fuse_integration.rs.
+
+    #[test]
+    fn test_transform_fuse_file_mode_all_variants() {
+        // CORR-07: parse_virtual_file_mode must correctly classify every recognised
+        // virtual suffix so that the correct transformation (render/open/sealed) is
+        // applied on read.
+
+        // Rendered — no suffix
+        let (name, mode) = SssFS::parse_virtual_file_mode(OsStr::new("secrets.yaml"));
+        assert_eq!(name, OsStr::new("secrets.yaml"));
+        assert_eq!(mode, FileMode::Rendered, ".yaml with no suffix must be Rendered");
+
+        // Opened — .sss-opened suffix
+        let (name, mode) = SssFS::parse_virtual_file_mode(OsStr::new("secrets.yaml.sss-opened"));
+        assert_eq!(name, OsStr::new("secrets.yaml"));
+        assert_eq!(mode, FileMode::Opened, ".sss-opened suffix must give Opened mode");
+
+        // Sealed — .sss-sealed suffix
+        let (name, mode) = SssFS::parse_virtual_file_mode(OsStr::new("secrets.yaml.sss-sealed"));
+        assert_eq!(name, OsStr::new("secrets.yaml"));
+        assert_eq!(mode, FileMode::Sealed, ".sss-sealed suffix must give Sealed mode");
+    }
+
+    #[test]
+    fn test_transform_fuse_mode_sealed_takes_priority_over_opened() {
+        // CORR-07: when both virtual suffixes are stacked, only the outermost one is
+        // stripped — preventing accidental mode mis-classification.
+        let (name, mode) = SssFS::parse_virtual_file_mode(OsStr::new("file.sss-opened.sss-sealed"));
+        // Outermost suffix is .sss-sealed → Sealed mode; inner suffix remains in basename
+        assert_eq!(name, OsStr::new("file.sss-opened"));
+        assert_eq!(mode, FileMode::Sealed);
+    }
+
+    #[test]
+    fn test_transform_fuse_strip_suffix_opened_mode() {
+        // CORR-07: strip_virtual_suffix must remove .sss-opened when in opened mode,
+        // ensuring writes go to the correct backing-store path (not a .sss-opened file).
+        let path = PathBuf::from("/mnt/project/config.toml.sss-opened");
+        let stripped = SssFS::strip_virtual_suffix(&path, true);
+        assert_eq!(stripped, PathBuf::from("/mnt/project/config.toml"),
+            "Opened-mode suffix must be stripped for backing-store writes");
+    }
+
+    #[test]
+    fn test_transform_fuse_strip_suffix_not_in_opened_mode() {
+        // CORR-07: strip_virtual_suffix must be a no-op when not in opened mode —
+        // preventing accidental path mutation for normal (Rendered) reads.
+        let path = PathBuf::from("/mnt/project/config.toml.sss-opened");
+        let stripped = SssFS::strip_virtual_suffix(&path, false);
+        assert_eq!(stripped, path, "Path must not be modified when opened_mode=false");
+    }
+
+    #[test]
+    fn test_transform_fuse_should_process_excludes_editor_artifacts() {
+        // CORR-07: editor temporary files must never be passed through the
+        // encryption/decryption pipeline — doing so would corrupt them or leak
+        // secrets into editor state.
+        for artifact in &[
+            ".config.yml.swp",   // vim swap
+            ".file.swo",         // vim swap (alternate)
+            ".notes.swn",        // vim swap (third)
+            ".tmp_file.tmp",     // generic temp
+            "backup~",           // emacs/vim backup
+            "#autosave#",        // emacs auto-save
+        ] {
+            assert!(
+                !SssFS::should_process_with_sss(Path::new(artifact)),
+                "Editor artifact {artifact:?} must be excluded from SSS processing"
+            );
+        }
+    }
+
+    #[test]
+    fn test_transform_fuse_should_process_includes_regular_files() {
+        // CORR-07: regular project files must pass through the encryption pipeline.
+        for regular in &[
+            "config.toml",
+            "secrets.yaml",
+            ".env",
+            "src/main.rs",
+            "README.md",
+        ] {
+            assert!(
+                SssFS::should_process_with_sss(Path::new(regular)),
+                "Regular file {regular:?} must be included in SSS processing"
+            );
+        }
+    }
 }

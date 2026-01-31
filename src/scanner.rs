@@ -422,4 +422,152 @@ mod tests {
 
         Ok(())
     }
+
+    // =========================================================================
+    // Ignore-pattern correctness tests (CORR-05)
+    // =========================================================================
+
+    /// Helper: build a GlobSet from a space-separated pattern string (positive patterns only).
+    fn build_glob_set(patterns: &[&str]) -> GlobSet {
+        use globset::GlobBuilder;
+        let mut builder = globset::GlobSetBuilder::new();
+        for p in patterns {
+            let glob = GlobBuilder::new(p)
+                .literal_separator(false)
+                .build()
+                .expect("valid test glob");
+            builder.add(glob);
+        }
+        builder.build().unwrap()
+    }
+
+    /// Test: FileScanner with ignore patterns skips files that match.
+    #[test]
+    fn test_ignore_pattern_skips_matching_files() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        // Create files — only config.txt should be found (not debug.log or build.log)
+        fs::write(root.join("config.txt"), "api_key=⊕{secret}")?;
+        fs::write(root.join("debug.log"), "api_key=⊕{secret}")?;
+        fs::write(root.join("build.log"), "password=⊕{hunter2}")?;
+
+        let ignore_set = build_glob_set(&["*.log"]);
+        let negation_set = build_glob_set(&[]); // no negations
+
+        let mut scanner = FileScanner::new();
+        scanner.set_ignore_patterns(ignore_set, negation_set);
+
+        let results = scanner.scan_directory(root)?;
+
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "config.txt"),
+            "config.txt should be included"
+        );
+        assert!(
+            !results.iter().any(|p| p.to_string_lossy().ends_with(".log")),
+            "*.log files must be excluded by ignore pattern"
+        );
+
+        Ok(())
+    }
+
+    /// Test: FileScanner with ignore patterns includes files not matching the pattern.
+    #[test]
+    fn test_ignore_pattern_includes_non_matching_files() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        fs::write(root.join("config.yml"), "db_pass=⊕{secret}")?;
+        fs::write(root.join("app.txt"), "token=⊕{abc}")?;
+        fs::write(root.join("notes.log"), "log_key=⊕{logval}")?;
+
+        let ignore_set = build_glob_set(&["*.log"]);
+        let negation_set = build_glob_set(&[]);
+
+        let mut scanner = FileScanner::new();
+        scanner.set_ignore_patterns(ignore_set, negation_set);
+
+        let results = scanner.scan_directory(root)?;
+
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "config.yml"),
+            "config.yml should be included"
+        );
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "app.txt"),
+            "app.txt should be included"
+        );
+        assert!(
+            !results.iter().any(|p| p.file_name().unwrap() == "notes.log"),
+            "notes.log must be excluded"
+        );
+
+        Ok(())
+    }
+
+    /// Test: negation pattern overrides ignore — file included despite matching ignore.
+    #[test]
+    fn test_ignore_negation_pattern_includes_file() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        fs::write(root.join("debug.log"), "api_key=⊕{secret}")?;
+        fs::write(root.join("important.log"), "token=⊕{keeper}")?;
+        fs::write(root.join("config.txt"), "user=⊕{admin}")?;
+
+        let ignore_set = build_glob_set(&["*.log"]);
+        let negation_set = build_glob_set(&["important.log"]);
+
+        let mut scanner = FileScanner::new();
+        scanner.set_ignore_patterns(ignore_set, negation_set);
+
+        let results = scanner.scan_directory(root)?;
+
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "important.log"),
+            "important.log must be included (negation overrides ignore)"
+        );
+        assert!(
+            !results.iter().any(|p| p.file_name().unwrap() == "debug.log"),
+            "debug.log must remain excluded"
+        );
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "config.txt"),
+            "config.txt (no ignore) must be included"
+        );
+
+        Ok(())
+    }
+
+    /// Test: subdirectory ignore pattern (e.g. tmp/**) excludes files in that dir.
+    #[test]
+    fn test_ignore_directory_glob_pattern() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let root = temp_dir.path();
+
+        fs::create_dir(root.join("tmp"))?;
+        fs::write(root.join("config.txt"), "api_key=⊕{secret}")?;
+        fs::write(root.join("tmp").join("cache.txt"), "cache=⊕{cached_secret}")?;
+
+        // Use a broad pattern that matches files within tmp/
+        let ignore_set = build_glob_set(&["tmp/*"]);
+        let negation_set = build_glob_set(&[]);
+
+        let mut scanner = FileScanner::new();
+        scanner.set_ignore_patterns(ignore_set, negation_set);
+
+        let results = scanner.scan_directory(root)?;
+
+        assert!(
+            results.iter().any(|p| p.file_name().unwrap() == "config.txt"),
+            "config.txt must be included"
+        );
+        assert!(
+            !results.iter().any(|p| p.file_name().unwrap() == "cache.txt"),
+            "tmp/cache.txt must be excluded by directory glob"
+        );
+
+        Ok(())
+    }
 }

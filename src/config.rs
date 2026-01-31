@@ -332,7 +332,9 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
     config_path: P,
 ) -> Result<(ProjectConfig, crate::crypto::RepositoryKey, PathBuf)> {
     let (config, repository_key, project_root) = load_project_config_internal(config_path, true, true)?;
-    Ok((config, repository_key, project_root.unwrap()))
+    // WR-02 fix: replace unwrap() with a proper error — future callers with search_for_root=false
+    // would get a confusing panic rather than a clear message without this guard.
+    Ok((config, repository_key, project_root.ok_or_else(|| anyhow!("Project root could not be resolved — ensure you are inside an SSS project directory"))?))
 }
 
 /// Legacy compatibility functions

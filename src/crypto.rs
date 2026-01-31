@@ -908,4 +908,127 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // Multi-user seal/open tests (CORR-09)
+    // =========================================================================
+
+    /// Test: user B can open a repository key sealed by user A's public key,
+    /// using user B's own keypair — provided they share the same repository key.
+    ///
+    /// This models the shared-repository-key distribution pattern: user A seals
+    /// the repo key for user B's public key; user B opens it with their secret key.
+    #[test]
+    fn test_multi_user_seal_and_open_repository_key() {
+        // Generate two independent keypairs (user A and user B)
+        let keypair_a = KeyPair::generate().unwrap();
+        let keypair_b = KeyPair::generate().unwrap();
+
+        // Repository key shared across users
+        let repo_key = Key::new();
+
+        // Seal the repository key for user B (using B's public key)
+        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
+
+        // User B opens the sealed repository key with their keypair
+        let opened_by_b = open_repository_key(&sealed_for_b, &keypair_b).unwrap();
+
+        // Opened key must match original
+        assert_eq!(
+            repo_key.to_base64(),
+            opened_by_b.to_base64(),
+            "user B must recover the same repository key"
+        );
+
+        // User A cannot open a key sealed for user B (different keypair)
+        let open_by_a = open_repository_key(&sealed_for_b, &keypair_a);
+        assert!(
+            open_by_a.is_err(),
+            "user A must not be able to open a repository key sealed for user B"
+        );
+    }
+
+    /// Test: content sealed by user A (using shared repo key) can be opened by
+    /// user B after user B recovers the repository key from the sealed key bundle.
+    #[test]
+    fn test_multi_user_content_round_trip() {
+        use crate::processor::Processor;
+        use std::path::PathBuf;
+
+        let keypair_b = KeyPair::generate().unwrap();
+        let repo_key = Key::new();
+
+        // Seal the repository key for user B
+        let sealed_repo_key = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
+
+        // User A creates content using the shared repo key
+        let processor_a = Processor::new_with_context(
+            repo_key,
+            PathBuf::from("."),
+            "2025-06-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let plaintext = "api_key = ⊕{shared_secret_value}\nenv = production\n";
+        let sealed_content = processor_a
+            .seal_content_with_path(plaintext, std::path::Path::new("config.txt"))
+            .unwrap();
+
+        // User B recovers the repository key using their keypair
+        let recovered_key = open_repository_key(&sealed_repo_key, &keypair_b).unwrap();
+
+        // User B creates their own processor with the recovered key
+        let processor_b = Processor::new_with_context(
+            recovered_key,
+            PathBuf::from("."),
+            "2025-06-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        // User B opens the content sealed by user A
+        let opened_by_b = processor_b
+            .open_content_with_path(&sealed_content, std::path::Path::new("config.txt"))
+            .unwrap();
+
+        assert_eq!(
+            opened_by_b, plaintext,
+            "user B must recover the same plaintext sealed by user A"
+        );
+    }
+
+    /// Test: repository key sealed for multiple users — each user can independently
+    /// open their own copy of the sealed key and decrypt shared content.
+    #[test]
+    fn test_multi_user_multiple_recipients() {
+        let keypair_a = KeyPair::generate().unwrap();
+        let keypair_b = KeyPair::generate().unwrap();
+        let keypair_c = KeyPair::generate().unwrap();
+
+        let repo_key = Key::new();
+
+        // Seal the repo key once for each user
+        let sealed_for_a = seal_repository_key(&repo_key, &keypair_a.public_key).unwrap();
+        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
+        let sealed_for_c = seal_repository_key(&repo_key, &keypair_c.public_key).unwrap();
+
+        // Each user independently recovers the repository key
+        let key_a = open_repository_key(&sealed_for_a, &keypair_a).unwrap();
+        let key_b = open_repository_key(&sealed_for_b, &keypair_b).unwrap();
+        let key_c = open_repository_key(&sealed_for_c, &keypair_c).unwrap();
+
+        // All recovered keys are identical
+        assert_eq!(repo_key.to_base64(), key_a.to_base64(), "user A key mismatch");
+        assert_eq!(repo_key.to_base64(), key_b.to_base64(), "user B key mismatch");
+        assert_eq!(repo_key.to_base64(), key_c.to_base64(), "user C key mismatch");
+
+        // Cross-opens fail (user A's sealed key cannot be opened by user B)
+        assert!(
+            open_repository_key(&sealed_for_a, &keypair_b).is_err(),
+            "user B must not open user A's sealed key"
+        );
+        assert!(
+            open_repository_key(&sealed_for_b, &keypair_c).is_err(),
+            "user C must not open user B's sealed key"
+        );
+    }
+
 }

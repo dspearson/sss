@@ -1,7 +1,6 @@
 #![allow(clippy::missing_errors_doc)] // Public API doc sections managed separately
 
 use anyhow::{anyhow, Result};
-use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -27,85 +26,136 @@ struct MarkerMatch {
     content: String,
 }
 
-/// Find markers with balanced brace counting
-/// Supports nested braces like o+{a:{}} or ⊕{{"key":"value"}}
-fn find_balanced_markers(content: &str, prefixes: &[&str]) -> Vec<MarkerMatch> {
+/// Find markers with balanced brace counting, returning matched prefix alongside each match.
+///
+/// Supports nested braces like o+{a:{}} or ⊕{{"key":"value"}}.
+/// Returns `(matched_prefix, MarkerMatch)` tuples in order of appearance.
+///
+/// # Optimisation notes
+/// - Pre-computes prefix byte-lengths once before the scan loop.
+/// - Uses a byte fast-path for the common ASCII brace-counting case to avoid
+///   `char_indices()` overhead when the inner content contains no multi-byte chars.
+fn find_balanced_markers_with_prefix<'a>(
+    content: &str,
+    prefixes: &[&'a str],
+) -> Vec<(&'a str, MarkerMatch)> {
     let mut matches = Vec::new();
     let bytes = content.as_bytes();
     let mut byte_pos = 0;
 
     while byte_pos < bytes.len() {
         // Try to match each prefix at current position
-        let remaining = &content[byte_pos..];
-        let mut matched_prefix = None;
+        let mut matched_prefix: Option<(&str, usize)> = None; // (prefix, prefix_len)
 
         for &prefix in prefixes {
-            if let Some(after_prefix) = remaining.strip_prefix(prefix) {
-                // Check if followed by '{'
-                if after_prefix.starts_with('{') {
-                    matched_prefix = Some(prefix);
-                    break;
-                }
+            // str::len() is O(1) — stored as metadata, no scanning needed
+            let plen = prefix.len();
+            let remaining_bytes = &bytes[byte_pos..];
+            if remaining_bytes.len() >= plen
+                && &remaining_bytes[..plen] == prefix.as_bytes()
+                && remaining_bytes.get(plen) == Some(&b'{')
+            {
+                matched_prefix = Some((prefix, plen));
+                break;
             }
         }
 
-        if let Some(prefix) = matched_prefix {
+        if let Some((prefix, plen)) = matched_prefix {
             let marker_start = byte_pos;
-            byte_pos += prefix.len(); // Move past prefix
-
-            // Should be at '{'
-            if !content[byte_pos..].starts_with('{') {
-                byte_pos += 1;
-                continue;
-            }
-
-            byte_pos += 1; // Move past '{'
+            byte_pos += plen + 1; // Skip prefix + '{'
             let content_start = byte_pos;
-            let mut depth = 1;
+            let mut depth = 1u32;
+            let mut found = false;
 
-            // Track brace depth to find matching closing brace
-            for (char_offset, ch) in content[byte_pos..].char_indices() {
-                match ch {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            // Found matching closing brace
-                            let content_end = byte_pos + char_offset;
-                            let marker_end = content_end + 1; // Include the '}'
+            // Fast ASCII brace-counting path: scan bytes directly when slice is ASCII.
+            // Falls back to char_indices for multi-byte content automatically.
+            let inner = &bytes[byte_pos..];
 
-                            let captured_content = content[content_start..content_end].to_string();
-
-                            matches.push(MarkerMatch {
-                                start: marker_start,
-                                end: marker_end,
-                                content: captured_content,
-                            });
-
-                            byte_pos = marker_end;
-                            break;
+            if inner.is_ascii() {
+                // Pure ASCII: iterate bytes directly (no UTF-8 decode overhead)
+                for (offset, &b) in inner.iter().enumerate() {
+                    match b {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let content_end = byte_pos + offset;
+                                let marker_end = content_end + 1;
+                                // SAFETY: content_start..content_end are valid byte offsets
+                                // within the ASCII slice, so they are valid UTF-8 boundaries.
+                                let captured = content[content_start..content_end]
+                                    .to_string();
+                                matches.push((prefix, MarkerMatch {
+                                    start: marker_start,
+                                    end: marker_end,
+                                    content: captured,
+                                }));
+                                byte_pos = marker_end;
+                                found = true;
+                                break;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                }
+            } else {
+                // UTF-8 fallback: use char_indices for correctness with multi-byte chars
+                for (char_offset, ch) in content[byte_pos..].char_indices() {
+                    match ch {
+                        '{' => depth += 1,
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let content_end = byte_pos + char_offset;
+                                let marker_end = content_end + 1;
+                                let captured = content[content_start..content_end]
+                                    .to_string();
+                                matches.push((prefix, MarkerMatch {
+                                    start: marker_start,
+                                    end: marker_end,
+                                    content: captured,
+                                }));
+                                byte_pos = marker_end;
+                                found = true;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
 
-            // If we didn't find a match, move past the opening brace
-            if depth != 0 {
+            // Unbalanced braces: retreat to just after the opening '{'
+            if !found {
                 byte_pos = content_start;
             }
         } else {
-            // Move to next character
-            let remaining = &content[byte_pos..];
-            if let Some(ch) = remaining.chars().next() {
-                byte_pos += ch.len_utf8();
+            // Advance by one UTF-8 character (fast single-byte path for ASCII)
+            let b = bytes[byte_pos];
+            if b < 0x80 {
+                byte_pos += 1;
             } else {
-                break;
+                // Multi-byte character: find boundary via char
+                let remaining = &content[byte_pos..];
+                if let Some(ch) = remaining.chars().next() {
+                    byte_pos += ch.len_utf8();
+                } else {
+                    break;
+                }
             }
         }
     }
 
     matches
+}
+
+/// Find markers with balanced brace counting (returns matches only, without prefix).
+/// Supports nested braces like o+{a:{}} or ⊕{{"key":"value"}}.
+fn find_balanced_markers(content: &str, prefixes: &[&str]) -> Vec<MarkerMatch> {
+    find_balanced_markers_with_prefix(content, prefixes)
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect()
 }
 
 /// Find plaintext markers: o+{...} or ⊕{...}
@@ -118,10 +168,25 @@ fn find_ciphertext_markers(content: &str) -> Vec<MarkerMatch> {
     find_balanced_markers(content, &["⊠"])
 }
 
+/// Classify a prefix as plaintext or ciphertext marker type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MarkerKind { Plaintext, Ciphertext }
+
+fn classify_prefix(prefix: &str) -> MarkerKind {
+    if prefix == "⊠" { MarkerKind::Ciphertext } else { MarkerKind::Plaintext }
+}
+
 /// Normalize ASCII secrets markers to UTF-8 style
 /// Converts <{ to ⊲{ for consistent marker style
-fn normalize_secrets_markers(content: &str) -> String {
-    content.replace("<{", "⊲{")
+///
+/// Fast-path: if content contains no "<{" sequences (the common case), returns
+/// a Cow::Borrowed referencing the original slice and avoids any allocation.
+fn normalize_secrets_markers(content: &str) -> std::borrow::Cow<'_, str> {
+    if content.contains("<{") {
+        std::borrow::Cow::Owned(content.replace("<{", "⊲{"))
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    }
 }
 
 // Type alias for cache wrapper - conditional based on async support
@@ -517,9 +582,14 @@ impl Processor {
         }
 
         // Process normally without secrets interpolation
-        // Secrets are only interpolated during render operations
-        let has_plaintext = !find_plaintext_markers(content).is_empty();
-        let has_ciphertext = !find_ciphertext_markers(content).is_empty();
+        // Secrets are only interpolated during render operations.
+        //
+        // Optimisation: scan content once for all marker prefixes and partition
+        // the results by kind, avoiding a separate second full scan.
+        let all_markers =
+            find_balanced_markers_with_prefix(content, &["o+", "⊕", "⊠"]);
+        let has_plaintext = all_markers.iter().any(|(p, _)| classify_prefix(p) == MarkerKind::Plaintext);
+        let has_ciphertext = all_markers.iter().any(|(p, _)| classify_prefix(p) == MarkerKind::Ciphertext);
 
         match (has_plaintext, has_ciphertext) {
             (true, false) => self.encrypt_content_with_path(content, file_path),
@@ -535,45 +605,15 @@ impl Processor {
         self.encrypt_content_with_path(content, "<content>")
     }
 
-    /// Processes a single plaintext marker for encryption
-    fn process_plaintext_marker(&self, marker: &MarkerMatch, file_path: &str, original_text: &str) -> String {
-        // Check size limits
-        if !self.check_marker_size(&marker.content, "Plaintext") {
-            // Keep original marker if too large
-            return original_text[marker.start..marker.end].to_string();
-        }
-
-        // Use deterministic encryption if we have project_created timestamp
-        let encrypted_result = if self.project_created.is_empty() {
-            // Fall back to random nonce if no project context
-            encrypt_to_base64(&marker.content, &self.repository_key)
-        } else {
-            encrypt_to_base64_deterministic(
-                &marker.content,
-                &self.repository_key,
-                &self.project_created,
-                file_path,
-            )
-        };
-
-        // Format result or handle error
-        match encrypted_result {
-            Ok(encrypted) => format!("⊠{{{encrypted}}}"),
-            Err(e) => {
-                let original = &original_text[marker.start..marker.end];
-                self.handle_encrypt_error(&e, original)
-            }
-        }
-    }
-
     pub fn encrypt_content_with_path(&self, content: &str, file_path: &str) -> Result<String> {
-        // First, normalize ASCII secrets markers ⊲{} to UTF-8 ⊲{}
+        // Normalize ASCII secrets markers <{ to ⊲{ for consistent marker style.
+        // Fast-path: if content has no "<{" (common case), this borrows without allocating.
         let normalized_content = normalize_secrets_markers(content);
 
         let markers = find_plaintext_markers(&normalized_content);
 
         if markers.is_empty() {
-            return Ok(normalized_content);
+            return Ok(normalized_content.into_owned());
         }
 
         let mut result = String::with_capacity(normalized_content.len());
@@ -583,9 +623,34 @@ impl Processor {
             // Add content before this marker
             result.push_str(&normalized_content[last_end..marker.start]);
 
-            // Process and add the encrypted marker
-            let processed = self.process_plaintext_marker(&marker, file_path, &normalized_content);
-            result.push_str(&processed);
+            // Inline marker encryption directly into result to avoid intermediate String.
+            if !self.check_marker_size(&marker.content, "Plaintext") {
+                // Keep original marker if too large
+                result.push_str(&normalized_content[marker.start..marker.end]);
+            } else {
+                let encrypted_result = if self.project_created.is_empty() {
+                    encrypt_to_base64(&marker.content, &self.repository_key)
+                } else {
+                    encrypt_to_base64_deterministic(
+                        &marker.content,
+                        &self.repository_key,
+                        &self.project_created,
+                        file_path,
+                    )
+                };
+                match encrypted_result {
+                    Ok(encrypted) => {
+                        // Push sealed marker directly into result — no intermediate String
+                        result.push_str("⊠{");
+                        result.push_str(&encrypted);
+                        result.push('}');
+                    }
+                    Err(e) => {
+                        let original = &normalized_content[marker.start..marker.end];
+                        result.push_str(&self.handle_encrypt_error(&e, original));
+                    }
+                }
+            }
 
             last_end = marker.end;
         }
@@ -613,7 +678,12 @@ impl Processor {
             // Process this marker
             if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
-                    Ok(decrypted) => { let _ = write!(result, "⊕{{{decrypted}}}"); }
+                    Ok(decrypted) => {
+                        // Push plaintext marker directly — avoids fmt::Write format parsing
+                        result.push_str("⊕{");
+                        result.push_str(&decrypted);
+                        result.push('}');
+                    }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
                         result.push_str(&self.handle_decrypt_error(&e, original, ""));
@@ -650,7 +720,12 @@ impl Processor {
             // Process this marker
             if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
-                    Ok(decrypted) => { let _ = write!(result, "⊕{{{decrypted}}}"); }
+                    Ok(decrypted) => {
+                        // Push plaintext marker directly — avoids fmt::Write format parsing
+                        result.push_str("⊕{");
+                        result.push_str(&decrypted);
+                        result.push('}');
+                    }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
                         result.push_str(&self.handle_decrypt_error(&e, original, "for editing"));

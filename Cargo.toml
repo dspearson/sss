@@ -1,6 +1,6 @@
 [package]
 name = "sss"
-version = "1.1.9"
+version = "1.2.0"
 edition = "2024"
 license = "ISC"
 authors = ["Dominic Pearson <dsp@technoanimal.net"]
@@ -75,4 +75,16 @@ serial_test = "3.0"
 
 [[bench]]
 name = "marker_inference"
+harness = false
+
+[[bench]]
+name = "project_ops"
+harness = false
+
+[[bench]]
+name = "marker_processing"
+harness = false
+
+[[bench]]
+name = "fuse_read_latency"
 harness = false

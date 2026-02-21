@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Secrets management should be invisible — open, edit, save, sealed.
-**Current focus:** Phase 3 — sss-mode Complete (COMPLETE)
+**Current focus:** Phase 4 — Documentation (in progress)
 
 ## Current Position
 
-Phase: 3 of 4 (sss-mode Complete)
-Plan: 2 of 2 in current phase (Plan 03-02 COMPLETE — Phase 3 COMPLETE)
-Status: Phase 3 Complete
-Last activity: 2026-02-21 — Plan 03-02 complete: render-buffer, sss-init, sss-process, sss-keygen, sss-keys-list, display-output helper, key bindings, autoload cookies; emacs/sss-mode.el feature-complete (354 lines)
+Phase: 4 of 4 (Documentation)
+Plan: 3 of 7 in current phase (Plan 04-03 COMPLETE)
+Status: Phase 4 In Progress
+Last activity: 2026-02-21 — Plan 04-03 complete: docs/architecture.md (DOC-03) and docs/sss-mode-guide.md (DOC-07) written from source, verified all key bindings and --non-interactive flag, British English throughout
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 86%
 
 ## Performance Metrics
 
@@ -43,6 +43,8 @@ Progress: [████████░░] 80%
 | Phase 02-sss-mode-core P03 | 5 min | 2 tasks | 1 file |
 | Phase 03-sss-mode-complete P01 | 1 min | 1 task | 1 file |
 | Phase 03-sss-mode-complete P02 | 2 min | 1 task | 1 file |
+| Phase 04-documentation P01 | 5 min | 2 tasks | 2 files |
+| Phase 04-documentation P03 | 5 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -79,6 +81,10 @@ Recent decisions affecting current work:
 - [Phase 03-sss-mode-complete P02]: sss--display-output is private — no autoload cookie; only public interactive commands get ;;;###autoload
 - [Phase 03-sss-mode-complete P02]: sss-render-buffer warns (not errors) on unsaved changes — rendering disk version is valid behavior
 - [Phase 03-sss-mode-complete P02]: sss-keys-list shows "No keys found." sentinel when stdout empty — avoids blank buffer confusion
+- [Phase 04-documentation P01]: sss project users add/remove is the documented path — project subcommand (not top-level users) per main.rs structure
+- [Phase 04-documentation P01]: settings.toml field names match Rust struct fields exactly (default_username, coloured_output) — no serde rename attributes in config_manager.rs
+- [Phase 04-documentation P03]: docs/architecture.md is user-facing explanation of internals, not a replacement for root ARCHITECTURE.md (protocol spec)
+- [Phase 04-documentation P03]: sss-process calls sss seal --project confirmed again — no sss process subcommand exists in CLI
 
 ### Pending Todos
 
@@ -93,5 +99,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 03-02-PLAN.md (Phase 3 Plan 2 complete — project commands, render-buffer, autoload cookies; Phase 3 COMPLETE)
+Stopped at: Completed 04-01-PLAN.md (Phase 4 Plan 1 complete — usage-guide.md DOC-02 and configuration.md DOC-06)
 Resume file: None

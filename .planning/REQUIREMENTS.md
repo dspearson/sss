@@ -47,11 +47,11 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Documentation
 
 - [ ] **DOC-01**: README overhaul with installation (cargo, pre-built, RPM/DEB), quickstart, feature overview
-- [ ] **DOC-02**: Usage guide covering common workflows: seal, open, edit, process, key management, team collaboration
+- [x] **DOC-02**: Usage guide covering common workflows: seal, open, edit, process, key management, team collaboration
 - [ ] **DOC-03**: Architecture documentation explaining marker inference, processor pipeline, key loading, FUSE/9P
 - [ ] **DOC-04**: Security model documentation: what is encrypted, algorithms, threat model, what is NOT protected
 - [ ] **DOC-05**: Marker format reference: ⊕{} and ⊠{} semantics, rendering behaviour
-- [ ] **DOC-06**: Configuration reference for .sss.toml and settings.toml
+- [x] **DOC-06**: Configuration reference for .sss.toml and settings.toml
 - [ ] **DOC-07**: sss-mode installation and usage guide (Emacs setup, keyring prerequisites)
 
 ## v2 Requirements
@@ -108,11 +108,11 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | PACK-03 | Phase 3 | Complete |
 | PACK-04 | Phase 3 | Complete |
 | DOC-01 | Phase 4 | Pending |
-| DOC-02 | Phase 4 | Pending |
+| DOC-02 | Phase 4 | Complete |
 | DOC-03 | Phase 4 | Pending |
 | DOC-04 | Phase 4 | Pending |
 | DOC-05 | Phase 4 | Pending |
-| DOC-06 | Phase 4 | Pending |
+| DOC-06 | Phase 4 | Complete |
 | DOC-07 | Phase 4 | Pending |
 
 **Coverage:**

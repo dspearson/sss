@@ -633,5 +633,71 @@ Equivalent to \\[save-buffer] — triggers `write-contents-functions'."
   (interactive)
   (save-buffer))
 
+;;; Evil integration (EVIL-01, EVIL-02, EVIL-03, DOOM-03)
+
+(with-eval-after-load 'evil
+
+  ;; Operators (EVIL-01, EVIL-02, EVIL-03)
+
+  (evil-define-operator sss-evil-encrypt (beg end)
+    "Evil operator to encrypt region between BEG and END."
+    :motion evil-line
+    (sss-encrypt-region beg end))
+
+  (evil-define-operator sss-evil-decrypt (beg end)
+    "Evil operator to decrypt sealed marker between BEG and END."
+    :motion evil-line
+    (sss-decrypt-region beg end))
+
+  (evil-define-operator sss-evil-toggle (beg end)
+    "Evil operator to toggle encryption at point or region."
+    :motion evil-line
+    (if (= beg end)
+        (sss-toggle-at-point)
+      (save-excursion
+        (goto-char beg)
+        (while (and (< (point) end)
+                    (re-search-forward sss--any-marker-regexp end t))
+          (goto-char (match-beginning 0))
+          (sss-toggle-at-point)
+          (forward-char 1)))))
+
+  ;; Buffer-local key bindings: ge/gd/gt active only in sss-mode buffers (EVIL-01, EVIL-02, EVIL-03)
+  ;; Uses evil-define-key with sss-mode-map (buffer-local) rather than evil-normal-state-map
+  ;; (global). This preserves ge=evil-backward-word-end, gd=evil-goto-definition,
+  ;; gt=evil-tab-next in all other buffers where they are meaningful.
+  (evil-define-key 'normal sss-mode-map
+    (kbd "ge") #'sss-evil-encrypt
+    (kbd "gd") #'sss-evil-decrypt
+    (kbd "gt") #'sss-evil-toggle)
+
+  ;; Text objects: `is' (inner sss) and `as' (outer sss) (EVIL-03)
+  ;; Usage: vis/dis/cis -- select/delete/change inner pattern content
+  ;;        vas/das/cas -- select/delete/change entire pattern
+
+  (evil-define-text-object sss-inner-pattern (count &optional beg end type)
+    "Inner SSS text object: content inside marker braces, excluding delimiters."
+    (let ((bounds (sss--marker-at-point)))
+      (when bounds
+        (save-excursion
+          (goto-char (car bounds))
+          (when (re-search-forward "{" (cdr bounds) t)
+            (let ((content-start (point))
+                  (content-end (save-excursion
+                                 (goto-char (cdr bounds))
+                                 (when (re-search-backward "}" (car bounds) t)
+                                   (point)))))
+              (when content-end
+                (list content-start content-end))))))))
+
+  (evil-define-text-object sss-outer-pattern (count &optional beg end type)
+    "Outer SSS text object: entire marker including prefix and braces."
+    (let ((bounds (sss--marker-at-point)))
+      (when bounds
+        (list (car bounds) (cdr bounds)))))
+
+  (define-key evil-inner-text-objects-map "s" 'sss-inner-pattern)
+  (define-key evil-outer-text-objects-map "s" 'sss-outer-pattern))
+
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

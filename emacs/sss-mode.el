@@ -126,5 +126,47 @@ buffer-locally, so that subsequent saves re-seal the file."
        (error "sss-mode: decryption failed (exit %d): %s"
               exit (string-trim stderr))))))
 
+;;; Save flow — re-seal-on-save via write-contents-functions
+
+(defun sss--write-contents ()
+  "Re-seal buffer content and write sealed bytes to disk.
+Registered buffer-locally on `write-contents-functions' by `sss--open-buffer'.
+
+Returns t on success — this signals to Emacs that the file has been written,
+preventing the default `write-region' call from writing plaintext to disk.
+
+On failure, signals `(error ...)' — this is MANDATORY.  Returning nil on
+failure would allow Emacs to fall through to its default write path, writing
+plaintext.
+
+The two-step process: (1) write plaintext buffer content to disk temporarily,
+(2) call `sss seal --in-place' to encrypt the file in place.
+There is a brief window (milliseconds) where plaintext exists on disk — this
+is an accepted limitation identical to the epa-file.el pattern."
+  (let ((file buffer-file-name))
+    (unless file
+      (error "sss-mode: buffer has no associated file; cannot seal"))
+    ;; Step 1: Write plaintext buffer content to disk.
+    ;; Bind write-contents-functions to nil to prevent recursion.
+    ;; Use 'nomessage to suppress "Wrote /path/to/file" echo.
+    (let ((write-contents-functions nil))
+      (write-region (point-min) (point-max) file nil 'nomessage))
+    ;; Step 2: Seal the file in-place.
+    ;; Phase 1 confirmed: exits 0, stdout empty, stderr has confirmation message.
+    (pcase (sss--call-cli (list "seal" "--in-place") file)
+      (`(0 ,_stdout ,_stderr)
+       ;; Success: update Emacs' record of file modification time.
+       ;; This marks the buffer as "clean" (not modified since last write).
+       ;; Without this, the mode-line shows ** and kill-buffer prompts to save.
+       (set-visited-file-modtime)
+       ;; Return t: signals "file written, skip default write-region"
+       t)
+      (`(,exit ,_stdout ,stderr)
+       ;; EMAC-06: visible minibuffer error.
+       ;; DO NOT return nil here — that falls through to a plaintext disk write.
+       ;; DO NOT use (message ...) + nil — same problem.
+       (error "sss-mode: sealing failed (exit %d): %s"
+              exit (string-trim stderr))))))
+
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

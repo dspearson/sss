@@ -60,10 +60,10 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 
 ### Core Operations
 
-- [ ] **CORE-01**: Region encrypt -- encrypt selected region in-place, wrapping in sealed marker
-- [ ] **CORE-02**: Region decrypt -- decrypt selected sealed region in-place to plaintext marker
+- [x] **CORE-01**: Region encrypt -- encrypt selected region in-place, wrapping in sealed marker
+- [x] **CORE-02**: Region decrypt -- decrypt selected sealed region in-place to plaintext marker
 - [ ] **CORE-03**: Toggle at point -- detect marker type at point and toggle encrypt/decrypt
-- [ ] **CORE-04**: Fix deprecated keygen -- update `sss-keygen` to call `sss keys generate` instead of `sss keygen`
+- [x] **CORE-04**: Fix deprecated keygen -- update `sss-keygen` to call `sss keys generate` instead of `sss keygen`
 
 ### Evil Integration
 
@@ -81,7 +81,7 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 
 - [ ] **UX-01**: Fancy overlay mode -- inline decrypt previews using overlays on sealed markers
 - [ ] **UX-02**: Preview secret at point -- show decrypted value of marker at point without modifying buffer
-- [ ] **UX-03**: Auth-source integration -- password caching via Emacs auth-source for keystore passphrase
+- [x] **UX-03**: Auth-source integration -- password caching via Emacs auth-source for keystore passphrase
 - [ ] **UX-04**: Transient menu -- `sss-dispatch` (or equivalent) for discoverability of all commands
 
 ### Cleanup
@@ -150,13 +150,13 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | DOC-05 | Phase 4 | Complete |
 | DOC-06 | Phase 4 | Complete |
 | DOC-07 | Phase 4 | Complete |
-| CORE-01 | Phase 5 | Pending |
-| CORE-02 | Phase 5 | Pending |
+| CORE-01 | Phase 5 | Complete |
+| CORE-02 | Phase 5 | Complete |
 | CORE-03 | Phase 5 | Pending |
-| CORE-04 | Phase 5 | Pending |
+| CORE-04 | Phase 5 | Complete |
 | UX-01 | Phase 5 | Pending |
 | UX-02 | Phase 5 | Pending |
-| UX-03 | Phase 5 | Pending |
+| UX-03 | Phase 5 | Complete |
 | UX-04 | Phase 5 | Pending |
 | EVIL-01 | Phase 6 | Pending |
 | EVIL-02 | Phase 6 | Pending |

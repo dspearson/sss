@@ -84,5 +84,47 @@ Used as a MATCH-FUNCTION in `magic-mode-alist'."
   (message "sss-mode: warning: `%s' not found on exec-path. \
 Set `sss-executable' to the absolute path." sss-executable))
 
+;;; Open flow — decrypt-on-open via find-file-hook
+
+(defun sss--find-file-hook ()
+  "Decrypt sealed buffer content after file is visited.
+Installed on `find-file-hook' by `sss-mode'.
+Only acts when the buffer has an associated file and contains sealed content."
+  (when (and buffer-file-name (sss--sealed-p))
+    (sss--open-buffer)))
+
+(defun sss--open-buffer ()
+  "Replace sealed buffer content with decrypted plaintext.
+Uses `sss open FILE' so ⊕{} markers remain visible (satisfying EMAC-09).
+Disables auto-save and backup immediately before any timer fires (EMAC-04).
+On failure, signals a visible error (EMAC-06) — never a silent empty buffer.
+
+This function also registers `sss--write-contents' on `write-contents-functions'
+buffer-locally, so that subsequent saves re-seal the file."
+  (let ((file buffer-file-name))
+    (pcase (sss--call-cli (list "open") file)
+      (`(0 ,plaintext ,_stderr)
+       ;; Disable auto-save and backup FIRST — before replacing content.
+       ;; Timing matters: the auto-save timer may fire during the CLI call.
+       ;; Must be set before erase-buffer/insert so no partial plaintext is saved.
+       (setq-local auto-save-default nil)
+       (auto-save-mode -1)
+       (setq-local backup-inhibited t)
+       ;; Replace raw sealed bytes with decrypted plaintext (⊕{} markers visible per EMAC-09)
+       (let ((inhibit-read-only t))
+         (erase-buffer)
+         (insert plaintext))
+       ;; Mark buffer unmodified — content was replaced by open, not by user edit
+       (set-buffer-modified-p nil)
+       ;; Register save hook buffer-locally (Plan 03 will define sss--write-contents)
+       (add-hook 'write-contents-functions #'sss--write-contents nil t)
+       ;; Register revert hook buffer-locally to re-decrypt after revert-buffer
+       (add-hook 'after-revert-hook #'sss--open-buffer nil t))
+      (`(,exit ,_stdout ,stderr)
+       ;; EMAC-06: always a visible error — never a silent empty buffer.
+       ;; (error ...) signals into the minibuffer; aborts find-file cleanly.
+       (error "sss-mode: decryption failed (exit %d): %s"
+              exit (string-trim stderr))))))
+
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

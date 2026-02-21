@@ -87,6 +87,6 @@ Wave structure:
 | 2. sss-mode Core | v1.0 | 3/3 | Complete | 2026-02-21 |
 | 3. sss-mode Complete | v1.0 | 2/2 | Complete | 2026-02-21 |
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
-| 5. Core Operations & UX | 3/3 | Complete   | 2026-02-21 | - |
+| 5. Core Operations & UX | 3/3 | Complete    | 2026-02-21 | - |
 | 6. Evil & Doom Integration | v1.1 | 0/2 | Not started | - |
 | 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |

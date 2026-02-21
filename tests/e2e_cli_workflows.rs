@@ -1601,8 +1601,8 @@ fn e2e_cli_seal_in_place_stdout_empty() {
 
 #[test]
 fn e2e_cli_render_auth_failure_exits_nonzero() {
-    // Set up a project, seal a file, then remove the current user from the
-    // project so the current user is no longer authorized.
+    // Set up a project, seal a file, then directly edit .sss.toml to remove
+    // the current user so the current keypair is no longer authorized.
     let env = SssTestEnv::new();
     env.setup(); // generates keys for "testuser", inits project with testuser
 
@@ -1610,17 +1610,21 @@ fn e2e_cli_render_auth_failure_exits_nonzero() {
     env.write_file("secret.txt", "pass: \u{2295}{topsecret}");
     env.run_ok(&["seal", "--in-place", "secret.txt"]);
 
-    // Get a second (other) user's public key
-    let other_pubkey = generate_other_pubkey();
+    // Directly remove the [testuser] section from .sss.toml so the current
+    // keypair is no longer in the project's authorized users list.
+    // This avoids the interactive key rotation that `users remove` triggers.
+    let config = env.read_file(".sss.toml");
+    // Remove the [testuser] section and all its key=value lines.
+    // TOML sections run from the header until the next header or end-of-file.
+    let stripped = strip_toml_section(&config, "testuser");
+    env.write_file(".sss.toml", &stripped);
 
-    // Add the other user to the project
-    env.run_ok(&["users", "add", "otheruser", &other_pubkey]);
-
-    // Remove testuser so the current keypair is no longer authorized
-    env.run_ok(&["users", "remove", "testuser"]);
+    // Verify the file was modified
+    let new_config = env.read_file(".sss.toml");
+    assert!(!new_config.contains("testuser"), "testuser should be removed from config");
 
     // Now "testuser" (our current keypair) is no longer in the project.
-    // render should fail with an auth error.
+    // render should fail with an auth error (exit non-zero, non-empty stderr).
     let (stdout, stderr) = env.run_fail(&["render", "secret.txt"]);
     assert_eq!(
         stdout,
@@ -1630,8 +1634,36 @@ fn e2e_cli_render_auth_failure_exits_nonzero() {
     );
     assert!(
         !stderr.is_empty(),
-        "render must write an error message to stderr on auth failure"
+        "render must write an error message to stderr on auth failure; got empty stderr"
     );
+}
+
+/// Remove a TOML section (and all its key=value pairs) by section name.
+/// Handles `[section]` style headers until the next `[` or end-of-file.
+fn strip_toml_section(toml: &str, section_name: &str) -> String {
+    let header = format!("[{}]", section_name);
+    let mut result = Vec::new();
+    let mut in_section = false;
+
+    for line in toml.lines() {
+        let trimmed = line.trim();
+        if trimmed == header {
+            in_section = true;
+            continue;
+        }
+        if in_section && trimmed.starts_with('[') {
+            in_section = false;
+        }
+        if !in_section {
+            result.push(line);
+        }
+    }
+
+    let mut out = result.join("\n");
+    if toml.ends_with('\n') {
+        out.push('\n');
+    }
+    out
 }
 
 #[test]

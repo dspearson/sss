@@ -36,6 +36,37 @@ Example: \"/usr/local/bin/sss\""
 U+22A0 (SQUARE ORIGINAL OF) followed by U+007B (LEFT CURLY BRACKET).
 UTF-8 encoding: \\xe2\\x8a\\xa0\\x7b (4 bytes).")
 
+(defface sss-open-face
+  '((((class color) (background light))
+     :background "LightGoldenrod1" :foreground "DarkGreen" :weight bold)
+    (((class color) (background dark))
+     :background "dark olive green" :foreground "LightYellow" :weight bold)
+    (t :inverse-video t))
+  "Face for open SSS markers.
+Applied to regions matching the open-marker pattern."
+  :group 'sss)
+
+(defface sss-sealed-face
+  '((((class color) (background light))
+     :background "light gray" :foreground "gray50")
+    (((class color) (background dark))
+     :background "dim gray" :foreground "gray70")
+    (t :inverse-video t))
+  "Face for sealed SSS markers.
+Applied to regions matching the sealed-marker pattern."
+  :group 'sss)
+
+(defconst sss--font-lock-keywords
+  (list
+   '("\xe2\x8a\x95{[^}]*}" . 'sss-open-face)
+   '("\xe2\x8a\xa0{[^}]*}" . 'sss-sealed-face))
+  "Font-lock keyword list for sss-mode.
+Highlights open markers and sealed markers with distinct faces.")
+
+(defvar-local sss--state nil
+  "Current state of this sss buffer.
+Value is the symbol \\='sealed or \\='open.")
+
 (defun sss--call-cli (args &optional input-file)
   "Call the sss binary with ARGS, return (EXIT-CODE STDOUT STDERR).
 ARGS is a list of strings (subcommand and flags, without the binary name).
@@ -116,6 +147,10 @@ buffer-locally, so that subsequent saves re-seal the file."
          (insert plaintext))
        ;; Mark buffer unmodified — content was replaced by open, not by user edit
        (set-buffer-modified-p nil)
+       ;; Update modeline to reflect decrypted state (EMUX-02)
+       (setq-local sss--state 'open)
+       (setq mode-name "SSS[open]")
+       (force-mode-line-update)
        ;; Register save hook buffer-locally (Plan 03 will define sss--write-contents)
        (add-hook 'write-contents-functions #'sss--write-contents nil t)
        ;; Register revert hook buffer-locally to re-decrypt after revert-buffer
@@ -186,10 +221,15 @@ Activated automatically via `magic-mode-alist' for sealed files.
 Customization: \\[customize-group] RET sss RET
 
 \\{sss-mode-map}"
+  ;; Font-lock (EMUX-01): highlight ⊕{} and ⊠{} markers with distinct faces.
+  (setq-local font-lock-defaults '(sss--font-lock-keywords t))
+  ;; Modeline state (EMUX-02): initialise to sealed on mode activation.
+  (setq-local sss--state 'sealed)
+  (setq mode-name "SSS[sealed]")
   ;; Keymap (EMAC-08): sss-mode-map is auto-created by define-derived-mode.
-  ;; Bind commands under C-c s prefix (standard for mode-specific bindings).
-  (define-key sss-mode-map (kbd "C-c s o") #'sss-open-buffer)
-  (define-key sss-mode-map (kbd "C-c s s") #'sss-seal-buffer)
+  ;; Bind commands under C-c C-x pattern (package-lint compliant).
+  (define-key sss-mode-map (kbd "C-c C-o") #'sss-open-buffer)
+  (define-key sss-mode-map (kbd "C-c C-s") #'sss-seal-buffer)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))

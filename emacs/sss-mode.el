@@ -36,6 +36,15 @@ Example: \"/usr/local/bin/sss\""
 U+22A0 (SQUARE ORIGINAL OF) followed by U+007B (LEFT CURLY BRACKET).
 UTF-8 encoding: \\xe2\\x8a\\xa0\\x7b (4 bytes).")
 
+(defconst sss--any-marker-regexp
+  "\\(?:\xe2\x8a\x95\\|\xe2\x8a\xa0\\){[^}]*}"
+  "Regexp matching any SSS marker (open or sealed).
+Uses raw UTF-8 byte sequences for cross-version compatibility.")
+
+(defconst sss--sealed-marker-regexp
+  "\xe2\x8a\xa0{[^}]*}"
+  "Regexp matching a sealed SSS marker.")
+
 (defface sss-open-face
   '((((class color) (background light))
      :background "LightGoldenrod1" :foreground "DarkGreen" :weight bold)
@@ -95,6 +104,73 @@ EXIT-CODE is an integer (0 = success).  STDOUT and STDERR are strings."
       (when (file-exists-p stderr-file)
         (delete-file stderr-file)))
     (list exit-code stdout stderr)))
+
+(defun sss--call-cli-region (args text)
+  "Call the sss binary with ARGS, sending TEXT as stdin.
+Returns (EXIT-CODE STDOUT STDERR).
+ARGS should NOT include the final `-' argument -- it is appended.
+The --non-interactive flag is always prepended."
+  (let* ((stdout-buf (generate-new-buffer " *sss-stdout*"))
+         (stderr-file (make-temp-file "sss-stderr"))
+         (passphrase (sss--get-passphrase))
+         (process-environment
+          (if passphrase
+              (cons (concat "SSS_PASSPHRASE=" passphrase) process-environment)
+            process-environment))
+         exit-code stdout stderr)
+    (unwind-protect
+        (with-temp-buffer
+          (insert text)
+          (setq exit-code
+                (apply #'call-process-region
+                       (point-min) (point-max)
+                       sss-executable
+                       nil
+                       (list stdout-buf stderr-file)
+                       nil
+                       (append (list "--non-interactive") args (list "-"))))
+          (setq stdout (with-current-buffer stdout-buf (buffer-string)))
+          (setq stderr (with-temp-buffer
+                         (insert-file-contents stderr-file)
+                         (buffer-string))))
+      (kill-buffer stdout-buf)
+      (when (file-exists-p stderr-file)
+        (delete-file stderr-file)))
+    (list exit-code stdout stderr)))
+
+;;;###autoload
+(defun sss-encrypt-region (start end)
+  "Encrypt the region between START and END in-place.
+If the region is not already an open marker, it is wrapped in
+a \xe2\x8a\x95{} marker first.  The text is then sealed via `sss seal -'
+and the region is replaced with the resulting \xe2\x8a\xa0{} marker."
+  (interactive "r")
+  (let* ((text (buffer-substring-no-properties start end))
+         (input (if (string-match-p "\\`\xe2\x8a\x95{" text)
+                    text
+                  (concat "\xe2\x8a\x95{" text "}"))))
+    (pcase (sss--call-cli-region (list "seal") input)
+      (`(0 ,sealed ,_stderr)
+       (delete-region start end)
+       (insert (string-trim-right sealed)))
+      (`(,exit ,_stdout ,stderr)
+       (error "Sss-mode: encrypt failed (exit %d): %s"
+              exit (string-trim stderr))))))
+
+;;;###autoload
+(defun sss-decrypt-region (start end)
+  "Decrypt the sealed region between START and END in-place.
+The \xe2\x8a\xa0{} marker is replaced with the plaintext \xe2\x8a\x95{} marker.
+Uses `sss open -' with the region text sent as stdin."
+  (interactive "r")
+  (let ((text (buffer-substring-no-properties start end)))
+    (pcase (sss--call-cli-region (list "open") text)
+      (`(0 ,opened ,_stderr)
+       (delete-region start end)
+       (insert (string-trim-right opened)))
+      (`(,exit ,_stdout ,stderr)
+       (error "Sss-mode: decrypt failed (exit %d): %s"
+              exit (string-trim stderr))))))
 
 (defun sss--sealed-p ()
   "Return non-nil if the current buffer begins with a sealed SSS marker.
@@ -273,16 +349,16 @@ equivalent functionality."
 ;;;###autoload
 (defun sss-keygen ()
   "Generate a new SSS keypair.
-Runs `sss keygen' and displays the output."
+Runs `sss keys generate' and displays the output."
   (interactive)
-  (pcase (sss--call-cli '("keygen"))
+  (pcase (sss--call-cli '("keys" "generate"))
     (`(0 ,stdout ,stderr)
      (sss--display-output "*SSS Keygen*"
                           (concat stdout
                                   (unless (string-empty-p stderr)
                                     (concat "\n" stderr)))))
     (`(,exit ,_stdout ,stderr)
-     (error "Sss-mode: sss keygen failed (exit %d): %s"
+     (error "Sss-mode: sss keys generate failed (exit %d): %s"
             exit (string-trim stderr)))))
 
 ;;;###autoload
@@ -332,6 +408,8 @@ Customization: \\[customize-group] RET sss RET
   (define-key sss-mode-map (kbd "C-c C-p") #'sss-process)
   (define-key sss-mode-map (kbd "C-c C-k") #'sss-keygen)
   (define-key sss-mode-map (kbd "C-c C-l") #'sss-keys-list)
+  (define-key sss-mode-map (kbd "C-c C-e") #'sss-encrypt-region)
+  (define-key sss-mode-map (kbd "C-c C-d") #'sss-decrypt-region)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))

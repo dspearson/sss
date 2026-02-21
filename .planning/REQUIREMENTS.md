@@ -48,11 +48,11 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [ ] **DOC-01**: README overhaul with installation (cargo, pre-built, RPM/DEB), quickstart, feature overview
 - [x] **DOC-02**: Usage guide covering common workflows: seal, open, edit, process, key management, team collaboration
-- [ ] **DOC-03**: Architecture documentation explaining marker inference, processor pipeline, key loading, FUSE/9P
-- [ ] **DOC-04**: Security model documentation: what is encrypted, algorithms, threat model, what is NOT protected
-- [ ] **DOC-05**: Marker format reference: ⊕{} and ⊠{} semantics, rendering behaviour
+- [x] **DOC-03**: Architecture documentation explaining marker inference, processor pipeline, key loading, FUSE/9P
+- [x] **DOC-04**: Security model documentation: what is encrypted, algorithms, threat model, what is NOT protected
+- [x] **DOC-05**: Marker format reference: ⊕{} and ⊠{} semantics, rendering behaviour
 - [x] **DOC-06**: Configuration reference for .sss.toml and settings.toml
-- [ ] **DOC-07**: sss-mode installation and usage guide (Emacs setup, keyring prerequisites)
+- [x] **DOC-07**: sss-mode installation and usage guide (Emacs setup, keyring prerequisites)
 
 ## v2 Requirements
 
@@ -109,11 +109,11 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | PACK-04 | Phase 3 | Complete |
 | DOC-01 | Phase 4 | Pending |
 | DOC-02 | Phase 4 | Complete |
-| DOC-03 | Phase 4 | Pending |
-| DOC-04 | Phase 4 | Pending |
-| DOC-05 | Phase 4 | Pending |
+| DOC-03 | Phase 4 | Complete |
+| DOC-04 | Phase 4 | Complete |
+| DOC-05 | Phase 4 | Complete |
 | DOC-06 | Phase 4 | Complete |
-| DOC-07 | Phase 4 | Pending |
+| DOC-07 | Phase 4 | Complete |
 
 **Coverage:**
 - v1 requirements: 29 total
@@ -122,4 +122,4 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-21 — EMUX-01, EMUX-02, PACK-01, PACK-02, PACK-03 marked complete (Phase 3 Plan 01)*
+*Last updated: 2026-02-21 — DOC-03, DOC-07 marked complete (Phase 4 Plan 03)*

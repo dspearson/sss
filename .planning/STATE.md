@@ -44,6 +44,7 @@ Progress: [█████████░] 86%
 | Phase 03-sss-mode-complete P01 | 1 min | 1 task | 1 file |
 | Phase 03-sss-mode-complete P02 | 2 min | 1 task | 1 file |
 | Phase 04-documentation P01 | 5 min | 2 tasks | 2 files |
+| Phase 04-documentation P02 | 4 min | 2 tasks | 2 files |
 | Phase 04-documentation P03 | 5 min | 2 tasks | 2 files |
 
 ## Accumulated Context
@@ -83,6 +84,9 @@ Recent decisions affecting current work:
 - [Phase 03-sss-mode-complete P02]: sss-keys-list shows "No keys found." sentinel when stdout empty — avoids blank buffer confusion
 - [Phase 04-documentation P01]: sss project users add/remove is the documented path — project subcommand (not top-level users) per main.rs structure
 - [Phase 04-documentation P01]: settings.toml field names match Rust struct fields exactly (default_username, coloured_output) — no serde rename attributes in config_manager.rs
+- [Phase 04-documentation P02]: docs/security-model.md created as new file (not editing existing docs/SECURITY.md which has minor inaccuracies)
+- [Phase 04-documentation P02]: Ciphertext payload is nonce[24]||MAC[16]||ciphertext[N] — confirmed from crypto.rs wire format test
+- [Phase 04-documentation P02]: Deterministic nonces via BLAKE2b keyed hash allow clean git diffs at cost of revealing when secrets change
 - [Phase 04-documentation P03]: docs/architecture.md is user-facing explanation of internals, not a replacement for root ARCHITECTURE.md (protocol spec)
 - [Phase 04-documentation P03]: sss-process calls sss seal --project confirmed again — no sss process subcommand exists in CLI
 
@@ -99,5 +103,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 04-01-PLAN.md (Phase 4 Plan 1 complete — usage-guide.md DOC-02 and configuration.md DOC-06)
+Stopped at: Completed 04-02-PLAN.md and 04-03-PLAN.md (security-model.md DOC-04, marker-format.md DOC-05, architecture.md DOC-03, sss-mode-guide.md DOC-07)
 Resume file: None

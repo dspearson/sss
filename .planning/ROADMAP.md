@@ -80,7 +80,7 @@ Plans:
 Plans:
 - [ ] 04-01-PLAN.md — Usage guide and configuration reference (DOC-02, DOC-06)
 - [ ] 04-02-PLAN.md — Security model and marker format reference (DOC-04, DOC-05)
-- [ ] 04-03-PLAN.md — Architecture overview and sss-mode guide (DOC-03, DOC-07)
+- [x] 04-03-PLAN.md — Architecture overview and sss-mode guide (DOC-03, DOC-07)
 - [ ] 04-04-PLAN.md — README overhaul with quickstart and doc links (DOC-01)
 
 ## Progress

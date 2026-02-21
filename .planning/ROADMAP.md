@@ -43,7 +43,12 @@ Plans:
   3. When decryption or sealing fails, an error message appears in the minibuffer (not a silent empty buffer or silent no-op)
   4. Auto-save and backup files are disabled for the decrypted buffer immediately on open
   5. `M-x customize-group RET sss RET` shows the sss-executable path variable
-**Plans**: TBD
+**Plans**: 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Package foundation: header, defgroup/defcustom, sss--call-cli helper, sss--sealed-p predicate, magic-mode-alist
+- [ ] 02-02-PLAN.md — Open flow: find-file-hook, sss--open-buffer, auto-save/backup disable, after-revert-hook
+- [ ] 02-03-PLAN.md — Save flow + mode assembly: sss--write-contents, define-derived-mode, C-c keymap, full verification
 
 ### Phase 3: sss-mode Complete
 **Goal**: sss-mode is visually polished, provides project operation commands, and is a correct single-file Emacs package
@@ -76,6 +81,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation | 2/2 | Complete    | 2026-02-21 |
-| 2. sss-mode Core | 0/? | Not started | - |
+| 2. sss-mode Core | 0/3 | Not started | - |
 | 3. sss-mode Complete | 0/? | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

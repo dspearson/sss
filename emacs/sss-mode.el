@@ -520,6 +520,55 @@ Only works on sealed (\xe2\x8a\xa0{}) markers."
          (error "Sss-mode: preview failed (exit %d): %s"
                 exit (string-trim stderr)))))))
 
+;;; Transient menu (UX-04)
+
+(when (require 'transient nil t)
+  (transient-define-prefix sss--transient-dispatch ()
+    "SSS command dispatch."
+    ["Region Operations"
+     ("e" "Encrypt region"   sss-encrypt-region)
+     ("d" "Decrypt region"   sss-decrypt-region)
+     ("t" "Toggle at point"  sss-toggle-at-point)
+     ("v" "Preview at point" sss-preview-at-point)]
+    ["Buffer / File"
+     ("o" "Open (decrypt) buffer"  sss-open-buffer)
+     ("s" "Seal (encrypt) buffer"  sss-seal-buffer)
+     ("r" "Render (strip markers)" sss-render-buffer)]
+    ["Project"
+     ("i" "Init project"    sss-init)
+     ("p" "Process project" sss-process)
+     ("k" "Generate keys"   sss-keygen)
+     ("l" "List keys"       sss-keys-list)]
+    ["Settings"
+     ("O" "Toggle overlay mode" sss-toggle-overlay-mode)]))
+
+(defun sss--completing-read-dispatch ()
+  "Fallback dispatch via `completing-read' when transient is unavailable."
+  (let* ((cmds '(("Encrypt region"      . sss-encrypt-region)
+                 ("Decrypt region"      . sss-decrypt-region)
+                 ("Toggle at point"     . sss-toggle-at-point)
+                 ("Preview at point"    . sss-preview-at-point)
+                 ("Open buffer"         . sss-open-buffer)
+                 ("Seal buffer"         . sss-seal-buffer)
+                 ("Render buffer"       . sss-render-buffer)
+                 ("Init project"        . sss-init)
+                 ("Process project"     . sss-process)
+                 ("Generate keys"       . sss-keygen)
+                 ("List keys"           . sss-keys-list)
+                 ("Toggle overlay mode" . sss-toggle-overlay-mode)))
+         (choice (completing-read "SSS command: " (mapcar #'car cmds) nil t))
+         (fn (cdr (assoc choice cmds))))
+    (when fn (call-interactively fn))))
+
+;;;###autoload
+(defun sss-dispatch ()
+  "Open the SSS command menu.
+Uses transient if available; falls back to `completing-read'."
+  (interactive)
+  (if (fboundp 'sss--transient-dispatch)
+      (sss--transient-dispatch)
+    (sss--completing-read-dispatch)))
+
 ;;; Mode definition
 
 ;;;###autoload
@@ -556,6 +605,7 @@ Customization: \\[customize-group] RET sss RET
   (define-key sss-mode-map (kbd "C-c C-d") #'sss-decrypt-region)
   (define-key sss-mode-map (kbd "C-c C-t") #'sss-toggle-at-point)
   (define-key sss-mode-map (kbd "C-c C-v") #'sss-preview-at-point)
+  (define-key sss-mode-map (kbd "C-c C-m") #'sss-dispatch)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))

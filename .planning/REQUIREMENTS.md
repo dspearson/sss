@@ -15,14 +15,14 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Emacs Core
 
 - [x] **EMAC-01**: sss-mode detects sealed files via marker content scanning (⊠{ magic bytes) using `magic-mode-alist`
-- [ ] **EMAC-02**: sss-mode auto-decrypts sealed files on open using keystore auto-authentication via `sss open`
+- [x] **EMAC-02**: sss-mode auto-decrypts sealed files on open using keystore auto-authentication via `sss open`
 - [ ] **EMAC-03**: sss-mode re-seals buffer content on save using `write-contents-functions` (not hooks)
-- [ ] **EMAC-04**: sss-mode disables auto-save and backup files for decrypted buffers
+- [x] **EMAC-04**: sss-mode disables auto-save and backup files for decrypted buffers
 - [x] **EMAC-05**: sss-mode uses `call-process` with exit code checking and stderr capture for all CLI invocations
-- [ ] **EMAC-06**: sss-mode provides clear error messages in minibuffer when decryption/sealing fails
+- [x] **EMAC-06**: sss-mode provides clear error messages in minibuffer when decryption/sealing fails
 - [x] **EMAC-07**: sss-mode defines a customization group with `sss-executable` path variable
 - [ ] **EMAC-08**: sss-mode provides a named keymap with `C-c` prefix for commands
-- [ ] **EMAC-09**: sss-mode displays marker-visible plaintext (⊕{} markers shown, not stripped)
+- [x] **EMAC-09**: sss-mode displays marker-visible plaintext (⊕{} markers shown, not stripped)
 
 ### Emacs UX
 
@@ -88,14 +88,14 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | CLI-01 | Phase 1 | Complete |
 | CLI-02 | Phase 1 | Complete |
 | EMAC-01 | Phase 2 | Complete |
-| EMAC-02 | Phase 2 | Pending |
+| EMAC-02 | Phase 2 | Complete |
 | EMAC-03 | Phase 2 | Pending |
-| EMAC-04 | Phase 2 | Pending |
+| EMAC-04 | Phase 2 | Complete |
 | EMAC-05 | Phase 2 | Complete |
-| EMAC-06 | Phase 2 | Pending |
+| EMAC-06 | Phase 2 | Complete |
 | EMAC-07 | Phase 2 | Complete |
 | EMAC-08 | Phase 2 | Pending |
-| EMAC-09 | Phase 2 | Pending |
+| EMAC-09 | Phase 2 | Complete |
 | EMUX-01 | Phase 3 | Pending |
 | EMUX-02 | Phase 3 | Pending |
 | EMUX-03 | Phase 3 | Pending |

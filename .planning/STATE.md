@@ -10,34 +10,35 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 2 of 4 (sss-mode Core)
-Plan: 1 of 4 in current phase (Plan 01 COMPLETE)
+Plan: 2 of 4 in current phase (Plan 02 COMPLETE)
 Status: Phase 2 In Progress
-Last activity: 2026-02-21 — Plan 02-01 complete: sss-mode.el foundation (header, CLI helper, detection predicate)
+Last activity: 2026-02-21 — Plan 02-02 complete: open flow (sss--find-file-hook, sss--open-buffer with auto-save/backup disable and after-revert re-decrypt)
 
-Progress: [███░░░░░░░] 25%
+Progress: [████░░░░░░] 37%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 2
-- Average duration: 6.5 min
-- Total execution time: 0.22 hours
+- Total plans completed: 3
+- Average duration: 5.7 min
+- Total execution time: 0.28 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-cli-foundation | 2 | 13 min | 6.5 min |
-| 02-sss-mode-core | 1 | 5 min | 5 min |
+| 02-sss-mode-core | 2 | 9 min | 4.5 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 5 min, 5 min
+- Last 5 plans: 8 min, 5 min, 5 min, 4 min
 - Trend: fast
 
 *Updated after each plan completion*
 | Phase 01-cli-foundation P01 | 8 min | 2 tasks | 1 file |
 | Phase 01-cli-foundation P02 | 5 min | 2 tasks | 1 file |
 | Phase 02-sss-mode-core P01 | 5 min | 1 task | 1 file |
+| Phase 02-sss-mode-core P02 | 4 min | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -59,6 +60,9 @@ Recent decisions affecting current work:
 - [Phase 02-sss-mode-core P01]: stderr-dest in call-process MUST be a file path string (not buffer object) — verified Emacs 30.1
 - [Phase 02-sss-mode-core P01]: magic-mode-alist uses MATCH-FUNCTION variant (named predicate) for multibyte-safe ⊠{ detection
 - [Phase 02-sss-mode-core P01]: sss-mode forward reference in magic-mode-alist is acceptable (resolved at call time, not registration)
+- [Phase 02-sss-mode-core P02]: auto-save/backup disable MUST happen before erase-buffer — timer may fire during CLI call
+- [Phase 02-sss-mode-core P02]: sss open FILE (not sss render FILE) preserves ⊕{} markers per EMAC-09
+- [Phase 02-sss-mode-core P02]: (error ...) used for decryption failure — not (message ...) + nil — ensures visible minibuffer signal
 
 ### Pending Todos
 
@@ -73,5 +77,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 02-sss-mode-core-01-PLAN.md (Phase 2 Plan 1 complete)
+Stopped at: Completed 02-02-PLAN.md (Phase 2 Plan 2 complete)
 Resume file: None

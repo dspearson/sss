@@ -1,7 +1,7 @@
 ;;; sss-mode.el --- Major mode for sss-sealed files  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
-;; Version: 0.1.0
+;; Version: 1.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: files, encryption, secrets
 ;; URL: https://github.com/blob/main/emacs/sss-mode.el
@@ -16,6 +16,15 @@
 ;;
 ;; For daemon mode, set sss-executable to the absolute path:
 ;;   (setq sss-executable "/usr/local/bin/sss")
+;;
+;; New in v1.1:
+;; - Region encrypt/decrypt (sss-encrypt-region, sss-decrypt-region)
+;; - Toggle marker state at point (sss-toggle-at-point)
+;; - Overlay mode for visual marker highlighting (sss-toggle-overlay-mode)
+;; - Preview decrypted secret at point (sss-preview-at-point)
+;; - Auth-source integration for keystore passphrase (sss-use-auth-source)
+;; - Transient command menu with fallback (sss-dispatch)
+;; - Fixed keygen to use non-deprecated CLI command
 
 ;;; Code:
 
@@ -77,7 +86,7 @@ Applied to regions matching the sealed-marker pattern."
   (list
    '("\xe2\x8a\x95{[^}]*}" . 'sss-open-face)
    '("\xe2\x8a\xa0{[^}]*}" . 'sss-sealed-face))
-  "Font-lock keyword list for sss-mode.
+  "Font-lock keyword list for `sss-mode'.
 Highlights open markers and sealed markers with distinct faces.")
 
 (defvar-local sss--state nil

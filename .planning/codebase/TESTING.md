@@ -4,102 +4,121 @@
 
 ## Test Framework
 
-**Runner:**
-- Built-in Rust test harness (no external test runner)
-- Cargo test execution: `cargo test`
-- No test configuration file (uses Cargo defaults)
+**Language: Rust**
 
-**Assertion Library:**
-- Standard Rust `assert!()`, `assert_eq!()`, `assert_ne!()` macros
-- `proptest` for property-based testing (version 1.5 in Cargo.toml)
-- Custom `prop_assert!()` within proptest blocks
+**Runner:**
+- Built-in `cargo test` with Cargo.toml integration
+- Config file: `Cargo.toml` (no separate test config)
+- Test binary locations: `tests/` directory (integration tests), embedded in `src/` (unit tests)
+
+**Dev Dependencies:**
+- `proptest = "1.5"` - Property-based testing
+- `criterion = "0.5"` - Benchmarking and performance testing
+- `serial_test = "3.0"` - Serial test execution (for tests requiring isolated environments)
+- `tempfile = "3.21.0"` - Temporary directories/files for test isolation
 
 **Run Commands:**
 ```bash
-cargo test              # Run all tests
-cargo test --lib       # Run library unit tests only
-cargo test --test '*'  # Run integration tests
-cargo test -- --nocapture  # Show println output
-cargo test -- --test-threads=1  # Run serially (for shared state tests)
+cargo test                    # Run all tests
+cargo test --lib             # Unit tests only (src/ level #[test])
+cargo test --test '*'        # Integration tests only (tests/ directory)
+cargo test -- --nocapture    # Show println! output
+cargo test -- --test-threads=1  # Run serially
+cargo test --release         # Run with optimizations
+cargo bench                   # Run benchmarks with criterion
 ```
+
+**Assertion Library:**
+- Standard Rust `assert!`, `assert_eq!`, `assert_ne!`
+- Custom matchers via pattern matching on `Result` types
+- No external assertion library (unwrap and explicit pattern matching instead)
+
+---
 
 ## Test File Organization
 
-**Location:**
-- Integration tests: `tests/` directory (separate from source)
-- Unit tests: Co-located with source code using `#[cfg(test)]` modules
-- Benchmarks: `benches/marker_inference.rs`
-- Test submodules: `tests/marker_inference/` organization with helper modules
+**Location - Unit Tests:**
+- **Co-located** in same file as implementation code, within `#[cfg(test)]` modules
+- Example: `src/error.rs` contains both error type and test module at end
+- Example: `src/editor.rs` has `#[cfg(test)] mod tests { ... }`
 
-**Naming:**
-- Integration test files follow pattern: `*_tests.rs` or `*_integration.rs`
-- Security-focused tests: `*_security_tests.rs` (e.g., `crypto_security_tests.rs`)
-- Feature tests: `*_integration.rs` (e.g., `command_integration.rs`)
-- Edge case tests: `*_edge_cases.rs` (e.g., `processor_edge_cases.rs`, `scanner_edge_cases.rs`)
+**Location - Integration Tests:**
+- **Separate directory**: `tests/` at project root
+- Files: 35 integration/system test files
+- Example files:
+  - `tests/crypto_security_tests.rs` - Cryptographic operations
+  - `tests/fuse_integration.rs` - FUSE filesystem integration
+  - `tests/command_integration.rs` - Command-line interface
+  - `tests/marker_inference_tests.rs` - Marker inference specification compliance
 
-**Structure:**
+**Naming Convention:**
+- Files: `snake_case_tests.rs` or `snake_case_integration.rs`
+- Test functions: `test_description_with_underscores()`
+- Descriptive names that read as specifications:
+  - `test_nonce_uniqueness_for_different_content()`
+  - `test_section_8_3_example_1_consistent_marking()`
+  - `test_validation_module_integration()`
+
+**Directory Structure:**
 ```
 tests/
-├── command_integration.rs
-├── crypto_security_tests.rs
-├── error_handling_tests.rs
-├── keystore_security_tests.rs
-├── marker_inference_tests.rs
-├── merge_integration_tests.rs
-├── processor_edge_cases.rs
-├── scanner_edge_cases.rs
-├── scanner_integration_tests.rs
-├── validation_security_tests.rs
-├── verb_commands.rs
-└── marker_inference/
-    ├── mod.rs
-    ├── properties.rs
-    ├── edge_cases.rs
-    ├── integration.rs
-    └── spec_compliance.rs
+├── crypto_security_tests.rs       # Crypto operations
+├── crypto_properties.rs            # Property-based crypto tests
+├── fuse_integration.rs             # FUSE filesystem mount tests
+├── command_integration.rs          # CLI command tests
+├── marker_inference_tests.rs       # Specification compliance
+├── marker_inference/               # Submodule for marker tests
+│   ├── mod.rs
+│   ├── edge_cases.rs
+│   ├── integration.rs
+│   ├── spec_compliance.rs
+│   └── properties.rs
+├── keystore_integration_tests.rs   # Keystore operations
+├── error_handling_tests.rs         # Error scenarios
+├── command_username_resolution.rs  # Username handling
+└── [20+ other integration tests]
 ```
+
+---
 
 ## Test Structure
 
-**Suite Organization:**
+### Unit Test Pattern
+
+**Basic test module (in source file):**
 ```rust
-// error_handling_tests.rs pattern - flat test functions
-/// Comprehensive error handling tests for SssError types
-///
-/// This test suite covers error type behavior:
-/// - Display formatting
-/// - Error source chains
-/// - Conversion from other error types
-/// - Error propagation
-/// - Error matching and recovery
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-use sss::error::SssError;
-use std::error::Error;
-use std::io;
+    #[test]
+    fn test_error_display() {
+        let crypto_err = SssError::Crypto("encryption failed".to_string());
+        assert_eq!(
+            crypto_err.to_string(),
+            "Cryptographic error: encryption failed"
+        );
+    }
 
-#[test]
-fn test_crypto_error_display() {
-    let error = SssError::Crypto("encryption failed".to_string());
-    assert_eq!(error.to_string(), "Cryptographic error: encryption failed");
-}
-
-#[test]
-fn test_keystore_error_display() {
-    let error = SssError::Keystore("key not found".to_string());
-    assert_eq!(error.to_string(), "Keystore error: key not found");
+    #[test]
+    fn test_error_conversions() {
+        let io_error = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "access denied"
+        );
+        let sss_error = SssError::from(io_error);
+        match sss_error {
+            SssError::Io(_) => (),
+            _ => panic!("Expected Io variant"),
+        }
+    }
 }
 ```
 
-**Patterns:**
-- Each `#[test]` function is independent and self-contained
-- Descriptive test names starting with `test_` prefix
-- Module-level doc comments describing test suite purpose
-- Use of helper functions for common setup (e.g., `with_temp_dir()`)
-- Serial test execution using `#[serial]` attribute from `serial_test` crate for tests with shared state
+### Integration Test Pattern
 
-**Example Setup Pattern from command_integration.rs:**
+**Setup and teardown with temporary directories:**
 ```rust
-/// Test helper to set up a temporary directory as current working directory
 fn with_temp_dir<F>(test: F)
 where
     F: FnOnce(&Path),
@@ -108,313 +127,501 @@ where
     let original_dir = env::current_dir().expect("Failed to get current dir");
 
     env::set_current_dir(temp_dir.path()).expect("Failed to change to temp dir");
-
     test(temp_dir.path());
-
     env::set_current_dir(original_dir).expect("Failed to restore original dir");
 }
 
 #[test]
-#[serial]
 fn test_validation_module_integration() {
-    use sss::validation::{validate_base64, validate_file_path, validate_username};
-
-    // Test username validation
-    assert!(validate_username("valid_user").is_ok());
-    assert!(validate_username("admin").is_err()); // Reserved name
-    assert!(validate_username("user@invalid").is_err()); // Invalid character
-
-    // Test file path validation
     with_temp_dir(|temp_path| {
-        // Create a test file
+        // Create test file
         let test_file = temp_path.join("test.txt");
         fs::write(&test_file, "test content").expect("Failed to write test file");
 
-        // Valid relative path
+        // Test assertions
         assert!(validate_file_path("test.txt").is_ok());
     });
 }
 ```
 
-## Mocking
+### FUSE Integration Test Pattern
 
-**Framework:**
-- No external mocking library (proptest used for property-based testing only)
-- Custom trait implementations for testing (e.g., `StdFileSystemOps`, `SecretsCache`)
-- Test doubles created with minimal boilerplate
-
-**Patterns:**
+**Multi-step project setup:**
 ```rust
-// From integration_qa_refactoring.rs - trait-based abstraction
-use sss::secrets::{interpolate_secrets, FileSystemOps, SecretsCache, StdFileSystemOps};
-
-/// Test that StdFileSystemOps correctly implements FileSystemOps
-#[test]
-fn test_std_filesystem_ops_implementation() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let test_file = temp_dir.path().join("test.txt");
-
-    // Create a test file
-    fs::write(&test_file, "test content")?;
-
-    let fs_ops = StdFileSystemOps;
-
-    // Test file_exists
-    assert!(fs_ops.file_exists(&test_file));
-    assert!(!fs_ops.file_exists(&temp_dir.path().join("nonexistent.txt")));
-
-    // Test read_file
-    let content = fs_ops.read_file(&test_file)?;
-    assert_eq!(content, b"test content");
-
-    // Test read_file error handling
-    let result = fs_ops.read_file(&temp_dir.path().join("nonexistent.txt"));
-    assert!(result.is_err());
-
-    Ok(())
-}
-```
-
-**What to Mock:**
-- Filesystem operations via trait abstraction (`FileSystemOps`)
-- Temporary directories using `tempfile` crate
-- Custom rate limiters instantiated with test parameters
-- Cryptographic keys generated fresh for each test
-
-**What NOT to Mock:**
-- Actual cryptographic operations (test real security properties)
-- Core business logic (processor, scanner, merge algorithms)
-- Configuration loading (test with real files)
-- Error types (test actual error propagation)
-
-## Fixtures and Factories
-
-**Test Data:**
-```rust
-// crypto_security_tests.rs pattern - simple inline data
-#[test]
-fn test_nonce_uniqueness_for_different_content() {
-    // Verify that different plaintext produces different nonces (via different ciphertext)
-    let key = RepositoryKey::new();
-    let timestamp = "2025-01-01T00:00:00Z";
-    let file_path = "test.txt";
-
-    let plaintext1 = "secret1";
-    let plaintext2 = "secret2";
-
-    let encrypted1 = crypto::encrypt(plaintext1.as_bytes(), &key, timestamp, file_path).unwrap();
-    let encrypted2 = crypto::encrypt(plaintext2.as_bytes(), &key, timestamp, file_path).unwrap();
-
-    // Different plaintexts should produce different ciphertexts
-    assert_ne!(encrypted1, encrypted2);
+struct TestProject {
+    source_dir: TempDir,
+    mount_dir: TempDir,
+    home_dir: TempDir,
+    mount_process: Option<std::process::Child>,
 }
 
-// marker_inference/properties.rs pattern - property-based generators
-proptest! {
-    #![proptest_config(proptest_config())]
-    /// Property: Applying inference twice should give the same result (idempotence)
-    #[test]
-    fn prop_idempotence(source in "[a-z ]{0,100}", edited in "[a-z ]{0,100}") {
-        if let Ok(result1) = infer_markers(&source, &edited) {
-            // Applying again should give same result
-            if let Ok(result2) = infer_markers(&result1.output, &edited) {
-                prop_assert_eq!(result1.output, result2.output);
-            }
+impl TestProject {
+    fn new() -> anyhow::Result<Self> {
+        let source_dir = TempDir::new()?;
+        let home_dir = TempDir::new()?;
+
+        // Generate keypair in temp HOME
+        let keygen_output = Command::new(env!("CARGO_BIN_EXE_sss"))
+            .arg("keys")
+            .arg("generate")
+            .arg("--no-password")
+            .arg("--force")
+            .env("HOME", home_dir.path())
+            .output()?;
+
+        if !keygen_output.status.success() {
+            anyhow::bail!("Failed to generate keypair");
         }
+
+        // Initialize SSS project
+        let output = Command::new(env!("CARGO_BIN_EXE_sss"))
+            .arg("init")
+            .arg("testuser")
+            .env("HOME", home_dir.path())
+            .current_dir(source_dir.path())
+            .output()?;
+
+        Ok(Self {
+            source_dir,
+            mount_dir,
+            home_dir,
+            mount_process: None,
+        })
+    }
+
+    fn source_path(&self) -> &Path {
+        self.source_dir.path()
     }
 }
 ```
 
-**Location:**
-- Inline in test functions (no separate fixture files)
-- `tempfile::TempDir` for filesystem fixtures
-- Custom builders for complex objects (`RepositoryKey::new()`, `Keystore::new_with_*()`)
-- Proptest generators for property-based testing
+### Specification Compliance Test Pattern
 
-## Coverage
-
-**Requirements:** Not enforced. No COVERAGESPEC or coverage targets defined
-
-**View Coverage:**
-```bash
-# Generate coverage reports (requires cargo-tarpaulin or llvm-cov)
-cargo tarpaulin --out Html
-cargo llvm-cov --html
-```
-
-**Coverage Strategy:**
-- Focus on critical security operations (cryptography, keystore, validation)
-- Edge case testing via property-based tests
-- Error paths tested explicitly
-- Integration tests validate end-to-end workflows
-
-## Test Types
-
-**Unit Tests:**
-- Scope: Individual functions and modules (error handling, validation, crypto operations)
-- Approach: Direct function calls with known inputs/outputs
-- Location: Co-located in source files with `#[cfg(test)]` modules or separate unit test files
-- Example: `error_handling_tests.rs` tests each `SssError` variant display and conversion
-
-**Integration Tests:**
-- Scope: Multi-component workflows (file scanning, processing, keystore operations)
-- Approach: Set up temporary directories, create files, invoke components in sequence
-- Location: `tests/` directory with `_integration.rs` suffix
-- Example: `command_integration.rs` tests validation module, rate limiter, and config manager together
-- Span ~15,000+ lines of test code across 30+ test files
-
-**Property-Based Tests:**
-- Framework: `proptest` (version 1.5)
-- Scope: Algorithm invariants and behavioral properties
-- Approach: Generate random inputs, verify properties hold
-- Example from `marker_inference/properties.rs`:
+**Section-by-section testing with documented examples:**
 ```rust
-proptest! {
-    #![proptest_config(proptest_config())]
-    /// Property: Content preservation - rendered output should match edited text
-    #[test]
-    fn prop_content_preservation(
-        content in "[a-z0-9 ]{1,50}"
-    ) {
-        let source = format!("o+{{{}}}", content);
-        let edited = content.clone();
-
-        if let Ok(result) = infer_markers(&source, &edited) {
-            // Remove all markers from output
-            let rendered = get_rendered(&result.output);
-            prop_assert_eq!(rendered.trim(), edited.trim());
-        }
-    }
-}
-```
-
-**Performance Benchmarks:**
-- Framework: `criterion` (version 0.5)
-- Location: `benches/marker_inference.rs`
-- Approach: Micro-benchmarks of critical code paths
-- Example:
-```rust
-fn bench_small_file(c: &mut Criterion) {
-    let source = "password: o+{secret123}";
-    let edited = "password: newsecret456";
-
-    c.bench_function("infer_small", |b| {
-        b.iter(|| infer_markers(black_box(source), black_box(edited)))
-    });
-}
-```
-
-## Common Patterns
-
-**Async Testing:**
-- No async code in codebase; not applicable
-
-**Error Testing:**
-```rust
-// From error_handling_tests.rs - error type conversions
+/// Section 8.3 Example 1: Consistent Marking
+///
+/// Spec quote: "Both quotes outside marker, content inside marked"
+///
+/// Source:  key: "o+{value}"
+/// Edited:  key: "newvalue"
+/// Result:  key: "⊕{newvalue}"
 #[test]
-fn test_io_error_conversion() {
-    let io_error = io::Error::new(io::ErrorKind::NotFound, "file not found");
-    let error = SssError::Io(io_error);
+fn test_section_8_3_example_1_consistent_marking() {
+    let source = r#"key: "o+{value}""#;
+    let edited = r#"key: "newvalue""#;
 
-    // Should have source for IO errors
-    assert!(error.source().is_some());
-}
+    let result = infer_markers(source, edited).expect("Inference should succeed");
 
-#[test]
-fn test_error_source_for_others() {
-    // Other error types should not have source
-    assert!(SssError::Crypto("test".to_string()).source().is_none());
-    assert!(SssError::Keystore("test".to_string()).source().is_none());
-    assert!(SssError::Config("test".to_string()).source().is_none());
-}
-```
+    // Verify quotes are OUTSIDE the marker
+    assert!(
+        result.output.contains(r#"key: "⊕{newvalue}""#)
+            || result.output.contains(r#"key: "o+{newvalue}""#),
+        "Delimiters should be outside marker. Got: {}",
+        result.output
+    );
 
-**Cryptographic Testing:**
-```rust
-// From crypto_security_tests.rs - testing deterministic properties
-#[test]
-fn test_deterministic_encryption_same_inputs() {
-    // Verify that same inputs produce same output (for git-friendly diffs)
-    let key = RepositoryKey::new();
-    let timestamp = "2025-01-01T00:00:00Z";
-    let file_path = "test.txt";
-    let plaintext = "my_secret";
-
-    let encrypted1 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, file_path).unwrap();
-    let encrypted2 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, file_path).unwrap();
-
-    // Same inputs should produce identical output
-    assert_eq!(encrypted1, encrypted2);
-}
-
-// Testing nonce uniqueness across large datasets
-#[test]
-fn test_no_nonce_reuse_across_large_dataset() {
-    // Generate many nonces and ensure no duplicates
-    let key = RepositoryKey::new();
-    let timestamp = "2025-01-01T00:00:00Z";
-
-    let mut nonces = HashSet::new();
-
-    for i in 0..1000 {
-        let plaintext = format!("secret_{}", i);
-        let encrypted = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, "test.txt").unwrap();
-        let nonce = encrypted[0..24].to_vec();
-
-        // Each nonce should be unique
-        assert!(nonces.insert(nonce), "Nonce reuse detected at iteration {}", i);
-    }
-
-    // Verify we got 1000 unique nonces
-    assert_eq!(nonces.len(), 1000);
+    // Ensure quotes are NOT inside the marker
+    assert!(
+        !result.output.contains(r#"⊕{"newvalue"}"#)
+            && !result.output.contains(r#"o+{"newvalue"}"#),
+        "Delimiters should NOT be inside marker. Got: {}",
+        result.output
+    );
 }
 ```
 
-**Serial Test Execution:**
+### Serial Execution Pattern
+
+**For tests requiring isolated test environment:**
 ```rust
-// From command_integration.rs - using serial_test for shared state
 use serial_test::serial;
 
 #[test]
 #[serial]
 fn test_validation_module_integration() {
-    use sss::validation::{validate_base64, validate_file_path, validate_username};
-
-    // Test body with shared global state
-    // ...
+    use sss::validation::{validate_base64, validate_file_path};
+    // Test that requires no concurrent execution
 }
 ```
 
-**Proptest Configuration:**
+---
+
+## Mocking
+
+**Framework:** Rust standard library only - no external mocking framework used
+
+**Patterns:**
+
+**1. Temporary File/Directory Mocking:**
 ```rust
-// From marker_inference/properties.rs - disable file persistence for parallel execution
-fn proptest_config() -> Config {
-    Config {
-        // Disable file persistence to avoid race conditions in parallel test execution
-        failure_persistence: None,
-        ..Config::default()
+use tempfile::TempDir;
+
+let temp_dir = TempDir::new()?;
+let test_file = temp_dir.path().join("test.txt");
+fs::write(&test_file, b"content")?;
+```
+
+**2. Subprocess Mocking:**
+```rust
+let output = Command::new(env!("CARGO_BIN_EXE_sss"))
+    .arg("init")
+    .arg("testuser")
+    .env("HOME", home_dir.path())
+    .current_dir(source_dir.path())
+    .output()?;
+
+assert!(output.status.success());
+```
+
+**3. Test-specific Initialization:**
+```rust
+#[test]
+fn test_crypto_deterministic() {
+    let key = RepositoryKey::new();
+    let plaintext = "my_secret";
+
+    let encrypted1 = crypto::encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "file.txt")?;
+    let encrypted2 = crypto::encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "file.txt")?;
+
+    assert_eq!(encrypted1, encrypted2);
+}
+```
+
+**4. Error Simulation:**
+```rust
+let io_error = std::io::Error::new(
+    std::io::ErrorKind::PermissionDenied,
+    "access denied"
+);
+let sss_error = SssError::from(io_error);
+match sss_error {
+    SssError::Io(_) => assert!(true),
+    _ => panic!("Expected Io variant"),
+}
+```
+
+**What to Mock:**
+- Filesystem operations (via `tempfile` crate)
+- Subprocess calls (via `std::process::Command`)
+- Cryptographic operations (create fresh keys per test)
+- Time/timestamps (pass as arguments, not system time)
+
+**What NOT to Mock:**
+- Core cryptographic primitives (test actual encryption)
+- Configuration parsing (test with real TOML)
+- Validation logic (test with real data patterns)
+- Error type conversions (test actual From implementations)
+
+---
+
+## Fixtures and Factories
+
+**Test Data Pattern:**
+```rust
+#[test]
+fn test_nonce_uniqueness_for_different_content() {
+    let key = RepositoryKey::new();          // Fresh key per test
+    let timestamp = "2025-01-01T00:00:00Z";  // Fixed timestamp
+    let file_path = "test.txt";               // Consistent path
+
+    let plaintext1 = "secret1";
+    let plaintext2 = "secret2";
+
+    let encrypted1 = crypto::encrypt(plaintext1.as_bytes(), &key, timestamp, file_path)?;
+    let encrypted2 = crypto::encrypt(plaintext2.as_bytes(), &key, timestamp, file_path)?;
+
+    assert_ne!(encrypted1, encrypted2);
+}
+```
+
+**Location:**
+- Fixtures defined inline in test functions (small, focused tests)
+- Helper structs in same test file (e.g., `TestProject` in `fuse_integration.rs`)
+- No separate fixtures directory (data embedded in tests)
+
+**Factory Pattern:**
+```rust
+impl TestProject {
+    fn new() -> anyhow::Result<Self> {
+        // Initialize complete test environment
+    }
+
+    fn source_path(&self) -> &Path {
+        self.source_dir.path()
+    }
+
+    fn mount_path(&self) -> &Path {
+        self.mount_dir.path()
     }
 }
+```
 
-proptest! {
-    #![proptest_config(proptest_config())]
-    // ... property tests
+---
+
+## Coverage
+
+**Requirements:** Not enforced by tooling (no coverage target enforced in CI)
+
+**View Coverage:**
+```bash
+# Requires tarpaulin or llvm-cov installation
+cargo tarpaulin --out Html  # HTML report
+# or
+cargo llvm-cov             # Requires Rust 1.70+
+```
+
+**Coverage Areas:**
+- Core cryptographic operations: extensive
+- CLI command handling: partial (some commands tested via integration tests)
+- FUSE filesystem: extensive (fuse_integration.rs covers mount/unmount/file operations)
+- Error handling: extensive (crypto_security_tests.rs, error_handling_tests.rs)
+- Marker inference: extensive (marker_inference_tests.rs with spec-based examples)
+
+**Coverage Gaps:**
+- Some edge cases in WinFSP (Windows filesystem) implementation
+- Stress testing under high concurrency not comprehensive
+- Some interactive TTY features in askpass binaries
+
+---
+
+## Test Types
+
+### Unit Tests
+
+**Scope:** Single function or small module
+**Approach:** Isolated logic, in-process execution
+
+**Examples:**
+- `src/error.rs`: Error type conversions and Display impl
+- `src/editor.rs`: Editor path resolution
+- `src/keyring_manager.rs`: Keyring operations
+
+**Pattern:**
+```rust
+#[test]
+fn test_error_macros() {
+    let err = crypto_error!("test error");
+    match err {
+        SssError::Crypto(msg) => assert_eq!(msg, "test error"),
+        _ => panic!("Expected Crypto variant"),
+    }
 }
 ```
 
-## Dependencies for Testing
+### Integration Tests
 
-**Core Testing:**
-- `tempfile` 3.21.0 - Temporary file/directory creation
-- `proptest` 1.5 - Property-based testing framework
-- `serial_test` 3.0 - Serial test execution (for tests with shared state)
-- `criterion` 0.5 - Performance benchmarking
+**Scope:** Multiple modules working together, filesystem or subprocess calls
+**Approach:** Real environment setup (temp directories, subprocess execution)
 
-**Test Organization:**
-- 30+ integration test files with ~15,900 total lines
-- Comprehensive coverage of security operations, edge cases, and error handling
-- Recent additions: Security test suites, comprehensive integration tests (81 tests added)
+**Examples:**
+- `tests/command_integration.rs` - Full CLI command workflows
+- `tests/keystore_integration_tests.rs` - Keystore + crypto + config
+- `tests/fuse_integration.rs` - Mount, render, unmount cycle
+
+**Pattern:**
+```rust
+#[test]
+#[serial]
+fn test_validation_module_integration() {
+    with_temp_dir(|temp_path| {
+        fs::write(temp_path.join("test.txt"), "content")?;
+        assert!(validate_file_path("test.txt").is_ok());
+    });
+}
+```
+
+### Property-Based Tests
+
+**Framework:** `proptest = "1.5"`
+**Files:** `tests/crypto_properties.rs`, `tests/marker_inference/properties.rs`
+
+**Pattern:**
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn test_deterministic_for_same_inputs(content in ".*") {
+        let key = RepositoryKey::new();
+
+        let enc1 = crypto::encrypt(content.as_bytes(), &key, "2025-01-01T00:00:00Z", "test.txt")?;
+        let enc2 = crypto::encrypt(content.as_bytes(), &key, "2025-01-01T00:00:00Z", "test.txt")?;
+
+        prop_assert_eq!(enc1, enc2);
+    }
+}
+```
+
+### Benchmarks
+
+**Framework:** `criterion = "0.5"`
+**Benchmark file:** `benches/marker_inference.rs`
+**Target:** Marker inference performance
+
+**Run:**
+```bash
+cargo bench                          # Run all benchmarks
+cargo bench --bench marker_inference # Specific benchmark
+```
+
+**Pattern:**
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn marker_inference_benchmark(c: &mut Criterion) {
+    c.bench_function("infer_markers_simple", |b| {
+        b.iter(|| infer_markers(
+            black_box(source),
+            black_box(edited)
+        ))
+    });
+}
+```
+
+### E2E Tests
+
+**Scope:** Complete workflows from CLI entry to filesystem result
+**Files:** `tests/fuse_integration.rs` (primary E2E test)
+
+**Pattern:**
+1. Create temp directories for source/mount/HOME
+2. Generate cryptographic keypair
+3. Initialize SSS project
+4. Create/modify encrypted files
+5. Mount FUSE filesystem
+6. Verify file rendering
+7. Verify marker inference
+8. Unmount and cleanup
+
+---
+
+## Common Patterns
+
+### Async Testing
+
+**Status:** Not used (codebase is synchronous)
+
+Optional async support via `#[tokio::test]` for features using tokio (e.g., 9P server):
+- `tests/ninep_integration.rs` would use async patterns if fully implemented
+- Current 9P support is feature-gated and not heavily tested
+
+### Error Testing
+
+**Pattern - Testing error types:**
+```rust
+#[test]
+fn test_error_conversions() {
+    let io_error = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "access denied"
+    );
+    let sss_error = SssError::from(io_error);
+
+    match sss_error {
+        SssError::Io(_) => (),
+        _ => panic!("Expected Io variant"),
+    }
+}
+```
+
+**Pattern - Testing error messages:**
+```rust
+#[test]
+fn test_error_display() {
+    let crypto_err = SssError::Crypto("encryption failed".to_string());
+    assert_eq!(
+        crypto_err.to_string(),
+        "Cryptographic error: encryption failed"
+    );
+}
+```
+
+**Pattern - Testing invalid inputs:**
+```rust
+#[test]
+fn test_validation_rejects_invalid_characters() {
+    assert!(validate_username("user@invalid").is_err());
+    assert!(validate_username("user\0invalid").is_err());
+}
+```
+
+### Cryptographic Testing
+
+**Pattern - Determinism verification:**
+```rust
+#[test]
+fn test_deterministic_encryption_same_inputs() {
+    let key = RepositoryKey::new();
+    let encrypted1 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, file_path)?;
+    let encrypted2 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, file_path)?;
+
+    assert_eq!(encrypted1, encrypted2);
+}
+```
+
+**Pattern - Nonce verification:**
+```rust
+#[test]
+fn test_nonce_changes_with_file_path() {
+    let key = RepositoryKey::new();
+    let enc1 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, "file1.txt")?;
+    let enc2 = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, "file2.txt")?;
+
+    assert_ne!(enc1, enc2);  // Different nonces
+}
+```
+
+---
+
+## Emacs Lisp Testing
+
+**Status:** No automated test framework in use
+
+**Manual Testing Patterns:**
+- Interactive testing via `M-x load-file`
+- Evaluation of test forms via `eval-after-load`
+- Temporary buffer creation for testing
+- No test runners or CI integration
+
+**Examples from code:**
+```elisp
+(defun sss-pattern-at-point ()
+  "Return SSS pattern at point, or nil if none found."
+  (save-excursion
+    (let ((original-point (point)))
+      ;; Implementation tested via:
+      ;; 1. Create buffer with SSS pattern
+      ;; 2. Position point inside pattern
+      ;; 3. Call function interactively
+      ;; 4. Verify return value
+      )))
+```
+
+**Recommendation for future:** Consider `buttercup` (Emacs testing framework) or `ert` (built-in) for automated testing.
+
+---
+
+## Summary
+
+**Rust Testing:**
+- Comprehensive test coverage with 35+ integration test files
+- Unit tests co-located in source files, integration tests in `tests/` directory
+- Heavy use of temporary directories and subprocess execution for realistic scenarios
+- Property-based testing for cryptographic operations
+- Specification-compliance testing with documented examples
+- No external mocking framework - uses standard library patterns
+
+**Emacs Lisp Testing:**
+- Manual interactive testing only
+- No automated test framework integrated
+- Future: Consider `buttercup` or `ert` for automation
+
+**Key Strengths:**
+- Clear, descriptive test names that read as specifications
+- Comprehensive FUSE integration testing with real mount/unmount cycles
+- Security-focused tests (nonce verification, determinism, timing)
+- Specification-driven tests with direct quotes from design docs
 
 ---
 

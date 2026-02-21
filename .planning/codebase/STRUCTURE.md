@@ -6,235 +6,385 @@
 
 ```
 sss/
-├── src/                          # Primary Rust source
-│   ├── bin/                      # Binary entry points (sss-agent, sss-askpass-*)
-│   ├── commands/                 # Command handlers (mount, init, keys, seal, render, etc.)
-│   ├── fuse/                     # FUSE filesystem components (Linux/macOS)
-│   ├── marker_inference/         # Marker preservation and inference algorithm
-│   ├── processor/                # Content encryption/decryption pipeline
-│   ├── main.rs                   # CLI entry point, command routing
-│   ├── lib.rs                    # Library exports and module declarations
-│   ├── crypto.rs                 # libsodium bindings, KeyPair, RepositoryKey
-│   ├── scanner.rs                # File scanning with pattern detection
-│   ├── project.rs                # ProjectConfig, user management, TOML serialization
-│   ├── config.rs                 # Configuration loading, project root finding
-│   ├── keystore.rs               # Persistent key storage, password protection
-│   ├── kdf.rs                    # Key derivation functions (KDF parameters)
-│   ├── error.rs                  # Error types and conversions
-│   ├── validation.rs             # Input validation functions
-│   ├── constants.rs              # Constants (max file size, base64 length, etc.)
-│   └── [other modules]           # Support modules (agent, audit_log, editor, etc.)
-├── tests/                        # Integration tests
-├── Cargo.toml                    # Manifest with features (fuse, ninep, winfsp)
-├── README.md                     # Project documentation
-├── ARCHITECTURE.md               # Existing architecture notes
-├── .sss.toml                     # Project configuration (if initialized)
-└── docs/                         # Additional documentation
-
-Key subdirectories by layer:
-├── src/fuse/                     # FUSE-specific code
-│   ├── inode_manager.rs          # Inode allocation and mapping
-│   ├── file_cache.rs             # Content caching and handles
-│   └── virtual_fs.rs             # Virtual path resolution
-├── src/marker_inference/         # Marker algorithm
-│   ├── diff.rs                   # Change detection
-│   ├── mapper.rs                 # Position mapping
-│   ├── propagator.rs             # Duplicate marking
-│   ├── validator.rs              # Delimiter validation
-│   └── [others]                  # Supporting stages
-└── src/processor/                # Processing pipeline
-    ├── core.rs                   # Main Processor implementation
-    └── marker_parser.rs          # Marker finding and parsing
+├── src/                    # Rust source code
+│   ├── bin/                # Binary entry points (sss-agent, sss-askpass-*)
+│   ├── commands/           # CLI command handlers (20+ modules)
+│   ├── marker_inference/   # Smart marker preservation (8 modules)
+│   ├── fuse/               # FUSE filesystem internals (4 modules)
+│   ├── processor/          # Content transformation (2 modules)
+│   ├── main.rs             # CLI app definition and routing
+│   ├── lib.rs              # Module exports and public API
+│   ├── crypto.rs           # Encryption/decryption (XChaCha20-Poly1305)
+│   ├── keystore.rs         # Key storage and KDF
+│   ├── keyring_manager.rs  # System keyring integration
+│   ├── project.rs          # ProjectConfig structure
+│   ├── config.rs           # Configuration loading
+│   ├── scanner.rs          # File pattern scanning
+│   ├── secrets.rs          # Secrets interpolation
+│   ├── merge.rs            # Merge conflict handling
+│   ├── rotation.rs         # Key rotation logic
+│   ├── fuse_fs.rs          # FUSE filesystem impl (Linux/macOS)
+│   ├── ninep_fs.rs         # 9P protocol server
+│   ├── winfsp_fs.rs        # Windows filesystem impl
+│   ├── error.rs            # Error types
+│   ├── audit_log.rs        # Audit logging
+│   └── [10+ support modules]
+├── tests/                  # Integration and e2e tests (50+ files)
+├── emacs/                  # NEW: Single-file Emacs mode (v1.0)
+│   ├── sss-mode.el         # Transparent decrypt-on-open, re-seal-on-save (354 lines)
+│   └── sss-mode.elc        # Compiled bytecode
+├── plugins/emacs/          # OLDER: Multi-file implementation
+│   ├── sss.el              # Core interface (455 lines)
+│   ├── sss-mode.el         # Minor mode & highlighting (214 lines)
+│   ├── sss-ui.el           # Transient menus (318 lines)
+│   ├── sss-project.el      # Project management (276 lines)
+│   ├── sss-utils.el        # Utilities (336 lines)
+│   ├── sss-doom.el         # Doom Emacs integration (322 lines)
+│   └── README.md           # Comprehensive documentation
+├── docs/                   # Documentation
+│   ├── architecture.md     # System architecture
+│   ├── CRYPTOGRAPHY.md     # Crypto details
+│   ├── MARKER_INFERENCE_*.md
+│   ├── security-model.md   # Security analysis
+│   └── [20+ docs]
+├── rpm-build/              # RPM package building
+├── debian/                 # Debian package building
+├── scripts/                # Utility scripts
+├── benches/                # Benchmarks (marker_inference.rs)
+├── examples/               # Example code
+├── Cargo.toml              # Rust package manifest
+├── Cargo.lock              # Dependency lock file
+├── build.rs                # Build script
+├── LICENCE                 # ISC license
+└── README.md               # Main project README
 ```
 
 ## Directory Purposes
 
-**src:**
-- Purpose: All Rust source code
-- Contains: Main library code, binaries, command implementations
-- Key files: `main.rs` (entry point), `lib.rs` (module exports), `crypto.rs` (cryptography core)
+**src/ — Rust Implementation:**
+- Core application logic
+- 70+ modules organized by layer
+- Public API exported through `lib.rs`
 
-**src/commands:**
-- Purpose: Individual command handlers
-- Contains: Implementation of each CLI subcommand
-- Key files: `init.rs` (initialization), `keys.rs` (key management), `mount.rs` (FUSE mount), `process.rs` (seal/open/render/edit), `project.rs` (project settings)
+**src/commands/ — CLI Command Handlers:**
+- `init.rs`: Project initialization
+- `keys.rs`: Key management (generate, list, rotate)
+- `process.rs`: seal/open/render/edit commands
+- `mount.rs`: FUSE mount (Linux/macOS)
+- `ninep.rs`: 9P server (experimental)
+- `project.rs`: Project settings management
+- `users.rs`: Project user management
+- `settings.rs`: User preferences
+- `hooks.rs`: Git hooks management
+- `agent.rs`: Agent daemon (experimental)
+- `utils.rs`: Shared command utilities
+- `mod.rs`: Command export/routing
 
-**src/fuse:**
-- Purpose: FUSE filesystem implementation (Linux/macOS only)
-- Contains: Inode management, file caching, virtual filesystem operations
-- Key files: `inode_manager.rs` (inode allocation), `file_cache.rs` (content cache), `virtual_fs.rs` (path translation)
+**src/marker_inference/ — Intelligent Marker Preservation:**
+- `mod.rs`: Algorithm overview and public API
+- `parser.rs`: Extract markers from source
+- `diff.rs`: Compute changes between versions
+- `mapper.rs`: Map change positions
+- `expander.rs`: Apply 5 expansion rules
+- `propagator.rs`: Mark duplicate content
+- `reconstructor.rs`: Build output with canonical format
+- `validator.rs`: Delimiter pair validation
+- `types.rs`: Data structures
 
-**src/marker_inference:**
-- Purpose: Intelligent marker preservation algorithm
-- Contains: 8-step marker inference process for edits
-- Key files: `diff.rs` (change detection), `mapper.rs` (position mapping), `propagator.rs` (propagate markers to duplicates), `validator.rs` (validate paired delimiters)
+**src/fuse/ — FUSE Filesystem Internals:**
+- `mod.rs`: FUSE module organization
+- `inode_manager.rs`: Inode tracking
+- `file_cache.rs`: File content caching
+- `virtual_fs.rs`: Virtual file operations
 
-**src/processor:**
-- Purpose: Content encryption/decryption with marker handling
-- Contains: Processor implementation, marker parsing
-- Key files: `core.rs` (main Processor), `marker_parser.rs` (find balanced markers)
+**src/processor/ — Content Transformation:**
+- `core.rs`: Main Processor impl (encrypt, decrypt, render, seal, open)
+- `marker_parser.rs`: Balanced brace marker detection
 
-**tests:**
-- Purpose: Integration and unit tests
-- Contains: Test suites for various modules
-- Patterns: `*_tests.rs`, `*_edge_cases.rs`, `*_integration.rs` files
+**tests/ — Test Suite (50+ files):**
+- `marker_inference/`: Marker preservation tests
+- `*_integration.rs`: Full command workflows
+- `*_edge_cases.rs`: Boundary conditions
+- `crypto_*.rs`: Cryptography tests
+- `keystore_*.rs`: Key storage tests
+- `fuse_*.rs`: FUSE filesystem tests
+- Command-specific tests: `command_*.rs`
 
-**docs:**
-- Purpose: Additional documentation
-- Contains: System documentation, progress notes, test coverage reports
+**emacs/ — Modern Single-File Emacs Mode (v1.0):**
+- `sss-mode.el` (354 lines): Complete transparent encryption integration
+  - Auto-detect sealed files via magic-mode-alist
+  - Decrypt on open via find-file-hook
+  - Re-seal on save via write-contents-functions
+  - Commands: M-x sss-render-buffer, sss-init, sss-process, sss-keygen, sss-keys-list
+  - Keybindings: C-c C-o (open), C-c C-s (seal), C-c C-r (render)
+  - Font-lock highlighting: `⊕{...}` and `⊠{...}` markers with distinct faces
+  - Disables auto-save and backup automatically
+  - Status in modeline: SSS[sealed] or SSS[open]
+- `sss-mode.elc`: Compiled bytecode for fast loading
+
+**plugins/emacs/ — Comprehensive Multi-File Implementation (Older):**
+- `sss.el` (455 lines): Core interface
+  - Interactive region encryption/decryption
+  - Auth-source password caching
+  - Password cache with configurable timeout
+- `sss-mode.el` (214 lines): Minor mode
+  - Syntax highlighting
+  - Keybinding support
+  - Fancy visual mode option
+- `sss-ui.el` (318 lines): Transient menus
+  - Interactive command menus
+  - Completion support
+- `sss-project.el` (276 lines): Project management
+  - Initialize projects
+  - Add/remove users
+  - List projects
+- `sss-utils.el` (336 lines): Utilities
+  - Pattern detection and analysis
+  - Buffer analysis helpers
+- `sss-doom.el` (322 lines): Doom Emacs integration
+  - Evil operator support: `g e` for encrypt
+  - Text object: `i s` (inside secret)
+  - Leader key bindings: `SPC e` namespace
+  - Transient menu integration
+- `README.md`: 13.8 KB comprehensive documentation
+
+**docs/ — Documentation (25+ files):**
+- Architecture and design docs
+- Cryptography details
+- Marker specification and implementation
+- Security model analysis
+- Installation and building guides
+- Test coverage reports
+
+**rpm-build/, debian/ — Package Building:**
+- Distribution-specific packaging metadata
+- Build scripts for RPM and Debian
 
 ## Key File Locations
 
 **Entry Points:**
-- `src/main.rs`: CLI entry point, command creation, routing to handlers
-- `src/bin/sss-agent.rs`: Agent daemon binary
-- `src/bin/sss-askpass-tty.rs`: TTY password prompt binary
-- `src/bin/sss-askpass-gui.rs`: GUI password prompt binary
+- `src/main.rs` (835 lines): CLI app definition, feature-gated command registration, main() dispatcher
+- `src/lib.rs` (164 lines): Public API, module exports, integration tests
 
-**Configuration:**
-- `src/config.rs`: Config loading, project root finding, default config paths
-- `src/config_manager.rs`: User settings management
-- `src/project.rs`: ProjectConfig TOML structure, user enrollment
-- `.sss.toml`: Project configuration file (created during init)
-- `~/.config/sss/settings.toml`: User settings (keyring preference, default username, editor, etc.)
+**Core Encryption:**
+- `src/crypto.rs` (300+ lines): XChaCha20-Poly1305, KeyPair, RepositoryKey, deterministic nonces
+- `src/keystore.rs` (400+ lines): Key generation, Argon2id KDF, passphrase protection
+- `src/secure_memory.rs`: Memory zeroization utilities
 
-**Core Logic:**
-- `src/crypto.rs`: Cryptographic operations, libsodium bindings
-- `src/processor/core.rs`: Main Processor, encrypt/decrypt pipeline
-- `src/scanner.rs`: File scanning with SSS pattern detection
-- `src/keystore.rs`: Key storage and management
-- `src/kdf.rs`: Key derivation parameters and functions
+**Content Processing:**
+- `src/processor/core.rs` (500+ lines): Processor impl with encrypt/decrypt/render/seal/open methods
+- `src/processor/marker_parser.rs` (200+ lines): Balanced brace marker detection
+- `src/marker_inference/mod.rs` (8 modules, 1000+ lines total): Smart marker preservation
+
+**Project & Configuration:**
+- `src/project.rs` (400+ lines): ProjectConfig structure, user config, ignore patterns
+- `src/config.rs` (300+ lines): Config loading and key management
+- `src/config_manager.rs` (300+ lines): User settings in ~/.config/sss/
+
+**File Operations:**
+- `src/scanner.rs` (200+ lines): FileScanner for recursive pattern finding
+- `src/secrets.rs` (300+ lines): Secrets interpolation from secrets file
+- `src/filesystem_common.rs`: Shared filesystem detection utilities
+
+**Filesystem Layers:**
+- `src/fuse_fs.rs` (800+ lines): FUSE filesystem (Linux/macOS)
+- `src/ninep_fs.rs` (600+ lines): 9P protocol server
+- `src/winfsp_fs.rs` (300+ lines): Windows filesystem
+
+**Commands:**
+- `src/commands/process.rs` (300+ lines): seal/open/render/edit
+- `src/commands/mount.rs` (200+ lines): FUSE mount
+- `src/commands/keys.rs` (400+ lines): Key management
+- `src/commands/project.rs` (300+ lines): Project settings
+- `src/commands/init.rs` (200+ lines): Project initialization
 
 **Testing:**
-- `tests/`: All test files
-- `tests/*_tests.rs`: Unit/integration test suites
-- `tests/*_edge_cases.rs`: Edge case testing
-- `tests/*_integration.rs`: End-to-end integration tests
+- `tests/marker_inference_tests.rs`: Marker preservation
+- `tests/command_integration.rs`: CLI workflows
+- `tests/crypto_security_tests.rs`: Encryption validation
+- `tests/fuse_integration.rs`: Filesystem operations
 
 ## Naming Conventions
 
 **Files:**
-- `*.rs`: Rust source files
-- Command handlers: `src/commands/{command}.rs` (e.g., `mount.rs`, `keys.rs`)
-- Test files: `tests/{module}_{type}.rs` (e.g., `scanner_edge_cases.rs`, `processor_integration.rs`)
-- Binary entry points: `src/bin/{binary_name}.rs` (e.g., `sss-agent.rs`)
+- Source modules: `snake_case.rs` (e.g., `marker_inference.rs`, `config_manager.rs`)
+- Submodules: `mod.rs` in directory (e.g., `src/marker_inference/mod.rs`)
+- Tests: `*_tests.rs` or `*_integration.rs` (e.g., `crypto_security_tests.rs`)
+- Binary entries: `[name].rs` in `src/bin/` (e.g., `sss-agent.rs`)
 
 **Directories:**
-- Module directories: Lowercase with underscores (e.g., `marker_inference`, `src/commands`)
-- Subdirectories within modules: Logical grouping (e.g., `src/fuse/` contains FUSE-specific code)
+- Functional grouping: `src/commands/`, `src/fuse/`, `src/marker_inference/`
+- Module prefix: `src/bin/` for binaries, `src/fuse/` for submodule
+- Package structure: `plugins/[lang]/` (e.g., `plugins/emacs/`)
 
-**Modules:**
-- Snake_case: All Rust modules and files use lowercase with underscores
-- Public modules: Declared in `mod.rs` or parent module with `pub mod`
-- Re-exports: Main modules re-export public types in `lib.rs` and submodule `mod.rs`
+**Rust Code:**
+- Structs/Enums: `PascalCase` (e.g., `Processor`, `ProjectConfig`, `FileScanner`)
+- Functions: `snake_case` (e.g., `encrypt_content()`, `infer_markers()`)
+- Constants: `UPPER_SNAKE_CASE` (e.g., `MAX_FILE_SIZE`, `TTL`)
+- Modules: `snake_case` (e.g., `marker_inference`, `keystore`)
+- Private functions: prefix `_` (e.g., `_call_cli()` in emacs-mode.el)
 
-**Structures/Types:**
-- PascalCase: All public structs, enums, traits use PascalCase
-- Examples: `ProjectConfig`, `RepositoryKey`, `KeyPair`, `FileScanner`, `Processor`
-
-**Functions:**
-- snake_case: All functions use lowercase with underscores
-- Command handlers: `handle_{command}` (e.g., `handle_init`, `handle_mount`)
-- Builders/constructors: `new`, `new_with_*`, `default`
-
-**Constants:**
-- SCREAMING_SNAKE_CASE: All constants use uppercase with underscores
-- Examples: `MAX_FILE_SIZE`, `DEFAULT_CONFIG_FILE`, `SYMMETRIC_KEY_SIZE`
+**Emacs Lisp:**
+- Functions: `kebab-case` with namespace prefix (e.g., `sss-encrypt-region`, `sss-mode`)
+- Variables: `kebab-case` with package prefix (e.g., `sss-executable`, `sss--state`)
+- Private variables/functions: double dash `--` (e.g., `sss--sealed-p`, `sss--call-cli`)
+- Constants: all caps (e.g., `sss--sealed-marker`)
 
 ## Where to Add New Code
 
-**New Feature:**
-- Primary code: Create in appropriate `src/` module or extend existing
-  - If filesystem-related: `src/fuse/` (or `src/winfsp_fs.rs` for Windows)
-  - If cryptography-related: `src/crypto.rs` or new `src/crypto_*.rs` module
-  - If processing-related: `src/processor/` subdirectory
-  - If command-related: `src/commands/{command}.rs`
-- Tests: `tests/{feature}_tests.rs` or extend existing test file
-- Documentation: Add to code comments, update ARCHITECTURE.md if architecture changes
+**New Feature (Encryption Logic):**
+- Primary code: `src/processor/core.rs` (if content transformation) or new module in `src/`
+- Tests: `tests/[feature]_tests.rs` (integration) + `src/` internal unit tests
+- Documentation: `docs/` for spec, README for user-facing
 
 **New Command:**
-- Implementation: `src/commands/{command}.rs`
-- Handler function: `pub fn handle_{command}(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()>`
-- Registration: Add to `src/commands/mod.rs` exports
-- CLI parsing: Add subcommand builder in `src/main.rs` `create_cli_app()` function
-- Feature gates: Use `#[cfg(feature = "...")]` if platform-specific
+- Implementation: `src/commands/[name].rs`
+- Handler export: `src/commands/mod.rs` (add use statement and handler signature)
+- CLI routing: `src/main.rs` (add subcommand definition and match arm)
+- Tests: `tests/command_[name].rs` or append to `tests/command_integration.rs`
 
-**New Component/Module:**
-- Implementation: Create `src/{module_name}/mod.rs` (if submodule) or `src/{module_name}.rs` (if single file)
-- Subcomponents: Add to `src/{module_name}/mod.rs` as separate files
-- Exports: Re-export public types in `src/{module_name}/mod.rs`
-- Library export: Add to `src/lib.rs` if public API
+**New Marker Inference Rule:**
+- Algorithm: `src/marker_inference/expander.rs` (expansion rules)
+- Tests: `tests/marker_inference_tests.rs` (with specific rule test case)
+- Docs: Update `src/marker_inference/mod.rs` section on expansion rules
 
-**Utilities:**
-- Shared helpers: `src/validation.rs` (validation), `src/error_helpers.rs` (error conversion), `src/toml_helpers.rs` (TOML parsing)
-- Constants: `src/constants.rs`
-- New utility module: Create `src/{util_name}.rs` if significant size
+**New Filesystem Backend:**
+- Implementation: `src/[name]_fs.rs` (e.g., `btrfs_fs.rs`)
+- Feature flag: Add to `Cargo.toml` `[features]` section
+- CLI integration: `src/commands/mount.rs` (feature-gated)
+- Tests: `tests/[name]_integration.rs`
 
-**Tests:**
-- Unit tests: Inline in module (`#[cfg(test)] mod tests { ... }`)
-- Integration tests: `tests/{module}_tests.rs` or `tests/{feature}_integration.rs`
-- Test fixtures: Store test data in `tests/fixtures/` if needed
+**New Emacs Feature:**
+- Modern approach: Add to `emacs/sss-mode.el` (single-file mode, v1.0)
+  - Simple features: Add to core functions (encrypt, decrypt, render)
+  - Complex features: Create separate defun, bind to keymap
+  - Tests: Use Emacs batch mode (see existing mode usage)
+- Legacy approach: Extend `plugins/emacs/` modules
+  - Core logic: `plugins/emacs/sss.el`
+  - UI/menus: `plugins/emacs/sss-ui.el`
+  - Project features: `plugins/emacs/sss-project.el`
+  - Doom integration: `plugins/emacs/sss-doom.el`
+  - Tests: Emacs batch execution
+
+**New Test Suite:**
+- Location: `tests/[feature]_tests.rs` (at project root level)
+- Structure: Use Rust test framework (see existing tests)
+- Integration tests: Reference actual commands, config, filesystem
+- Unit tests: Within `src/` module itself
+
+**Utilities & Helpers:**
+- Small utilities: `src/[domain]_helpers.rs` (e.g., `error_helpers.rs`)
+- Shared constants: `src/constants.rs`
+- Shared types: `src/types.rs` or domain-specific module
 
 ## Special Directories
 
-**src/bin:**
-- Purpose: Binary entry points (separate from main library binary)
+**target/ — Build Artifacts:**
+- Purpose: Compiled binaries and intermediate objects
+- Generated: Yes (cargo build output)
+- Committed: No (.gitignore)
+
+**.planning/codebase/ — Codebase Documentation:**
+- Purpose: GSD analysis documents (ARCHITECTURE.md, STRUCTURE.md, CONVENTIONS.md, TESTING.md, STACK.md, INTEGRATIONS.md, CONCERNS.md)
+- Generated: Yes (by GSD mapping)
+- Committed: Yes (reference for future phases)
+
+**vendor/ — Vendored Dependencies:**
+- Purpose: Offline dependencies for build
+- Generated: No (manually maintained)
+- Committed: Yes (rust-9p vendored for ninep feature)
+
+**.sss_backup_*/ — Automatic Backups:**
+- Purpose: Automatic project backups (created by sss tool)
+- Generated: Yes
+- Committed: No (.gitignore)
+
+**docs/ — Developer Documentation:**
+- Purpose: Architecture, implementation details, testing guides
+- Generated: No (hand-written)
+- Committed: Yes
+
+**cross/ — Cross-Compilation Config:**
+- Purpose: Platform-specific build configuration
 - Generated: No
-- Committed: Yes
-- Contains: sss-agent, sss-askpass-tty, sss-askpass-gui with separate main() functions
+- Committed: Yes (cross-compile setup for macOS, ARM)
 
-**vendor/rust-9p:**
-- Purpose: Vendored 9P library for ninep feature
-- Generated: No
-- Committed: Yes
-- Notes: Included because custom modifications or pinned version needed
+**coordination/, memory/, .hive-mind/, .swarm/ — Agent/Flow Directories:**
+- Purpose: Claude-Flow and agent coordination metadata
+- Generated: Yes (by Claude-Flow)
+- Committed: Mostly no (partial tracking for coordination)
 
-**tests:**
-- Purpose: Integration and end-to-end tests
-- Generated: No (created by developers)
-- Committed: Yes
-- Patterns: Tests use temporary directories and cleanup after completion
+## Emacs Integration Architecture
 
-**target:**
-- Purpose: Build artifacts
-- Generated: Yes (by `cargo build`)
-- Committed: No (listed in .gitignore)
-- Contains: Compiled binaries, intermediate files, test binaries
+### New Approach (`emacs/sss-mode.el`)
 
-**.sss.toml:**
-- Purpose: Project configuration (created during `sss init`)
-- Generated: Yes (by `sss init`)
-- Committed: Yes (safe for git; no secrets stored)
-- Contains: Users, key rotation metadata, hooks configuration, ignore patterns
+**Design Philosophy:**
+- Single-file implementation
+- Transparent decrypt-on-open, re-seal-on-save
+- Zero configuration (except sss binary path for daemon mode)
+- Auto-detection via magic-mode-alist (checks for sealed marker at buffer start)
+- Security-first: auto-save and backup disabled immediately
 
-**~/.config/sss/**
-- Purpose: User settings and keystore
-- Generated: Yes (by first `sss` command or `sss init`)
-- Committed: No (user-local)
-- Contains: `settings.toml`, `keys/` subdirectory with encrypted key files
+**Core Flow:**
+1. `magic-mode-alist` checks `sss--sealed-p` predicate → activates `sss-mode`
+2. `find-file-hook` calls `sss--find-file-hook` → calls `sss open` → decrypts to `⊕{}` markers
+3. `write-contents-functions` calls `sss--write-contents` → writes plaintext, then `sss seal --in-place`
+4. Keybindings: C-c C-o/C-c C-s/C-c C-r for manual operations
 
-## Shared Patterns
+**Key Functions:**
+- `sss--call-cli(args, input-file)` — Execute sss binary, return (exit-code stdout stderr)
+- `sss--sealed-p()` — Magic-mode predicate (checks UTF-8 marker at buffer start)
+- `sss--open-buffer()` — Decrypt via `sss open FILE`, disable auto-save/backup
+- `sss--write-contents()` — Write plaintext, seal via `sss seal --in-place`
+- `sss-render-buffer()` — Display fully rendered plaintext in read-only buffer
+- `sss-init()`, `sss-process()`, `sss-keygen()`, `sss-keys-list()` — Project operations
 
-**Module Organization:**
-- Large modules get a directory with `mod.rs` + component files
-- Example: `src/fuse/mod.rs` declares submodules `inode_manager`, `file_cache`, `virtual_fs`
-- Small modules stay as single `.rs` files (e.g., `src/crypto.rs`)
+### Legacy Approach (`plugins/emacs/`)
 
-**Error Handling:**
-- All functions return `anyhow::Result<T>` for flexibility
-- Custom `SssError` enum used for specific error categorization
-- Context added with `.context()` for user-friendly messages
+**Design Philosophy:**
+- Feature-rich with interactive region processing
+- Multiple independent files for modularity
+- Auth-source integration for password caching
+- Doom Emacs with Evil operators
+- 1,921 lines total across 6 Lisp files
 
-**Feature Gating:**
-- FUSE commands: `#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]`
-- 9P commands: `#[cfg(feature = "ninep")]`
-- WinFSP: `#[cfg(all(target_os = "windows", feature = "winfsp"))]`
-- Check `Cargo.toml` for feature definitions
+**Organization:**
+- `sss.el`: Core (encrypt/decrypt regions, file processing, auth-source)
+- `sss-mode.el`: Minor mode with syntax highlighting and auto-processing
+- `sss-ui.el`: Transient menus for interactive command selection
+- `sss-project.el`: Project/user management workflows
+- `sss-utils.el`: Pattern detection, buffer analysis
+- `sss-doom.el`: Evil operator bindings (g e for encrypt), text objects, leader keys
 
-**Zeroization:**
-- Sensitive types: `#[derive(Zeroize, ZeroizeOnDrop)]`
-- Sensitive fields: Explicitly zeroized before drop
-- Examples: `RepositoryKey`, `SecretKey`, `DerivedKey`
+**Differences from Modern Mode:**
+- Interactive region selection vs transparent file processing
+- Password caching with timeout vs prompt per operation
+- Fancy visual mode (black bars for encrypted) optional
+- More customization points (keybinding prefixes, colors)
+- Doom-specific Evil integration
+
+## File Modification Patterns
+
+**When Modifying Core Processor:**
+- Update `src/processor/core.rs` → runs all processor tests
+- Add marker preservation rules → update `src/marker_inference/expander.rs` → add test to `tests/marker_inference_tests.rs`
+- Change encryption algorithm → update `src/crypto.rs` AND document in `docs/CRYPTOGRAPHY.md`
+
+**When Adding Command:**
+- Create `src/commands/[name].rs`
+- Export in `src/commands/mod.rs`
+- Add to CLI in `src/main.rs`
+- Add integration test to `tests/command_integration.rs` or create new test file
+
+**When Modifying Emacs Mode:**
+- Modern: Edit `emacs/sss-mode.el`, recompile with `emacs -batch -f batch-byte-compile emacs/sss-mode.el`
+- Legacy: Edit appropriate `plugins/emacs/[module].el` file
+
+**When Changing Cryptography:**
+- Update `src/crypto.rs` implementation
+- Update documentation: `docs/CRYPTOGRAPHY.md`
+- Update tests: `tests/crypto_security_tests.rs`
+- Update marker format docs if marker structure changes
 
 ---
 

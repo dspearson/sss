@@ -4,210 +4,141 @@
 
 ## APIs & External Services
 
-**Editor Integration:**
-- Text editor (user-selected) - Spawned for editing encrypted/rendered files via `sss edit`
-  - SDK/Client: `std::process::Command` (generic shell execution)
-  - Source: `src/editor.rs:13` - Launches $EDITOR environment variable
-  - Communication: File path passed as argument; read/write file contents directly
-
-**File System Protocols:**
-- FUSE v3 (Linux/macOS) - Transparent filesystem mounting
-  - SDK/Client: `fuser` crate 0.14
-  - Source: `src/fuse_fs.rs`, `src/commands/mount.rs`
-  - Protocol: FUSE protocol v7.23+ over /dev/fuse kernel interface
-  - Purpose: Mount sss project at mountpoint with transparent rendering
-
-- 9P2000.L Network Filesystem (cross-platform)
-  - SDK/Client: `rs9p` (rust-9p) from vendor directory
-  - Source: `src/ninep_fs.rs`, `src/commands/ninep.rs`
-  - Protocol: 9P2000.L over TCP or Unix socket
-  - Purpose: Network-transparent encrypted filesystem access
-  - Address formats: `tcp:host:port` or `unix:path`
-
-**Git Integration:**
-- Git hooks (pre-commit, post-merge, post-checkout)
-  - Implementation: Shell scripts embedded at compile time
-  - Source: `src/commands/hooks.rs:8-10` - Include hook files from `githooks/` directory
-  - Communication: Spawned via git hook mechanism; operates on staged files
-  - Patterns: Multiplexed hook wrapper (executes hook.d/*.sh in sorted order)
+**None detected** - This is a standalone encryption tool with no external API dependencies.
 
 ## Data Storage
 
 **Databases:**
-- None - This is a stateless CLI tool with no database backend
+- No database system (SQL or NoSQL) used
+- File-based configuration: `.sss.toml` (TOML format)
+- User local storage:
+  - Config directory: `~/.config/sss/` (Unix) or platform-equivalent via `directories` crate
+  - Keystore files stored locally in project `.sss` metadata directory
+  - Private keys stored in OS keyring or local config
 
 **File Storage:**
 - Local filesystem only
-  - Home directory config: `~/.config/sss/` (XDG-compliant via `directories` crate)
-  - Keys directory: `~/.config/sss/keys/` (Unix) or platform-specific equivalents
-  - Keystore format: JSON files for encrypted keypair metadata
-  - Source: `src/keystore.rs:29-55` - Directory management and permissions (0o700)
-  - Permissions: Strict (owner read/write/execute only)
+- FUSE mount support for transparent decryption (`src/fuse_fs.rs`)
+- WinFSP support for Windows transparent filesystem (`src/winfsp_fs.rs`)
+- 9P protocol server support for Plan 9 filesystem access (`src/ninep_fs.rs`)
 
 **Caching:**
-- In-memory secrets cache (encrypted)
-  - Implementation: `SecretsCache` struct in `src/secrets.rs`
-  - Type: Thread-safe caching for interpolated secrets
-  - Lifecycle: Per-process; cleared on program exit
-
-- FUSE metadata caching
-  - TTL: 1 second (normal files), 0 seconds (passthrough overlay)
-  - Source: `src/fuse_fs.rs:43-44`
+- Emacs: In-memory password cache via `sss--password-cache` hash table (configurable timeout, default 300s)
+- No server-side caching
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- Custom asymmetric + symmetric hybrid
-  - Public-key cryptography: Ed25519 (Twisted Edwards curve)
-  - Symmetric encryption: XChaCha20-Poly1305 (authenticated)
-  - Key derivation: Argon2id (password-based)
-  - Source: `src/crypto.rs` - libsodium FFI bindings
+- Custom - No external auth provider
+- Asymmetric key-based (ED25519 Curve25519 via libsodium)
+- Per-user private key management
+- OS keyring integration:
+  - macOS: Keychain
+  - Windows: Credential Manager
+  - Linux: Secret Service
+  - Via `keyring` crate 3.2 (`src/keyring_support.rs`)
 
-**Key Management:**
-- System Keyring Integration (optional)
-  - Providers: macOS Keychain, Windows Credential Manager, Linux Secret Service (D-Bus)
-  - SDK/Client: `keyring` crate 3.2
-  - Source: `src/keyring_manager.rs`, `src/keyring_support.rs`
-  - Service name: "sss"
-  - Fallback: File-based storage if keyring unavailable
-
-- Password Input
-  - TTY password prompt: `rpassword` crate 7.3
-  - GUI askpass: Platform-specific (zenity/kdialog on Linux, osascript on macOS)
-  - Source: `src/askpass.rs` - Spawns sss-askpass-tty or sss-askpass-gui binaries
-
-**Credential Files:**
-- Project configuration: `.sss.toml` (TOML format)
-  - Location: Project root directory
-  - Contains: Repository key, user public keys, git hook settings, ignore patterns
-  - Source: `src/project.rs`, `src/config.rs`
+**Implementation:**
+- `src/crypto.rs` - XChaCha20-Poly1305 encryption, key derivation, sealed boxes
+- `src/keystore.rs` - Key storage and retrieval with encryption
+- `src/keyring_manager.rs` - Keyring abstraction layer
+- User authentication via interactive password prompts (`rpassword` crate)
+- Agent-based passwordless key access via `src/commands/agent.rs` and `src/agent_protocol.rs`
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- None - Application returns errors to CLI (stdout/stderr)
+- None - Error reporting via CLI output and Emacs minibuffer
+- Audit logging: `src/audit_log.rs` - Logs operations to local audit trail
 
 **Logs:**
-- Approach: Debug logging via environment variable
-  - `SSS_FUSE_DEBUG=1` enables FUSE operation tracing (eprintln!)
-  - Source: `src/fuse_fs.rs:22-31` - Conditional debug! macro
-  - No structured logging framework
-
-**Audit Logging:**
-- Audit log file storage (experimental)
-  - Implementation: `src/audit_log.rs`
-  - Format: JSON with timestamps
-  - Scope: Tracks crypto operations, key access, file operations
+- Approach: File-based audit logs (project-specific)
+- Log location: Within project `.sss/` metadata directory
+- No centralized logging service
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- None (CLI tool, not a server)
-- Distribution: Package repositories or direct binary downloads
+- Not applicable - Standalone CLI tool + Emacs plugin
+- Distribution: Source via Git, pre-built binaries, RPM packages
 
 **CI Pipeline:**
-- GitHub Actions (inferred from repo structure)
-  - Location: `.github/workflows/` directory
-  - Triggers: Likely on push/PR for testing and binary builds
-
-**Build Artifacts:**
-- Debian packages: `debian/build-deb.sh`
-- RPM packages: `build-rhel8.sh`, `build-rhel9.sh`
-- Alpine/musl static binary: `Dockerfile.alpine`
-- macOS cross-compilation: `build-macos-cross.sh`, `build-macos-static.sh`
+- None detected in `.github/` or similar - likely managed externally
+- RPM builds: `rpm-build/build-rpm.sh` automates Fedora/RHEL packaging
+- Docker containers for build environments: `rpm-build/Dockerfile.*`
+- Cross-compilation support via Cargo targets in `.cargo/config.toml`
 
 ## Environment Configuration
 
 **Required env vars:**
-- None mandatory (feature-complete without environment variables)
-
-**Optional env vars:**
-- `EDITOR` - Text editor to use for `sss edit` (default: vi/nano/code detection)
-- `SSH_ASKPASS` - Custom askpass program for password prompts
-- `SSS_FUSE_DEBUG` - Enable FUSE debug logging (set to "1" or "true")
-- Home directory resolution: Inferred from platform (XDG_CONFIG_HOME, APPDATA, Library/Application Support)
+- None mandatory for basic operation
+- Optional: `SSS_CONFIG_DIR` - Override default config directory
+- Optional: `SSS_KEYRING_DISABLED` - Disable OS keyring integration
+- Emacs-specific:
+  - `sss-executable` - Custom path to sss binary
+  - `sss-config-directory` - Override config location
+  - `sss-default-username` - Default user for operations
 
 **Secrets location:**
-- System keyring (macOS/Windows/Linux with Secret Service)
-- Local encrypted files: `~/.config/sss/keys/*.json`
-- Per-project keys: Stored in `.sss.toml` (base64-encoded symmetric key)
-
-**No .env file support** - Configuration purely via CLI flags, TOML files, and environment variables
+- `.sss.toml` - Project users and sealed keys (safe to commit)
+- User private keys: OS keyring (preferred) or `~/.config/sss/keys/` (local filesystem)
+- Never stored in plaintext `.env` files - File encryption enforced
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None - This is a CLI tool, not a server
+- Git hooks support: `src/commands/hooks.rs`
+  - `pre-commit` - Seal pending changes
+  - `post-commit` - Verify sealed state
+  - Custom hook configuration in `.sss.toml`
 
 **Outgoing:**
-- Git hooks (local only)
-  - pre-commit: Seals files before commit
-  - post-merge: Renders files after merge/pull
-  - post-checkout: Renders files after checkout
-  - Source: `src/commands/hooks.rs` - Embedded hook scripts executed by git
+- None detected - Tool operates on local files only
 
-- Agent daemon (experimental)
-  - IPC: Unix socket communication
-  - Source: `src/bin/sss-agent.rs` - Daemon process with policy-based access control
-  - Protocol: Custom JSON protocol over socket
-  - Purpose: Centralized key management with policy enforcement
+## Git Integration
 
-## System Calls & Integrations
+**Provider:** Git hooks only
+- `src/commands/git.rs` - Git repository integration
+- Hook automation: `src/commands/hooks.rs` (16KB implementation)
+- `.git/hooks/` integration for automatic file sealing before commits
+- No GitHub Actions or external CI/CD integration detected
 
-**Process Management:**
-- `std::process::Command` - Generic process spawning
-  - Editor launch: `src/editor.rs:13`
-  - Askpass helper: `src/askpass.rs:55-60`
-  - GUI dialogs: `src/bin/sss-askpass-gui.rs` (zenity/kdialog/osascript)
-  - Git passthrough: `src/commands/git.rs`
+## Emacs Integration Points
 
-**Filesystem Operations:**
-- `std::fs` - Standard file I/O
-  - Read/write project files
-  - Directory traversal with `walkdir` 2.4
-  - Symlink handling (if not excluded)
+**Version 0.1.0 (Modern, `emacs/sss-mode.el`):**
+- **Transparent decryption**: `find-file-hook` for auto-decrypt on open
+- **Transparent sealing**: `write-contents-functions` for auto-seal on save
+- **Marker highlighting**: Font-lock syntax highlighting (⊕{} and ⊠{} patterns)
+- **Auto-save disable**: Security feature to prevent plaintext leaks
+- **CLI integration**: Direct invocation of sss binary via `call-process`
+- **Key bindings**: `C-c C-o` (open), `C-c C-s` (seal), `C-c C-r` (render), etc.
+- Entry point: `magic-mode-alist` detection of sealed file marker (`\xe2\x8a\xa0{`)
 
-- FUSE kernel interface (optional)
-  - Source: `src/fuse_fs.rs` - Direct FUSE v3 protocol via /dev/fuse
-  - Operations: lookup, getattr, read, write, mkdir, unlink, etc.
-  - Inode caching with synthetic inodes for virtual files
+**Version 1.0 (Multi-file, `plugins/emacs/`):**
+- Files: `sss.el`, `sss-mode.el`, `sss-project.el`, `sss-utils.el`, `sss-ui.el`, `sss-doom.el`
+- **Region encryption/decryption**: Interactive region operations
+- **Project detection**: `.sss.toml` project root discovery
+- **Transient menus**: Optional UI via `transient` package (if available)
+- **Doom Emacs support**: Evil operator bindings and leader key integration
+- **Auth-source integration**: Password caching via `auth-source` (Emacs 30.1+)
+- **Advanced features**:
+  - Buffer processing
+  - File rendering (plaintext extraction)
+  - User and key management
+  - Pattern navigation
+  - Fancy visual mode (encrypted as black bars)
 
-- 9P kernel interface (optional)
-  - Source: `src/ninep_fs.rs` - 9P2000.L protocol server
-  - Async I/O via tokio
+## Security & Key Management
 
-**Terminal I/O:**
-- TTY detection: `atty` 0.2 - Detects if output is interactive
-- Signal handling: `ctrlc` 3.4 - Graceful shutdown on Ctrl-C
+**Key Operations:**
+- `src/commands/keys.rs` - Key generation, listing, deletion
+- `src/kdf.rs` - Key derivation function (Argon2 via libsodium)
+- User keys sealed with ED25519 public keys (asymmetric wrapping)
+- Repository symmetric key (XChaCha20-Poly1305) per-user sealed copy
 
-**Cryptographic Libraries:**
-- libsodium (system or statically linked)
-  - FFI bindings: `libsodium-sys` 0.2
-  - Source: `src/crypto.rs` - Direct C library calls
-  - Functions: crypto_secretbox, crypto_box, crypto_sign, crypto_pwhash, crypto_generichash
-
-**Memory Operations:**
-- Zeroization: `zeroize` crate
-  - Applied to: Passwords, plaintext secrets, derived keys
-  - Source: `src/crypto.rs`, `src/secure_memory.rs`
-  - Prevents data leakage in memory dumps
-
-## Platform-Specific Integrations
-
-**Linux:**
-- FUSE v3 kernel interface
-- D-Bus Secret Service (via `keyring` crate) for credential storage
-- systemd-style installation paths (XDG_CONFIG_HOME)
-
-**macOS:**
-- macFUSE or fuse-t FUSE implementation
-- Keychain credential storage (via `keyring` crate)
-- osascript for GUI password prompts
-
-**Windows:**
-- WinFSP filesystem extension (optional)
-- Windows Credential Manager (via `keyring` crate)
-- kdialog or custom GUI for password prompts
+**Key Rotation:**
+- `src/rotation.rs` - Key rotation metadata and lifecycle
+- Rotation metadata stored in `.sss.toml` under `[rotation]` section
 
 ---
 

@@ -2,347 +2,427 @@
 
 **Analysis Date:** 2026-02-21
 
-## Tech Debt
+## Critical Issues
 
-**Unextracted secrets handler module:**
-- Issue: Secrets interpolation logic remains monolithic in `processor/core.rs` instead of being separated into dedicated `secrets_handler.rs` module
-- Files: `src/processor/mod.rs`, `src/processor/core.rs`
-- Impact: Code reusability is reduced; module organization is incomplete per design intent; maintenance difficulty increases
-- Fix approach: Extract secrets lookup, caching, and interpolation into `src/processor/secrets_handler.rs` and re-export from `mod.rs`
+### Emacs Lisp Implementation Duplication (MAJOR CONCERN)
 
-**Legacy private key format in projects:**
-- Issue: Project configuration files may contain private keys in legacy format; system warns users but doesn't enforce migration
-- Files: `src/project.rs` (lines 486)
-- Impact: Mixed old/new formats reduce security clarity; migration is optional, creating long-term compatibility burden
-- Fix approach: Implement automatic migration on project load or deprecate legacy format entirely with explicit migration command
+**Issue:** Two incompatible Emacs Lisp implementations exist:
 
-**Incomplete agent key listing:**
-- Issue: `list keys` command is stubbed but not implemented in sss-agent binary
-- Files: `src/bin/sss-agent.rs` (line 242)
-- Impact: Agent key management is incomplete; users cannot enumerate available keys through agent interface
-- Fix approach: Implement list functionality to query available keys from agent policy file
+1. **`/zpool/94c687ec-4c9c-45fe-90f2-3ab8ae2c309f/sss/emacs/sss-mode.el`** (354 lines, v0.1.0)
+   - Single-file major mode implementation
+   - Uses `write-contents-functions` pattern (correct for Emacs)
+   - Minimal feature set: transparent open/seal + render/init/process commands
+   - Magic-mode-alist auto-detection for sealed files
+   - Files: `emacs/sss-mode.el`
 
-**Persistent backup directories:**
-- Issue: 22 backup directories (`.sss_backup_*`) are present in repository root, created by backup operations
-- Files: `.sss_backup_20251211_*`, `.sss_backup_20260213_*`, `.sss_backup_20260215_*` (22 total)
-- Impact: Repository bloat; version control pollution; unclear which backups are stale/needed
-- Fix approach: Establish backup retention policy; move backups to `.backups/` directory; add to `.gitignore`
+2. **`/zpool/94c687ec-4c9c-45fe-90f2-3ab8ae2c309f/sss/plugins/emacs/`** (2785 lines across 7 files, v1.0)
+   - Multi-file minor mode implementation
+   - Rich feature set: region encrypt/decrypt, fancy overlays, evil operators, Doom integration
+   - Files affected: `plugins/emacs/sss.el` (912 lines), `sss-mode.el` (242 lines), `sss-project.el` (274 lines), `sss-ui.el` (360 lines), `sss-utils.el` (334 lines), `sss-doom.el` (196 lines), `README.md` (467 lines)
+   - Uses different save/open patterns without `write-contents-functions`
+   - Uses `after-change-hooks` and `after-revert-hook` instead of `find-file-hook`
 
-## Security Considerations
+**Impact:**
+- Users must choose which implementation to use; no migration path
+- Features from old implementation lost when switching to new single-file mode
+- Maintenance burden: bugs fixed in one place may not transfer to the other
+- Distribution confusion: unclear which version to recommend
+- Code duplication creates security review burden (2x the Emacs code to audit)
+- `22` backup directories (`.sss_backup_*`) suggest manual migration attempts
 
-**Unencrypted private key storage without password protection:**
-- Risk: When storing keypairs without password protection, private keys are only base64-encoded, accessible to anyone with filesystem access
-- Files: `src/keystore.rs` (lines 122-141), `src/commands/keys.rs` (line 426)
-- Current mitigation: Clear warnings printed to stderr; secure directory permissions (0o700); optional system keyring integration
-- Recommendations:
-  1. Make password protection mandatory for new keys (option to skip only for system keyring)
-  2. Detect unencrypted keys on load and warn/prompt for password protection
-  3. Document keyring setup more prominently in CLI help
+**Comparison Table:**
 
-**System keyring fallback silent degradation:**
-- Risk: When `SSS_USE_KEYRING=true` but system keyring unavailable, system silently falls back to unencrypted file storage
-- Files: `src/keystore.rs` (lines 74-78)
-- Current mitigation: Warning message printed, but proceeds without error
-- Recommendations:
-  1. Make this an error condition (fail if keyring explicitly requested but unavailable)
-  2. Or require explicit acknowledgment flag when falling back is acceptable
-  3. Document the fallback behavior in configuration
+| Feature | `emacs/sss-mode.el` | `plugins/emacs/` |
+|---------|---|---|
+| File pattern | single major mode | multi-file minor mode |
+| Auto-open | `find-file-hook` + `magic-mode-alist` | `after-change-hook` + `after-revert-hook` |
+| Region operations | no | yes (encrypt/decrypt/toggle) |
+| Fancy overlays | no | yes (with fallback) |
+| Evil operators | no | yes |
+| Doom integration | no | yes (`sss-doom.el`) |
+| Password cache | no | yes (with timeout) |
+| Transient menus | no | yes (optional) |
+| Auth-source integration | no | yes |
+| Write-contents-functions | yes (correct) | no |
+| Lines | 354 | 2785 |
 
-**Weak password warnings insufficient:**
-- Risk: Weak password detection only warns in `secure_memory.rs`, may not catch all password paths
-- Files: `src/secure_memory.rs` (line 323)
-- Current mitigation: Warning printed to stderr
-- Recommendations:
-  1. Enforce minimum password strength at derivation time
-  2. Add configurable password policy (length, complexity requirements)
-  3. Use ZXCVBN or similar library for password strength estimation
+**Fix Approach:**
+1. Consolidate into single v2.0 implementation with best features from both
+2. Use `write-contents-functions` pattern (from v0.1.0 — correct for Emacs)
+3. Add region operations and overlays (from v1.0)
+4. Phase out old `/plugins/emacs/` implementation with deprecation warning
+5. Provide migration guide for existing users
 
-**Insecure temporary file fallback on Linux:**
-- Risk: When `/dev/shm` unavailable on Linux, falls back to `/tmp` which is world-readable
-- Files: `src/commands/process.rs` (lines 664-674)
-- Current mitigation: Warning message `[WARN] /dev/shm not available, using /tmp (insecure!)`
-- Recommendations:
-  1. Use secure temporary directory creation (tempfile crate with secure permissions)
-  2. Check `/tmp` permissions and warn if world-writable
-  3. Consider failing if secure tmp unavailable on production systems
+---
 
-**Cryptographic operations panic on libsodium initialization failure:**
-- Risk: `panic!()` in crypto module initialization prevents graceful error handling
-- Files: `src/crypto.rs` (line 27)
-- Current mitigation: None - process will crash
-- Recommendations:
-  1. Return `Result` from initialization instead of panicking
-  2. Implement lazy initialization with error propagation
-  3. Test failure scenarios (libsodium unavailable, corrupted)
+## Rust Code Issues
 
-**Multiple unwrap() calls in test code may mask issues:**
-- Risk: 69+ unwrap() calls throughout codebase, mostly in tests and example code; panic on unexpected state
-- Files: Scattered across `src/lib.rs`, `src/audit_log.rs`, `src/agent_policy.rs`, `src/crypto.rs` (test sections)
-- Current mitigation: Limited to test/example contexts in most cases
-- Recommendations:
-  1. Replace test unwraps with `?` operator and propagate errors
-  2. Use Result types in test assertions rather than unwrap
-  3. Audit non-test unwraps for production code paths
+### Error Handling with `unwrap()` in Tests and Non-Critical Paths
 
-**Lock poisoning from mutex unwraps:**
-- Risk: 11 instances of `.lock().unwrap()` will panic if mutex is poisoned (another thread panicked while holding it)
-- Files: `src/audit_log.rs` (5 instances), others scattered
-- Current mitigation: None - poisoned locks cause process crash
-- Recommendations:
-  1. Use parking_lot::Mutex instead of std::Mutex (never poisons)
-  2. Or handle poisoned state: `.lock().unwrap_or_else(|poisoned| poisoned.into_inner())`
-  3. Review all lock usage for poison recovery
+**Issue:** Multiple `unwrap()` calls in keyring manager and other code paths:
 
-## Performance Bottlenecks
+```rust
+// src/keyring_manager.rs:315
+let retrieved_key = helper.get_key().unwrap();
 
-**FUSE filesystem caching strategy incomplete:**
-- Problem: 58 unwrap_or() calls in `fuse_fs.rs` for missing cache entries; no cache invalidation strategy
-- Files: `src/fuse_fs.rs` (entire file, 3629 lines)
-- Cause: Cache key scheme doesn't account for file modifications; render_cache, path_to_ino mappings may become stale after external edits
-- Improvement path:
-  1. Implement file modification time tracking in inode entries
-  2. Invalidate cache on stat changes (mtime, size)
-  3. Add cache eviction policy (LRU or time-based)
-  4. Profile cache hit rates under concurrent workloads
+// src/keyring_manager.rs:337
+helper.manager.delete_key_for_user(helper.user()).unwrap();
 
-**Large monolithic processor core module:**
-- Problem: `processor/core.rs` is 1274 lines, handling encryption, decryption, marker parsing, error handling, secrets interpolation
-- Files: `src/processor/core.rs`
-- Cause: Incomplete module extraction; secrets_handler design acknowledged but not implemented
-- Improvement path:
-  1. Extract marker parsing (350 lines) → completed in `processor/marker_parser.rs`
-  2. Extract secrets interpolation (200 lines) → `processor/secrets_handler.rs` (TODO)
-  3. Extract error handling (100 lines) → `processor/errors.rs`
-  4. Keep core processing logic compact (<500 lines)
+// src/keyring_manager.rs:351-352
+let temp_file = NamedTempFile::new().unwrap();
+std::fs::write(temp_file.path(), legacy_content).unwrap();
+```
 
-**String cloning and allocations in hot paths:**
-- Problem: Multiple `clone()` and `to_string()` calls in encryption/decryption loops
-- Files: `src/processor/core.rs` (lines 576-593 example), `src/secrets.rs` (interpolation paths)
-- Cause: Immutable string building; content preparation before processing
-- Improvement path:
-  1. Use `String::with_capacity()` and `push_str()` for result building (already done in some paths)
-  2. Profile marker processing on large files (>10MB)
-  3. Consider reference-based content processing for read-only operations
+Files affected: `src/keyring_manager.rs` (8 unwrap calls), `src/editor.rs`, `src/project.rs`, `src/winfsp_fs.rs`
 
-**Regex lazy_static allocations at runtime:**
-- Problem: Regex patterns for secrets interpolation and marker detection compiled via `Lazy::new()` at first use
-- Files: `src/secrets.rs` (lines 37-53), multiple regex definitions
-- Cause: Necessary for complex patterns but deferred initialization may cause first-use latency spikes
-- Improvement path:
-  1. Pre-compile regex patterns at startup
-  2. Test initialization timing under load
-  3. Consider alternative marker parsing (custom parser instead of regex)
+**Impact:**
+- Potential panic crashes if:
+  - Keyring backend fails unexpectedly
+  - Temp file creation fails under resource constraints
+  - Filesystem writes fail (disk full, permission denied)
+- Tests in this code may hide real error handling gaps
+- No graceful degradation in production use
 
-**FUSE mount directory walk with ignore patterns:**
-- Problem: Full directory traversal with globset matching on every readdir call
-- Files: `src/fuse_fs.rs` (directory listing operations)
-- Cause: Ignore patterns applied per-file instead of at directory level
-- Improvement path:
-  1. Cache ignore pattern matching results per directory
-  2. Use globset's optimization features for batch matching
-  3. Profile deep directory structures (1000+ files)
+**Risk Level:** Medium (not critical path in most workflows, but affects keyring operations)
+
+**Fix Approach:**
+1. Replace `unwrap()` with proper error propagation in public functions
+2. Keep `unwrap()` only in test-only code paths
+3. Use `?` operator to chain errors
+4. Add comprehensive error context with `anyhow::Context`
+5. Add tests that verify error handling under failure conditions
+
+---
+
+### Excessive Cloning in Filesystem Operations
+
+**Issue:** Heavy use of `.clone()` in hot paths without justification:
+
+```rust
+// src/winfsp_fs.rs:120 (in file handle operations)
+self.source_path.clone()
+
+// src/winfsp_fs.rs:201,225,248 (in read/write operations)
+sealed_content.clone()
+bytes.clone()
+content.clone()
+
+// src/winfsp_fs.rs:632-633 (in stat operations)
+real_path.clone()
+cached_content.clone()
+```
+
+Also in `src/project.rs` (user lists, keys) and `src/fuse_fs.rs`.
+
+**Impact:**
+- Performance degradation when processing large files
+- Memory waste for large content in cached operations
+- Cumulative effect: each clone operation adds latency to read/write cycles
+- On encrypted files containing binary data, each write operation may clone entire file contents
+
+**Performance Concern:**
+- FUSE/WinFSP operations are already slow (user-space ↔ kernel transitions)
+- Cloning large file content exacerbates latency
+- Render cache operations could be particularly affected with large secrets files
+
+**Fix Approach:**
+1. Use `Arc<T>` or `Rc<T>` for shared ownership instead of cloning
+2. Use references where lifetime permits
+3. Profile to find hot clones (especially in render_cache operations)
+4. Cache file content once, reuse via reference
+5. Benchmark before/after to validate improvement
+
+---
+
+### Unsafe Code in FUSE Operations
+
+**Issue:** Multiple `unsafe` blocks for file descriptor operations:
+
+```rust
+// src/fuse_fs.rs:252, 269, 278, 284, 340, 361, 374
+let result = unsafe { ... libc operations ... };
+let fd = unsafe { libc::dup(source_fd) };
+let mut file = unsafe { fs::File::from_raw_fd(fd) };
+unsafe { libc::close(fd); }
+```
+
+Files affected: `src/fuse_fs.rs` (7 unsafe blocks)
+
+**Impact:**
+- Risk of file descriptor leaks if unwinding occurs between `dup()` and `close()`
+- Risk of use-after-close if file handles escape or are cloned incorrectly
+- No safeguards against double-close (closing same fd twice)
+- Unsafe code in critical path makes code review harder
+
+**Risk Level:** Medium (file descriptor leaks are subtle and hard to debug)
+
+**Fix Approach:**
+1. Wrap unsafe fd operations in RAII guards (implement `Drop` to ensure cleanup)
+2. Use safe wrapper types around raw file descriptors
+3. Add safety comments documenting preconditions
+4. Test with file descriptor limit (`ulimit -n`) to catch leaks
+5. Consider using existing safe crate if available (`rustix` or `fd-lock`)
+
+---
+
+## Performance & Scaling Issues
+
+### FUSE Filesystem Caching Strategy
+
+**Issue:** Multiple layers of caching with unclear invalidation semantics:
+
+Files affected: `src/fuse_fs.rs` (lines 18, 80, 188, 199-200, 1451)
+
+**Current caching:**
+1. `secrets_cache` — secrets file content cache
+2. `file_handles` HashMap — per-file handle cached content
+3. `render_cache` RwLock<HashMap> — rendered file content by inode
+
+**Problems:**
+- No clear cache invalidation strategy when files change
+- `TTL_ZERO` applied to passthrough files but unclear if effective
+- Render cache keyed by inode, not path — inode reuse after file deletion could return stale content
+- No cache size bounds — unbounded HashMap could consume memory
+- Race condition possible: file modified on disk but cache not invalidated
+
+**Impact:**
+- Large projects could experience memory growth over time
+- Users modifying files outside FUSE see stale decrypted content
+- No obvious way to clear caches if corruption suspected
+
+**Fix Approach:**
+1. Implement bounded cache with LRU eviction
+2. Use file modification time or content hash for validation
+3. Add cache invalidation on file write
+4. Document cache invalidation strategy clearly
+5. Add metrics/debug logging for cache hit/miss rates
+
+---
+
+### Marker Inference Complexity
+
+**Issue:** Marker expansion algorithm in `src/marker_inference/expander.rs` (788 lines) could be CPU-intensive:
+
+Files affected: `src/marker_inference/expander.rs`
+
+**Concerns:**
+- No benchmarking for large marker expansion (100+ markers in single file)
+- Pattern matching uses regex which could be slow on pathological input
+- Inference algorithm complexity not documented (O(n), O(n²), O(2ⁿ)?)
+
+**Risk Level:** Low (most files won't trigger worst-case), but scaling unknown
+
+**Fix Approach:**
+1. Run benchmarks from `benches/marker_inference.rs` on realistic project sizes
+2. Document algorithmic complexity
+3. Add early exit/pruning if inference takes too long
+4. Profile regex performance with large marker counts
+
+---
 
 ## Fragile Areas
 
-**FUSE fd-based filesystem operations with path relativization:**
-- Files: `src/fuse_fs.rs` (lines 215-240)
-- Why fragile:
-  - Critical assumption: all paths must be relative to source_fd to prevent deadlocks
-  - If absolute paths accidentally passed, operations silently route through FUSE (deadlock)
-  - `unwrap_or()` fallback may mask path correctness issues
-  - No type-level enforcement of relativized paths
-- Safe modification:
-  1. Create newtype wrapper `RelativePath(PathBuf)` to enforce at type level
-  2. Add assertions/debug checks for path format validity
-  3. Add integration tests for path handling edge cases
-- Test coverage: Limited to basic path operations; needs end-to-end FUSE mount testing
+### Keyring Manager with Platform-Specific Backends
 
-**Nested project processor management without ownership model:**
-- Files: `src/fuse_fs.rs` (lines 203-204)
-- Why fragile:
-  - `nested_processors: HashMap<PathBuf, Processor>` stores Processor per nested project
-  - Key scheme (relative path) must match exactly for correct processor selection
-  - No validation that nested project actually exists or has matching keys
-  - If key loading fails for nested project, no_key_roots accumulates but processors may not match
-- Safe modification:
-  1. Validate all nested paths at mount time, not lazily
-  2. Return explicit error if any nested project cannot be initialized
-  3. Cache initialization results with clear failure states
-- Test coverage: No specific tests for nested project handling; only unit tests in isolation
+**Issue:** Depends on system keyring availability which varies by platform:
 
-**Marker size validation bypass:**
-- Files: `src/processor/core.rs` (lines 537-541, 648-649)
-- Why fragile:
-  - Size check returns early but keeps original marker if too large
-  - No error propagated; silent truncation/rejection of large secrets
-  - Encrypted marker size (`⊠{...}`) larger than plaintext; recursive encryption risk
-- Safe modification:
-  1. Return `Result` for size validation; propagate errors upward
-  2. Document maximum supported secret size in config/constants
-  3. Add tests for boundary conditions (exactly at limit, slightly over)
-- Test coverage: No tests for size boundary conditions
+Files affected: `src/keyring_manager.rs`, `src/keyring_support.rs`
 
-**LibSodium FFI unsafe blocks without comprehensive testing:**
-- Files: `src/crypto.rs` (lines 85-90 and multiple other unsafe blocks)
-- Why fragile:
-  - Multiple unsafe blocks for FFI calls to libsodium
-  - Pointer arithmetic in randombytes_buf call
-  - No memory safety tests; relies entirely on libsodium correctness
-  - Version pinning: `libsodium-sys = 0.2` (old); libsodium 1.0.12+ required at runtime
-- Safe modification:
-  1. Upgrade to latest libsodium-sys
-  2. Add integration tests with valgrind/miri for memory safety
-  3. Use safer wrapper crates where possible (sodiumoxide alternative)
-  4. Document exact libsodium version requirements
-- Test coverage: Basic crypto roundtrip tests only; no memory safety checks
+**Fragility:**
+- Linux: uses Secret Service (DBus) — fails if service not running
+- macOS: uses Keychain — may fail if locked
+- Windows: uses Credential Manager — behavior varies by Windows version
+- No graceful fallback if keyring unavailable
+- Legacy config fallback (`OldConfig`) exists but undocumented
 
-**Keyring integration with fallback masking real issues:**
-- Files: `src/keystore.rs` (lines 73-81), `src/keyring_support.rs`
-- Why fragile:
-  - Silently falling back from keyring to file storage masks real configuration issues
-  - Error context lost; user won't know why keyring wasn't used
-  - If keyring became available later, user won't automatically switch
-  - No audit trail of storage location decisions
-- Safe modification:
-  1. Log all keyring availability checks with reasons for fallback
-  2. Add `sss keys inspect` command to show where each key is stored
-  3. Implement background check for keyring availability (warn if it became available)
-  4. Add migration command: `sss keys migrate-to-keyring`
-- Test coverage: No tests for keyring fallback scenarios
+**Risk Level:** Medium (affects key storage, not encryption itself)
 
-## Scaling Limits
+**Concerns:**
+- Headless servers (CI, servers without X11) may fail keyring operations
+- Docker containers often lack system keyring
+- Unattended scripts hang waiting for password prompt
 
-**FUSE inode table memory usage unbounded:**
-- Current capacity: Single u64 counter; HashMap grows without eviction
-- Files: `src/fuse_fs.rs` (lines 189-192)
-- Limit: Memory exhaustion on very large directories (>1M files) or long-running mounts
-- Scaling path:
-  1. Implement inode cache eviction (LRU or time-based)
-  2. Add configurable max inode count
-  3. Profile memory usage with large directory trees
-  4. Consider two-tier inode scheme (memory + persistent)
+**Fix Approach:**
+1. Add `--no-keyring` flag to disable keyring storage
+2. Implement file-based fallback (encrypted with master password)
+3. Add timeout to keyring operations
+4. Document keyring requirements per platform
+5. Provide diagnostic command to check keyring availability
 
-**File handle table with no cleanup for abandoned handles:**
-- Current capacity: Unbounded HashMap of FileHandle structs; no timeout/cleanup
-- Files: `src/fuse_fs.rs` (lines 196-197)
-- Limit: Handles accumulate if editors crash without closing; unbounded memory growth
-- Scaling path:
-  1. Implement handle expiration (e.g., 5-minute timeout on unused handles)
-  2. Add background cleanup task
-  3. Track handle lifecycle with metrics
-  4. Warn if handle count exceeds threshold
+---
 
-**Render cache memory usage on large files:**
-- Current capacity: Entire file contents cached per inode; no size limit
-- Files: `src/fuse_fs.rs` (lines 200)
-- Limit: Files >100MB can consume significant RAM; concurrent access amplifies
-- Scaling path:
-  1. Implement cache size limit (e.g., 1GB total)
-  2. Add cache statistics endpoint for monitoring
-  3. Profile real-world usage patterns
-  4. Consider streaming reads for large files
+### Editor Integration Assumptions
 
-**Nested project discovery not lazy:**
-- Current capacity: All nested projects discovered at mount time
-- Files: `src/fuse_fs.rs` (entire initialization)
-- Limit: Deep nested structures with many projects cause slow mount times
-- Scaling path:
-  1. Implement lazy nested project discovery (on-demand)
-  2. Cache project detection results
-  3. Profile discovery time for 100+ nested projects
-  4. Add mount-time timeout for discovery
+**Issue:** `src/editor.rs` makes assumptions about editor behavior:
 
-## Dependencies at Risk
+Files affected: `src/editor.rs`
 
-**Old libsodium-sys version:**
-- Risk: `libsodium-sys = 0.2` is outdated; newer versions may have important security patches
-- Impact: May miss critical libsodium security fixes; compatibility with newer libsodium versions uncertain
-- Migration plan: Upgrade to latest libsodium-sys while ensuring ABI compatibility
+**Fragility:**
+- Assumes editor waits for file to be written before returning
+- Assumes editor doesn't create backups that leak plaintext
+- Assumes editor respects umask for temp files
+- No verification that editor actually modified the file
 
-**Fuser FUSE library compatibility:**
-- Risk: `fuser = 0.14` may not support latest FUSE kernel features or macFUSE versions
-- Impact: Platform-specific issues on macOS; potential deadlock fixes missed
-- Migration plan: Profile latest fuser versions; test on macOS with latest macFUSE
+**Impact:**
+- If editor creates backups, plaintext could exist on disk
+- If editor forks and returns immediately, race condition on temp file deletion
+- Different editors have different safety behaviors
 
-**Tokio full features for optional ninep:**
-- Risk: `tokio = { version = "1", features = ["full"] }` pulls entire runtime even when feature not used
-- Impact: Unnecessary dependency bloat for binary users not using 9P server
-- Migration plan: Use feature flags to conditionally include tokio; only enable needed features
+**Risk Level:** Medium (security-relevant)
 
-**Regex crate without SIMD acceleration:**
-- Risk: Current regex dependency doesn't enable `regex-syntax` SIMD optimizations
-- Impact: Pattern matching slower than optimal on large files
-- Migration plan: Test regex performance; consider aho-corasick for marker scanning
+**Fix Approach:**
+1. Add pre/post-edit file checksums to detect non-modification
+2. Secure temp file creation with restricted permissions (0600)
+3. Document editor compatibility and recommendations
+4. Add option to disable editor (manual decryption/encryption)
 
-## Missing Critical Features
-
-**No integrated backup/recovery system:**
-- Problem: Users must manually manage backup locations; no built-in backup strategy
-- Blocks: Disaster recovery workflows; accidental key loss recovery
-- Recommendations:
-  1. Implement `sss backup` command for safe key/config backup
-  2. Implement `sss restore` with integrity verification
-  3. Document backup location best practices
-
-**Incomplete secrets handling in agent:**
-- Problem: Agent can authenticate but secrets interpolation not fully integrated
-- Blocks: Remote agent workflows requiring secrets
-- Recommendations:
-  1. Implement secrets lookup in agent context
-  2. Add secure secret transmission over agent protocol
-  3. Document agent secret handling limitations
-
-**No key rotation audit trail:**
-- Problem: Rotation metadata stored but no detailed audit log of what was rotated
-- Blocks: Compliance audits; forensic analysis
-- Recommendations:
-  1. Log each key rotation with before/after fingerprints
-  2. Implement `sss audit key-history` command
-  3. Add rotation reason tracking (currently optional)
+---
 
 ## Test Coverage Gaps
 
-**FUSE overlay mounting scenario:**
-- What's not tested: In-place FUSE mounting with concurrent operations on both rendered and sealed files
-- Files: `src/fuse_fs.rs`, `src/commands/mount.rs`
-- Risk: Deadlock or inconsistency between paths; race conditions between FUSE and direct filesystem access
-- Priority: High (core feature)
+### Integration Test Coverage
 
-**Nested project key inheritance:**
-- What's not tested: Nested projects with different keys; key resolution precedence; no_key_roots behavior
-- Files: `src/fuse_fs.rs` (nested_processors, no_key_roots)
-- Risk: Incorrect processor selected; secrets encrypted with wrong key
-- Priority: High (data integrity)
+**Issue:** Minimal coverage of cross-component interactions:
 
-**Large file encryption/decryption:**
-- What's not tested: Files >100MB; memory usage under concurrent processing
-- Files: `src/processor/core.rs`, `src/crypto.rs`
-- Risk: OOM kills; performance degradation on real-world data
-- Priority: Medium (scale requirement)
+Files affected: Multiple test files in `tests/`
 
-**KeyRing integration on different systems:**
-- What's not tested: Linux (various distros with/without Secret Service), macOS Keychain, Windows Credential Manager fallback
-- Files: `src/keyring_support.rs`, `src/keystore.rs`
-- Risk: Silent fallback to unencrypted storage without user awareness
-- Priority: Medium (security)
+**Gaps identified:**
+- No tests for FUSE + encryption + project config interaction
+- No tests for race conditions (concurrent file access)
+- No tests for cache invalidation scenarios
+- Error handling tests exist but don't cover all error paths
+- No tests for Emacs mode integration with actual sss binary
 
-**Secrets file encryption/decryption roundtrip:**
-- What's not tested: Encrypted .secrets files; nesting of secrets within encrypted content
-- Files: `src/processor/core.rs` (process_secrets_file_content)
-- Risk: Secrets exposure; incorrect decryption key usage
-- Priority: High (security-critical)
+**Risk Level:** Medium (integration bugs only caught in production)
 
-**Marker parser edge cases:**
-- What's not tested: Deeply nested braces (10+ levels); mixed marker types; UTF-8 edge cases in markers
-- Files: `src/processor/marker_parser.rs`
-- Risk: Parser bugs on unusual but valid input; potential DoS
-- Priority: Medium (robustness)
+**Fix Approach:**
+1. Add integration tests for FUSE real-world workflows
+2. Add concurrency tests using `parking_lot` RwLock
+3. Add cache invalidation test scenarios
+4. Test against multiple sss binary versions
 
-**Error recovery in FUSE operations:**
-- What's not tested: Partial write failures; interrupted file operations; corrupted cache recovery
-- Files: `src/fuse_fs.rs` (write operations)
-- Risk: File corruption; incomplete edits persisting
-- Priority: High (data integrity)
+---
+
+## Security Considerations
+
+### Plaintext Window in `write-contents-functions`
+
+**Issue:** `emacs/sss-mode.el` has documented limitation:
+
+```elisp
+;; Step 1: Write plaintext buffer content to disk.
+;; ...
+;; There is a brief window (milliseconds) where plaintext exists on disk
+```
+
+Files affected: `emacs/sss-mode.el` (lines 179-180)
+
+**Impact:**
+- Plaintext temporarily on disk during save
+- If system crashes during save, plaintext remains
+- If disk forensics performed, plaintext recoverable
+- Acknowledged as "accepted limitation identical to epa-file.el pattern"
+
+**Mitigation:**
+- Document as accepted tradeoff
+- Recommend tmpfs for work directories
+- Recommend full-disk encryption
+
+**Risk Level:** Low (inherent to encrypted file editors, same as epa-file.el)
+
+**Note:** This is acceptable; the comment acknowledges it. Not a fix concern.
+
+---
+
+### Editor Temporary Files
+
+**Issue:** Editor temporary files may not be encrypted:
+
+Files affected: `src/editor.rs`
+
+**Concern:**
+- If editor creates `file.sss~` backup, it's plaintext
+- Vim/Emacs swapfiles could contain plaintext
+- No enforcement that editor doesn't leak
+
+**Mitigation:**
+- Document in README: configure editor to not create backups
+- Example vim config: `set nobackup noswapfile`
+
+**Risk Level:** Low (user configuration issue, not code)
+
+---
+
+## Tech Debt Summary
+
+### Architecture Debt
+
+| Area | Severity | Fix Effort | Impact |
+|------|----------|-----------|--------|
+| Emacs duplication | **HIGH** | Medium | 2x maintenance, feature divergence |
+| Cache strategy | Medium | Medium | Memory growth, stale data risk |
+| Unsafe fd handling | Medium | Low | Descriptor leaks, hard to debug |
+| Cloning in hot paths | Medium | Low | Performance degradation on large files |
+| Unwrap() in errors | Low | Low | Panic risk in edge cases |
+
+### Missing Features
+
+**Emacs Mode:**
+- Region encrypt/decrypt (only in plugins/emacs)
+- Fancy visual overlays (only in plugins/emacs)
+- Evil mode operators (only in plugins/emacs)
+- Doom integration (only in plugins/emacs)
+
+---
+
+## Backup Directories
+
+**Concern:** 22 backup directories (`.sss_backup_YYYYMMDD_HHMMSS`) in root:
+
+```
+.sss_backup_20251211_230236/
+.sss_backup_20251211_230441/
+... (20 more)
+.sss_backup_20260215_061749/
+```
+
+**Implications:**
+- Manual emergency recovery attempts (dating back to Dec 2025)
+- Suggests instability or failed migrations
+- Should be cleaned up or moved to `.backup/` directory
+- Git status noise
+
+**Fix Approach:**
+1. Investigate contents of one to understand what was being backed up
+2. Clean up to `.backup/` if needed
+3. Add `.sss_backup_*` to `.gitignore`
+4. Determine root cause of repeated backups
+
+---
+
+## Recommendations by Priority
+
+### Priority 1 (Critical)
+- [ ] Consolidate Emacs Lisp implementations (v2.0)
+- [ ] Clean up 22 backup directories
+- [ ] Document cache invalidation strategy in FUSE
+
+### Priority 2 (High)
+- [ ] Replace `unwrap()` with proper error handling
+- [ ] Implement bounded cache with LRU eviction
+- [ ] Add keyring availability detection
+- [ ] Wrap unsafe fd operations in RAII guards
+
+### Priority 3 (Medium)
+- [ ] Profile and eliminate excessive cloning
+- [ ] Add cache invalidation integration tests
+- [ ] Document marker inference complexity
+- [ ] Add editor safety recommendations to README
+
+### Priority 4 (Low)
+- [ ] Run marker inference benchmarks
+- [ ] Add timeout to keyring operations
+- [ ] Comprehensive integration test suite
 
 ---
 

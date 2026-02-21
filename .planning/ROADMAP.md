@@ -62,7 +62,7 @@ Wave structure:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 06-01-PLAN.md -- Evil operators, text objects, conditional loading scaffold (Wave 1)
+- [x] 06-01-PLAN.md -- Evil operators, text objects, conditional loading scaffold (Wave 1) -- completed 2026-02-23
 - [ ] 06-02-PLAN.md -- Doom leader and localleader bindings (Wave 2)
 
 Wave structure:
@@ -92,5 +92,5 @@ Wave structure:
 | 3. sss-mode Complete | v1.0 | 2/2 | Complete | 2026-02-21 |
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
 | 5. Core Operations & UX | 3/3 | Complete    | 2026-02-21 | - |
-| 6. Evil & Doom Integration | v1.1 | 0/2 | Not started | - |
+| 6. Evil & Doom Integration | v1.1 | 1/2 | In progress | - |
 | 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |

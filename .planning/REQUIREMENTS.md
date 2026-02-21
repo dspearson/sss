@@ -67,15 +67,15 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 
 ### Evil Integration
 
-- [ ] **EVIL-01**: Evil encrypt operator -- `sss-evil-encrypt` motion-based operator for encrypting text objects
-- [ ] **EVIL-02**: Evil decrypt operator -- `sss-evil-decrypt` motion-based operator for decrypting text objects
-- [ ] **EVIL-03**: Evil toggle operator -- `sss-evil-toggle` motion-based operator for toggling encryption
+- [x] **EVIL-01**: Evil encrypt operator -- `sss-evil-encrypt` motion-based operator for encrypting text objects
+- [x] **EVIL-02**: Evil decrypt operator -- `sss-evil-decrypt` motion-based operator for decrypting text objects
+- [x] **EVIL-03**: Evil toggle operator -- `sss-evil-toggle` motion-based operator for toggling encryption
 
 ### Doom Integration
 
 - [ ] **DOOM-01**: Leader bindings -- `SPC e` prefix with encrypt/decrypt/toggle/process commands via `map!`
 - [ ] **DOOM-02**: Localleader bindings -- `, e` prefix for buffer-local sss operations via `map!`
-- [ ] **DOOM-03**: Conditional loading -- Doom integration loads only when `(modulep! :editor evil)` is available
+- [x] **DOOM-03**: Conditional loading -- Doom integration loads only when `(modulep! :editor evil)` is available
 
 ### UX Enhancements
 
@@ -158,12 +158,12 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | UX-02 | Phase 5 | Complete |
 | UX-03 | Phase 5 | Complete |
 | UX-04 | Phase 5 | Complete |
-| EVIL-01 | Phase 6 | Pending |
-| EVIL-02 | Phase 6 | Pending |
-| EVIL-03 | Phase 6 | Pending |
+| EVIL-01 | Phase 6 | Complete |
+| EVIL-02 | Phase 6 | Complete |
+| EVIL-03 | Phase 6 | Complete |
 | DOOM-01 | Phase 6 | Pending |
 | DOOM-02 | Phase 6 | Pending |
-| DOOM-03 | Phase 6 | Pending |
+| DOOM-03 | Phase 6 | Complete |
 | CLEAN-01 | Phase 7 | Pending |
 | CLEAN-02 | Phase 7 | Pending |
 | CLEAN-03 | Phase 7 | Pending |

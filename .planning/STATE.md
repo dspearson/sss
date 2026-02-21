@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 6 (Evil & Doom Bindings)
-Plan: 0/? (not yet started)
-Status: Phase 5 complete
-Last activity: 2026-02-21 -- 05-03 complete (sss-dispatch transient menu, version 1.1.0)
+Plan: 1/? (06-01 complete)
+Status: Phase 6 in progress
+Last activity: 2026-02-23 -- 06-01 complete (evil operators, text objects, buffer-local bindings)
 
-Progress: [███░░░░░░░] 30%
+Progress: [████░░░░░░] 40%
 
 ## Accumulated Context
 
@@ -50,6 +50,12 @@ Phase 5 Plan 03 decisions (2026-02-21):
 - C-c C-m mnemonic for 'menu': consistent with existing C-c C-x pattern family
 - Single flat transient prefix (no sub-menus): plugins/emacs/ sub-menus are plugin concerns
 
+Phase 6 Plan 01 decisions (2026-02-23):
+- Buffer-local evil bindings via evil-define-key 'normal sss-mode-map (not global evil-normal-state-map) -- preserves ge/gd/gt in non-sss buffers
+- sss-evil-toggle region walk uses re-search-forward + goto-char match-beginning to walk markers safely (avoids user-error on inter-marker text)
+- sss--any-marker-regexp already defined in Phase 5 -- no new defconst needed in evil block
+- All evil code (operators + bindings + text objects) in single with-eval-after-load 'evil block
+
 ### Pending Todos
 
 None.
@@ -57,11 +63,11 @@ None.
 ### Blockers/Concerns
 
 - plugins/emacs/ uses `call-process-region` with stdin piping -- RESOLVED: sss--call-cli-region added in 05-01
-- plugins/emacs/sss-doom.el depends on doom-core -- need `(when (featurep 'evil) ...)` guard pattern for graceful degradation
+- plugins/emacs/sss-doom.el depends on doom-core -- RESOLVED: evil code in sss-mode.el uses with-eval-after-load 'evil (not featurep), loads cleanly in vanilla Emacs
 - transient package is optional -- RESOLVED: fallback added in 05-03
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: Completed 05-core-operations-ux 05-03-PLAN.md
-Resume with: `/gsd:execute-phase 6` (Phase 6 -- Evil & Doom Bindings)
+Last session: 2026-02-23
+Stopped at: Completed 06-evil-doom-integration 06-01-PLAN.md
+Resume with: `/gsd:execute-phase 6` (Phase 6 -- next plan, Doom leader/localleader bindings if planned)

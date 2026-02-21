@@ -401,6 +401,39 @@ Runs `sss keys list' and shows the output in buffer *SSS Keys*."
      (error "Sss-mode: sss keys list failed (exit %d): %s"
             exit (string-trim stderr)))))
 
+;;; Marker detection and toggle
+
+(defun sss--marker-at-point ()
+  "Return (START . END) of SSS marker at point, or nil.
+Scans backward from point to find the marker start, then verifies
+that the original point position falls within the match."
+  (save-excursion
+    (let ((original-point (point)))
+      (while (and (not (bobp))
+                  (not (looking-at sss--any-marker-regexp)))
+        (backward-char))
+      (when (and (looking-at sss--any-marker-regexp)
+                 (<= (point) original-point)
+                 (>= (match-end 0) original-point))
+        (cons (point) (match-end 0))))))
+
+;;;###autoload
+(defun sss-toggle-at-point ()
+  "Toggle the encryption state of the SSS marker at point.
+If point is on a \xe2\x8a\xa0{} marker, decrypts it.
+If point is on a \xe2\x8a\x95{} marker, encrypts it."
+  (interactive)
+  (let ((bounds (sss--marker-at-point)))
+    (unless bounds
+      (user-error "No SSS marker at point"))
+    (let ((start (car bounds))
+          (end (cdr bounds)))
+      (save-excursion
+        (goto-char start)
+        (if (looking-at (regexp-quote sss--sealed-marker))
+            (sss-decrypt-region start end)
+          (sss-encrypt-region start end))))))
+
 ;;; Mode definition
 
 ;;;###autoload
@@ -435,6 +468,8 @@ Customization: \\[customize-group] RET sss RET
   (define-key sss-mode-map (kbd "C-c C-l") #'sss-keys-list)
   (define-key sss-mode-map (kbd "C-c C-e") #'sss-encrypt-region)
   (define-key sss-mode-map (kbd "C-c C-d") #'sss-decrypt-region)
+  (define-key sss-mode-map (kbd "C-c C-t") #'sss-toggle-at-point)
+  (define-key sss-mode-map (kbd "C-c C-v") #'sss-preview-at-point)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))

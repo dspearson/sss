@@ -177,7 +177,8 @@ and the region is replaced with the resulting \xe2\x8a\xa0{} marker."
     (pcase (sss--call-cli-region (list "seal") input)
       (`(0 ,sealed ,_stderr)
        (delete-region start end)
-       (insert (string-trim-right sealed)))
+       (insert (string-trim-right sealed))
+       (sss--refresh-overlays))
       (`(,exit ,_stdout ,stderr)
        (error "Sss-mode: encrypt failed (exit %d): %s"
               exit (string-trim stderr))))))
@@ -192,7 +193,8 @@ Uses `sss open -' with the region text sent as stdin."
     (pcase (sss--call-cli-region (list "open") text)
       (`(0 ,opened ,_stderr)
        (delete-region start end)
-       (insert (string-trim-right opened)))
+       (insert (string-trim-right opened))
+       (sss--refresh-overlays))
       (`(,exit ,_stdout ,stderr)
        (error "Sss-mode: decrypt failed (exit %d): %s"
               exit (string-trim stderr))))))
@@ -433,6 +435,90 @@ If point is on a \xe2\x8a\x95{} marker, encrypts it."
         (if (looking-at (regexp-quote sss--sealed-marker))
             (sss-decrypt-region start end)
           (sss-encrypt-region start end))))))
+
+;;; Overlay mode
+
+(defvar-local sss--overlays nil
+  "List of SSS visual overlays in the current buffer.")
+
+(defun sss--remove-overlays ()
+  "Remove all SSS overlays from the current buffer."
+  (mapc #'delete-overlay sss--overlays)
+  (setq sss--overlays nil))
+
+(defun sss--make-overlays ()
+  "Create visual overlays for all SSS markers in the current buffer.
+Overlays are purely visual -- they do not modify buffer content."
+  (sss--remove-overlays)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward sss--any-marker-regexp nil t)
+      (let* ((start (match-beginning 0))
+             (end (match-end 0))
+             (sealed-p (eq (char-after start) ?\u22A0))
+             (ov (make-overlay start end)))
+        (overlay-put ov 'face (if sealed-p 'sss-sealed-face 'sss-open-face))
+        (overlay-put ov 'help-echo
+                     (if sealed-p
+                         "Sealed secret (C-c C-d to decrypt, C-c C-t to toggle)"
+                       "Open secret (C-c C-e to encrypt, C-c C-t to toggle)"))
+        (overlay-put ov 'sss-overlay t)
+        (push ov sss--overlays)))))
+
+(defun sss--refresh-overlays ()
+  "Refresh SSS overlays if overlay mode is active."
+  (when sss--overlays
+    (sss--make-overlays)))
+
+;;;###autoload
+(defun sss-toggle-overlay-mode ()
+  "Toggle SSS overlay mode in the current buffer.
+When enabled, markers are visually highlighted with overlays.
+When disabled, overlays are removed."
+  (interactive)
+  (if sss--overlays
+      (progn
+        (sss--remove-overlays)
+        (remove-hook 'kill-buffer-hook #'sss--remove-overlays t)
+        (message "SSS overlay mode disabled"))
+    (sss--make-overlays)
+    (add-hook 'kill-buffer-hook #'sss--remove-overlays nil t)
+    (message "SSS overlay mode enabled")))
+
+;;; Preview at point
+
+(defun sss--show-preview-overlay (content pos)
+  "Show CONTENT in a transient overlay at POS.
+Dismisses on the next command."
+  (let* ((ov (make-overlay pos pos))
+         (text (propertize (concat " [" content "]")
+                           'face 'tooltip)))
+    (overlay-put ov 'after-string text)
+    (overlay-put ov 'sss-preview t)
+    (letrec ((cleanup (lambda ()
+                        (when (overlay-buffer ov) (delete-overlay ov))
+                        (remove-hook 'pre-command-hook cleanup))))
+      (add-hook 'pre-command-hook cleanup))))
+
+;;;###autoload
+(defun sss-preview-at-point ()
+  "Show a transient overlay preview of the decrypted secret at point.
+Does not modify buffer content.  Dismisses on next command.
+Only works on sealed (\xe2\x8a\xa0{}) markers."
+  (interactive)
+  (let ((bounds (sss--marker-at-point)))
+    (unless bounds
+      (user-error "No SSS marker at point"))
+    (let ((text (buffer-substring-no-properties (car bounds) (cdr bounds))))
+      (unless (string-match-p (concat "\\`" (regexp-quote sss--sealed-marker))
+                              text)
+        (user-error "Marker at point is not sealed"))
+      (pcase (sss--call-cli-region (list "open") text)
+        (`(0 ,plaintext ,_)
+         (sss--show-preview-overlay (string-trim-right plaintext) (car bounds)))
+        (`(,exit ,_ ,stderr)
+         (error "Sss-mode: preview failed (exit %d): %s"
+                exit (string-trim stderr)))))))
 
 ;;; Mode definition
 

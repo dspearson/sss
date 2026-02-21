@@ -75,7 +75,13 @@ Plans:
   3. The security model document states explicitly what is encrypted, what is not, and which algorithms are used
   4. The marker format reference describes `⊕{}` and `⊠{}` semantics and rendering behaviour accurately enough to implement a compatible parser
   5. The sss-mode installation guide covers Emacs setup, keyring prerequisites, and daemon-mode PATH configuration
-**Plans**: TBD
+**Plans**: 4 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Usage guide and configuration reference (DOC-02, DOC-06)
+- [ ] 04-02-PLAN.md — Security model and marker format reference (DOC-04, DOC-05)
+- [ ] 04-03-PLAN.md — Architecture overview and sss-mode guide (DOC-03, DOC-07)
+- [ ] 04-04-PLAN.md — README overhaul with quickstart and doc links (DOC-01)
 
 ## Progress
 
@@ -87,4 +93,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. CLI Foundation | 2/2 | Complete    | 2026-02-21 |
 | 2. sss-mode Core | 3/3 | Complete    | 2026-02-21 |
 | 3. sss-mode Complete | 2/2 | Complete    | 2026-02-21 |
-| 4. Documentation | 0/? | Not started | - |
+| 4. Documentation | 0/4 | Not started | - |

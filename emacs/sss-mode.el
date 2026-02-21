@@ -26,7 +26,7 @@
 
 (defcustom sss-executable "sss"
   "Path to the sss binary.
-Set to an absolute path if sss is not on `exec-path' (e.g., in daemon mode).
+Set to an absolute path if sss is not on variable `exec-path' (daemon mode).
 Example: \"/usr/local/bin/sss\""
   :type 'string
   :group 'sss)
@@ -123,7 +123,7 @@ buffer-locally, so that subsequent saves re-seal the file."
       (`(,exit ,_stdout ,stderr)
        ;; EMAC-06: always a visible error — never a silent empty buffer.
        ;; (error ...) signals into the minibuffer; aborts find-file cleanly.
-       (error "sss-mode: decryption failed (exit %d): %s"
+       (error "Sss-mode: decryption failed (exit %d): %s"
               exit (string-trim stderr))))))
 
 ;;; Save flow — re-seal-on-save via write-contents-functions
@@ -139,13 +139,13 @@ On failure, signals `(error ...)' — this is MANDATORY.  Returning nil on
 failure would allow Emacs to fall through to its default write path, writing
 plaintext.
 
-The two-step process: (1) write plaintext buffer content to disk temporarily,
-(2) call `sss seal --in-place' to encrypt the file in place.
+Two-step process: step 1 writes plaintext buffer content to disk temporarily,
+step 2 calls `sss seal --in-place' to encrypt the file in place.
 There is a brief window (milliseconds) where plaintext exists on disk — this
 is an accepted limitation identical to the epa-file.el pattern."
   (let ((file buffer-file-name))
     (unless file
-      (error "sss-mode: buffer has no associated file; cannot seal"))
+      (error "Sss-mode: buffer has no associated file; cannot seal"))
     ;; Step 1: Write plaintext buffer content to disk.
     ;; Bind write-contents-functions to nil to prevent recursion.
     ;; Use 'nomessage to suppress "Wrote /path/to/file" echo.
@@ -165,8 +165,48 @@ is an accepted limitation identical to the epa-file.el pattern."
        ;; EMAC-06: visible minibuffer error.
        ;; DO NOT return nil here — that falls through to a plaintext disk write.
        ;; DO NOT use (message ...) + nil — same problem.
-       (error "sss-mode: sealing failed (exit %d): %s"
+       (error "Sss-mode: sealing failed (exit %d): %s"
               exit (string-trim stderr))))))
+
+;;; Mode definition
+
+;;;###autoload
+(define-derived-mode sss-mode text-mode "SSS"
+  "Major mode for files sealed with the sss secrets tool.
+
+Provides transparent decrypt-on-open and re-seal-on-save:
+- Opening a sealed file shows decrypted plaintext with ⊕{} markers visible
+- Saving the buffer re-seals the file on disk; plaintext is never written as-is
+- Failures produce visible minibuffer errors (never silent empty buffers)
+
+Auto-save and backup are disabled for the decrypted buffer (security).
+
+Activated automatically via `magic-mode-alist' for sealed files.
+
+Customization: \\[customize-group] RET sss RET
+
+\\{sss-mode-map}"
+  ;; Keymap (EMAC-08): sss-mode-map is auto-created by define-derived-mode.
+  ;; Bind commands under C-c s prefix (standard for mode-specific bindings).
+  (define-key sss-mode-map (kbd "C-c s o") #'sss-open-buffer)
+  (define-key sss-mode-map (kbd "C-c s s") #'sss-seal-buffer)
+  ;; Install find-file-hook to handle decryption when mode activates on open.
+  ;; The hook checks sss--sealed-p before acting — safe to install globally.
+  (add-hook 'find-file-hook #'sss--find-file-hook))
+
+(defun sss-open-buffer ()
+  "Decrypt the current sealed sss buffer in place.
+Interactive command for `sss-mode-map' (\\[sss-open-buffer]).
+Calls `sss--open-buffer' which replaces content with decrypted plaintext."
+  (interactive)
+  (sss--open-buffer))
+
+(defun sss-seal-buffer ()
+  "Re-seal and save the current sss buffer.
+Interactive command for `sss-mode-map' (\\[sss-seal-buffer]).
+Equivalent to \\[save-buffer] — triggers `write-contents-functions'."
+  (interactive)
+  (save-buffer))
 
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

@@ -27,7 +27,11 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. `sss render FILE` writes decrypted plaintext to stdout and exits 0; exits non-zero with a stderr message when keystore auth fails
   2. `sss seal --in-place FILE` re-encrypts the named file in place and exits 0; exits non-zero with a stderr message on failure
   3. The exact byte sequence for the sealed-file marker (`⊠{`) is confirmed from `src/constants.rs` and matches what a real sealed file produces
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Audit existing implementation and run e2e test suite against roadmap criteria
+- [ ] 01-02-PLAN.md — Add three targeted smoke tests for coverage gaps, confirm full suite passes
 
 ### Phase 2: sss-mode Core
 **Goal**: Opening a sealed file in Emacs transparently decrypts it; saving re-seals it on disk; failures are always visible
@@ -71,7 +75,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI Foundation | 0/? | Not started | - |
+| 1. CLI Foundation | 0/2 | Planned | - |
 | 2. sss-mode Core | 0/? | Not started | - |
 | 3. sss-mode Complete | 0/? | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

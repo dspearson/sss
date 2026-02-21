@@ -38,7 +38,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details.
   4. `M-x sss-keygen` calls `sss keys generate` (not the deprecated `sss keygen`)
   5. User can enable overlay mode and see inline visual previews on sealed markers without modifying the buffer
   6. `M-x sss-dispatch` (or equivalent) opens a transient menu listing all available sss commands
-**Plans:** 3 plans
+**Plans:** 2/3 plans executed
 
 Plans:
 - [ ] 05-01-PLAN.md -- Region encrypt/decrypt, keygen fix, auth-source integration (Wave 1)
@@ -87,6 +87,6 @@ Wave structure:
 | 2. sss-mode Core | v1.0 | 3/3 | Complete | 2026-02-21 |
 | 3. sss-mode Complete | v1.0 | 2/2 | Complete | 2026-02-21 |
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
-| 5. Core Operations & UX | v1.1 | 0/3 | Planned | - |
+| 5. Core Operations & UX | 2/3 | In Progress|  | - |
 | 6. Evil & Doom Integration | v1.1 | 0/2 | Not started | - |
 | 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |

@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 5 (Core Operations & UX)
-Plan: 2/3
+Plan: 3/3
 Status: In progress
-Last activity: 2026-02-21 -- 05-01 complete (region ops, auth-source, keygen fix)
+Last activity: 2026-02-21 -- 05-02 complete (toggle-at-point, overlay mode, preview-at-point)
 
 Progress: [█░░░░░░░░░] 10%
 
@@ -37,6 +37,12 @@ Phase 5 Plan 01 decisions (2026-02-21):
 - Use (require 'auth-source nil t) guard: zero hard external dependencies
 - sss--call-cli-region mirrors sss--call-cli exactly: same (EXIT STDOUT STDERR) triple
 
+Phase 5 Plan 02 decisions (2026-02-21):
+- Use letrec for self-referential cleanup lambda in pre-command-hook (avoids free variable warning)
+- Use (eq (char-after start) ?\u22A0) for sealed marker detection in overlays (char-after returns Unicode codepoint, not UTF-8 bytes)
+- sss-toggle-overlay-mode has no keybinding in base mode-map -- will be in sss-dispatch (Plan 05-03)
+- Preview dismissal via pre-command-hook not timers -- deterministic cleanup
+
 ### Pending Todos
 
 None.
@@ -50,5 +56,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 05-core-operations-ux 05-01-PLAN.md
-Resume with: `/gsd:execute-phase 5` (continue with 05-02-PLAN.md)
+Stopped at: Completed 05-core-operations-ux 05-02-PLAN.md
+Resume with: `/gsd:execute-phase 5` (continue with 05-03-PLAN.md)

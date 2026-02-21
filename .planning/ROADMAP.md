@@ -12,7 +12,7 @@ This milestone adds two deliverables on top of the existing sss binary: an Emacs
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: CLI Foundation** - Verify and extend sss CLI flags needed by the Emacs mode
+- [x] **Phase 1: CLI Foundation** - Verify and extend sss CLI flags needed by the Emacs mode
 - [ ] **Phase 2: sss-mode Core** - Detection predicate, CLI helper, open flow, save flow
 - [ ] **Phase 3: sss-mode Complete** - UX polish, project commands, packaging structure
 - [ ] **Phase 4: Documentation** - README overhaul, usage guide, architecture, security, reference docs
@@ -30,8 +30,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 2 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Audit existing implementation and run e2e test suite against roadmap criteria
-- [ ] 01-02-PLAN.md — Add three targeted smoke tests for coverage gaps, confirm full suite passes
+- [x] 01-01-PLAN.md — Audit existing implementation and run e2e test suite against roadmap criteria
+- [x] 01-02-PLAN.md — Add three targeted smoke tests for coverage gaps, confirm full suite passes
 
 ### Phase 2: sss-mode Core
 **Goal**: Opening a sealed file in Emacs transparently decrypts it; saving re-seals it on disk; failures are always visible
@@ -75,7 +75,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI Foundation | 1/2 | In Progress|  |
+| 1. CLI Foundation | 2/2 | Complete | 2026-02-21 |
 | 2. sss-mode Core | 0/? | Not started | - |
 | 3. sss-mode Complete | 0/? | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

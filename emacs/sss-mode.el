@@ -203,6 +203,103 @@ is an accepted limitation identical to the epa-file.el pattern."
        (error "Sss-mode: sealing failed (exit %d): %s"
               exit (string-trim stderr))))))
 
+;;; Render command
+
+(defun sss--display-output (buf-name content)
+  "Display CONTENT in a read-only buffer named BUF-NAME.
+BUF-NAME is a string.  CONTENT is inserted after erasing any
+previous content.  Buffer is displayed via `display-buffer'."
+  (with-current-buffer (get-buffer-create buf-name)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert content))
+    (read-only-mode 1)
+    (goto-char (point-min)))
+  (display-buffer buf-name))
+
+;;;###autoload
+(defun sss-render-buffer ()
+  "Display the current file with all SSS markers stripped.
+Calls `sss render FILE' and shows pure plaintext in buffer
+*SSS Rendered*.  Operates on the file on disk; unsaved buffer
+changes are not reflected."
+  (interactive)
+  (unless buffer-file-name
+    (error "Sss-mode: buffer has no associated file; cannot render"))
+  (when (buffer-modified-p)
+    (message "Sss-mode: warning: buffer has unsaved changes; \
+rendering disk version"))
+  (pcase (sss--call-cli '("render") buffer-file-name)
+    (`(0 ,stdout ,_stderr)
+     (sss--display-output "*SSS Rendered*" stdout))
+    (`(,exit ,_stdout ,stderr)
+     (error "Sss-mode: sss render failed (exit %d): %s"
+            exit (string-trim stderr)))))
+
+;;; Project commands
+
+;;;###autoload
+(defun sss-init ()
+  "Initialise an SSS project in the current directory.
+Runs `sss init' and displays the output."
+  (interactive)
+  (pcase (sss--call-cli '("init"))
+    (`(0 ,stdout ,stderr)
+     (sss--display-output "*SSS Init*"
+                          (concat stdout
+                                  (unless (string-empty-p stderr)
+                                    (concat "\n" stderr)))))
+    (`(,exit ,_stdout ,stderr)
+     (error "Sss-mode: sss init failed (exit %d): %s"
+            exit (string-trim stderr)))))
+
+;;;###autoload
+(defun sss-process ()
+  "Seal all plaintext markers in the current SSS project.
+Runs `sss seal --project' (the project-wide seal operation).
+There is no `sss process' subcommand; this command provides the
+equivalent functionality."
+  (interactive)
+  (pcase (sss--call-cli '("seal" "--project"))
+    (`(0 ,stdout ,stderr)
+     (sss--display-output "*SSS Process*"
+                          (concat stdout
+                                  (unless (string-empty-p stderr)
+                                    (concat "\n" stderr)))))
+    (`(,exit ,_stdout ,stderr)
+     (error "Sss-mode: sss seal --project failed (exit %d): %s"
+            exit (string-trim stderr)))))
+
+;;;###autoload
+(defun sss-keygen ()
+  "Generate a new SSS keypair.
+Runs `sss keygen' and displays the output."
+  (interactive)
+  (pcase (sss--call-cli '("keygen"))
+    (`(0 ,stdout ,stderr)
+     (sss--display-output "*SSS Keygen*"
+                          (concat stdout
+                                  (unless (string-empty-p stderr)
+                                    (concat "\n" stderr)))))
+    (`(,exit ,_stdout ,stderr)
+     (error "Sss-mode: sss keygen failed (exit %d): %s"
+            exit (string-trim stderr)))))
+
+;;;###autoload
+(defun sss-keys-list ()
+  "Display the list of available SSS keys.
+Runs `sss keys list' and shows the output in buffer *SSS Keys*."
+  (interactive)
+  (pcase (sss--call-cli '("keys" "list"))
+    (`(0 ,stdout ,_stderr)
+     (sss--display-output "*SSS Keys*"
+                          (if (string-empty-p stdout)
+                              "No keys found.\n"
+                            stdout)))
+    (`(,exit ,_stdout ,stderr)
+     (error "Sss-mode: sss keys list failed (exit %d): %s"
+            exit (string-trim stderr)))))
+
 ;;; Mode definition
 
 ;;;###autoload
@@ -230,6 +327,11 @@ Customization: \\[customize-group] RET sss RET
   ;; Bind commands under C-c C-x pattern (package-lint compliant).
   (define-key sss-mode-map (kbd "C-c C-o") #'sss-open-buffer)
   (define-key sss-mode-map (kbd "C-c C-s") #'sss-seal-buffer)
+  (define-key sss-mode-map (kbd "C-c C-r") #'sss-render-buffer)
+  (define-key sss-mode-map (kbd "C-c C-i") #'sss-init)
+  (define-key sss-mode-map (kbd "C-c C-p") #'sss-process)
+  (define-key sss-mode-map (kbd "C-c C-k") #'sss-keygen)
+  (define-key sss-mode-map (kbd "C-c C-l") #'sss-keys-list)
   ;; Install find-file-hook to handle decryption when mode activates on open.
   ;; The hook checks sss--sealed-p before acting — safe to install globally.
   (add-hook 'find-file-hook #'sss--find-file-hook))

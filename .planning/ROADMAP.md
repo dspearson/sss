@@ -59,7 +59,11 @@ Plans:
   2. `M-x sss-render-buffer` displays the file content with all markers stripped (pure plaintext view)
   3. `M-x sss-init`, `M-x sss-process`, `M-x sss-keygen`, and `M-x sss-keys-list` each run the corresponding sss subcommand and display output
   4. `emacs/sss-mode.el` byte-compiles without warnings, passes package-lint and checkdoc, requires no external MELPA packages
-**Plans**: TBD
+**Plans**: 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Visual polish: font-lock faces for markers, modeline state indicator, key binding fix for package-lint
+- [ ] 03-02-PLAN.md — Project commands: sss-render-buffer, sss-init, sss-process, sss-keygen, sss-keys-list, autoload cookies, final lint pass
 
 ### Phase 4: Documentation
 **Goal**: A new user can install sss, understand the security model, and complete common workflows using the documentation alone
@@ -82,5 +86,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation | 2/2 | Complete    | 2026-02-21 |
 | 2. sss-mode Core | 3/3 | Complete    | 2026-02-21 |
-| 3. sss-mode Complete | 0/? | Not started | - |
+| 3. sss-mode Complete | 0/2 | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

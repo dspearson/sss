@@ -62,7 +62,7 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Visual polish: font-lock faces for markers, modeline state indicator, key binding fix for package-lint
+- [x] 03-01-PLAN.md — Visual polish: font-lock faces for markers, modeline state indicator, key binding fix for package-lint
 - [ ] 03-02-PLAN.md — Project commands: sss-render-buffer, sss-init, sss-process, sss-keygen, sss-keys-list, autoload cookies, final lint pass
 
 ### Phase 4: Documentation
@@ -86,5 +86,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation | 2/2 | Complete    | 2026-02-21 |
 | 2. sss-mode Core | 3/3 | Complete    | 2026-02-21 |
-| 3. sss-mode Complete | 0/2 | Not started | - |
+| 3. sss-mode Complete | 1/2 | In Progress | - |
 | 4. Documentation | 0/? | Not started | - |

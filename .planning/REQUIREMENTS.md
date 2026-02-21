@@ -26,8 +26,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Emacs UX
 
-- [ ] **EMUX-01**: sss-mode syntax-highlights ⊕{} (open) and ⊠{} (sealed) markers with distinct faces
-- [ ] **EMUX-02**: sss-mode shows [SEALED]/[OPEN] state indicator in modeline
+- [x] **EMUX-01**: sss-mode syntax-highlights ⊕{} (open) and ⊠{} (sealed) markers with distinct faces
+- [x] **EMUX-02**: sss-mode shows [SEALED]/[OPEN] state indicator in modeline
 - [ ] **EMUX-03**: sss-mode provides `M-x sss-render-buffer` for pure plaintext view (markers stripped)
 
 ### Emacs Project Commands
@@ -39,9 +39,9 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Emacs Packaging
 
-- [ ] **PACK-01**: sss-mode is a single .el file under `emacs/` directory in the repo
-- [ ] **PACK-02**: sss-mode uses `lexical-binding: t` and requires Emacs 27.1+
-- [ ] **PACK-03**: sss-mode has zero external Emacs package dependencies
+- [x] **PACK-01**: sss-mode is a single .el file under `emacs/` directory in the repo
+- [x] **PACK-02**: sss-mode uses `lexical-binding: t` and requires Emacs 27.1+
+- [x] **PACK-03**: sss-mode has zero external Emacs package dependencies
 - [ ] **PACK-04**: sss-mode provides proper `provide`, `require`, and autoload cookies
 
 ### Documentation
@@ -96,16 +96,16 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | EMAC-07 | Phase 2 | Complete |
 | EMAC-08 | Phase 2 | Complete |
 | EMAC-09 | Phase 2 | Complete |
-| EMUX-01 | Phase 3 | Pending |
-| EMUX-02 | Phase 3 | Pending |
+| EMUX-01 | Phase 3 | Complete |
+| EMUX-02 | Phase 3 | Complete |
 | EMUX-03 | Phase 3 | Pending |
 | PROJ-01 | Phase 3 | Pending |
 | PROJ-02 | Phase 3 | Pending |
 | PROJ-03 | Phase 3 | Pending |
 | PROJ-04 | Phase 3 | Pending |
-| PACK-01 | Phase 3 | Pending |
-| PACK-02 | Phase 3 | Pending |
-| PACK-03 | Phase 3 | Pending |
+| PACK-01 | Phase 3 | Complete |
+| PACK-02 | Phase 3 | Complete |
+| PACK-03 | Phase 3 | Complete |
 | PACK-04 | Phase 3 | Pending |
 | DOC-01 | Phase 4 | Pending |
 | DOC-02 | Phase 4 | Pending |
@@ -122,4 +122,4 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-21 — traceability confirmed against ROADMAP.md*
+*Last updated: 2026-02-21 — EMUX-01, EMUX-02, PACK-01, PACK-02, PACK-03 marked complete (Phase 3 Plan 01)*

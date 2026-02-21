@@ -9,8 +9,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### CLI Foundation
 
-- [ ] **CLI-01**: `sss render` and `sss open` support stdout output for piping to Emacs
-- [ ] **CLI-02**: `sss seal --in-place` works for re-sealing an opened file after editing
+- [x] **CLI-01**: `sss render` and `sss open` support stdout output for piping to Emacs
+- [x] **CLI-02**: `sss seal --in-place` works for re-sealing an opened file after editing
 
 ### Emacs Core
 
@@ -85,8 +85,8 @@ Deferred to future milestone. Tracked but not in current roadmap.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CLI-01 | Phase 1 | Pending |
-| CLI-02 | Phase 1 | Pending |
+| CLI-01 | Phase 1 | Complete |
+| CLI-02 | Phase 1 | Complete |
 | EMAC-01 | Phase 2 | Pending |
 | EMAC-02 | Phase 2 | Pending |
 | EMAC-03 | Phase 2 | Pending |

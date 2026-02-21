@@ -75,7 +75,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CLI Foundation | 0/2 | Planned | - |
+| 1. CLI Foundation | 1/2 | In Progress|  |
 | 2. sss-mode Core | 0/? | Not started | - |
 | 3. sss-mode Complete | 0/? | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

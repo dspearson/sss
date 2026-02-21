@@ -38,12 +38,17 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details.
   4. `M-x sss-keygen` calls `sss keys generate` (not the deprecated `sss keygen`)
   5. User can enable overlay mode and see inline visual previews on sealed markers without modifying the buffer
   6. `M-x sss-dispatch` (or equivalent) opens a transient menu listing all available sss commands
-**Plans**: 3 plans (suggested)
+**Plans:** 3 plans
+
+Plans:
+- [ ] 05-01-PLAN.md -- Region encrypt/decrypt, keygen fix, auth-source integration (Wave 1)
+- [ ] 05-02-PLAN.md -- Toggle at point, overlay mode, preview at point (Wave 2)
+- [ ] 05-03-PLAN.md -- Transient menu with completing-read fallback (Wave 3)
 
 Wave structure:
-- **Wave 1** (parallel): CORE-01 + CORE-02 (region encrypt/decrypt) | CORE-04 (keygen fix) | UX-03 (auth-source)
-- **Wave 2** (parallel): CORE-03 (toggle, needs region ops) | UX-01 (overlay mode) | UX-02 (preview at point)
-- **Wave 3**: UX-04 (transient menu -- dispatches to all commands, so needs them to exist first)
+- **Wave 1**: 05-01 (CORE-01 + CORE-02 + CORE-04 + UX-03)
+- **Wave 2**: 05-02 (CORE-03 + UX-01 + UX-02) -- depends on 05-01
+- **Wave 3**: 05-03 (UX-04) -- depends on 05-02
 
 ### Phase 6: Evil & Doom Integration
 **Goal**: Evil users can encrypt/decrypt via motions and text objects; Doom users get idiomatic leader bindings -- with graceful degradation when evil or Doom are absent
@@ -82,6 +87,6 @@ Wave structure:
 | 2. sss-mode Core | v1.0 | 3/3 | Complete | 2026-02-21 |
 | 3. sss-mode Complete | v1.0 | 2/2 | Complete | 2026-02-21 |
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
-| 5. Core Operations & UX | v1.1 | 0/3 | Not started | - |
+| 5. Core Operations & UX | v1.1 | 0/3 | Planned | - |
 | 6. Evil & Doom Integration | v1.1 | 0/2 | Not started | - |
 | 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |

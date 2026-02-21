@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Secrets management should be invisible — open, edit, save, sealed.
-**Current focus:** Phase 4 — Documentation (in progress)
+**Current focus:** Phase 4 — Documentation (COMPLETE)
 
 ## Current Position
 
 Phase: 4 of 4 (Documentation)
-Plan: 3 of 7 in current phase (Plan 04-03 COMPLETE)
-Status: Phase 4 In Progress
-Last activity: 2026-02-21 — Plan 04-03 complete: docs/architecture.md (DOC-03) and docs/sss-mode-guide.md (DOC-07) written from source, verified all key bindings and --non-interactive flag, British English throughout
+Plan: 4 of 4 in current phase (Plan 04-04 COMPLETE)
+Status: Phase 4 Complete
+Last activity: 2026-02-21 — Plan 04-04 complete: README.md overhauled (DOC-01) — 628 lines to 272 lines, correct quickstart, accurate crypto claims, all six docs/ links
 
-Progress: [█████████░] 86%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
-- Average duration: 4.5 min
-- Total execution time: 0.44 hours
+- Total plans completed: 10
+- Average duration: 4.7 min
+- Total execution time: 0.78 hours
 
 **By Phase:**
 
@@ -30,6 +30,7 @@ Progress: [█████████░] 86%
 | 01-cli-foundation | 2 | 13 min | 6.5 min |
 | 02-sss-mode-core | 3 | 14 min | 4.7 min |
 | 03-sss-mode-complete | 2 | 3 min | 1.5 min |
+| 04-documentation | 4 | 21 min | 5.25 min |
 
 **Recent Trend:**
 - Last 5 plans: 5 min, 5 min, 4 min, 1 min, 2 min
@@ -46,6 +47,7 @@ Progress: [█████████░] 86%
 | Phase 04-documentation P01 | 5 min | 2 tasks | 2 files |
 | Phase 04-documentation P02 | 4 min | 2 tasks | 2 files |
 | Phase 04-documentation P03 | 5 min | 2 tasks | 2 files |
+| Phase 04-documentation P04 | 7 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -89,6 +91,9 @@ Recent decisions affecting current work:
 - [Phase 04-documentation P02]: Deterministic nonces via BLAKE2b keyed hash allow clean git diffs at cost of revealing when secrets change
 - [Phase 04-documentation P03]: docs/architecture.md is user-facing explanation of internals, not a replacement for root ARCHITECTURE.md (protocol spec)
 - [Phase 04-documentation P03]: sss-process calls sss seal --project confirmed again — no sss process subcommand exists in CLI
+- [Phase 04-documentation]: README quickstart starts with sss keys generate (step 1) — cannot init without a keypair
+- [Phase 04-documentation]: README reduced from 628 to 272 lines by delegating command reference and code structure to docs/ — README is entry point not reference
+- [Phase 04-documentation]: No cargo install sss path in README — crate does not publish to crates.io; build from source is primary installation path
 
 ### Pending Todos
 
@@ -103,5 +108,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 04-02-PLAN.md and 04-03-PLAN.md (security-model.md DOC-04, marker-format.md DOC-05, architecture.md DOC-03, sss-mode-guide.md DOC-07)
+Stopped at: Completed 04-04-PLAN.md (README.md DOC-01) — Phase 4 documentation complete
 Resume file: None

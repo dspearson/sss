@@ -28,21 +28,21 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 - [x] **EMUX-01**: sss-mode syntax-highlights ⊕{} (open) and ⊠{} (sealed) markers with distinct faces
 - [x] **EMUX-02**: sss-mode shows [SEALED]/[OPEN] state indicator in modeline
-- [ ] **EMUX-03**: sss-mode provides `M-x sss-render-buffer` for pure plaintext view (markers stripped)
+- [x] **EMUX-03**: sss-mode provides `M-x sss-render-buffer` for pure plaintext view (markers stripped)
 
 ### Emacs Project Commands
 
-- [ ] **PROJ-01**: `M-x sss-init` runs `sss init` in the current project directory
-- [ ] **PROJ-02**: `M-x sss-process` runs `sss process` in the current project directory
-- [ ] **PROJ-03**: `M-x sss-keygen` runs `sss keygen` and displays output
-- [ ] **PROJ-04**: `M-x sss-keys-list` shows current keystore/project keys in a read-only buffer
+- [x] **PROJ-01**: `M-x sss-init` runs `sss init` in the current project directory
+- [x] **PROJ-02**: `M-x sss-process` runs `sss process` in the current project directory
+- [x] **PROJ-03**: `M-x sss-keygen` runs `sss keygen` and displays output
+- [x] **PROJ-04**: `M-x sss-keys-list` shows current keystore/project keys in a read-only buffer
 
 ### Emacs Packaging
 
 - [x] **PACK-01**: sss-mode is a single .el file under `emacs/` directory in the repo
 - [x] **PACK-02**: sss-mode uses `lexical-binding: t` and requires Emacs 27.1+
 - [x] **PACK-03**: sss-mode has zero external Emacs package dependencies
-- [ ] **PACK-04**: sss-mode provides proper `provide`, `require`, and autoload cookies
+- [x] **PACK-04**: sss-mode provides proper `provide`, `require`, and autoload cookies
 
 ### Documentation
 
@@ -98,15 +98,15 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | EMAC-09 | Phase 2 | Complete |
 | EMUX-01 | Phase 3 | Complete |
 | EMUX-02 | Phase 3 | Complete |
-| EMUX-03 | Phase 3 | Pending |
-| PROJ-01 | Phase 3 | Pending |
-| PROJ-02 | Phase 3 | Pending |
-| PROJ-03 | Phase 3 | Pending |
-| PROJ-04 | Phase 3 | Pending |
+| EMUX-03 | Phase 3 | Complete |
+| PROJ-01 | Phase 3 | Complete |
+| PROJ-02 | Phase 3 | Complete |
+| PROJ-03 | Phase 3 | Complete |
+| PROJ-04 | Phase 3 | Complete |
 | PACK-01 | Phase 3 | Complete |
 | PACK-02 | Phase 3 | Complete |
 | PACK-03 | Phase 3 | Complete |
-| PACK-04 | Phase 3 | Pending |
+| PACK-04 | Phase 3 | Complete |
 | DOC-01 | Phase 4 | Pending |
 | DOC-02 | Phase 4 | Pending |
 | DOC-03 | Phase 4 | Pending |

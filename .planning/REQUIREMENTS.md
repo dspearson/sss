@@ -82,7 +82,7 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 - [x] **UX-01**: Fancy overlay mode -- inline decrypt previews using overlays on sealed markers
 - [x] **UX-02**: Preview secret at point -- show decrypted value of marker at point without modifying buffer
 - [x] **UX-03**: Auth-source integration -- password caching via Emacs auth-source for keystore passphrase
-- [ ] **UX-04**: Transient menu -- `sss-dispatch` (or equivalent) for discoverability of all commands
+- [x] **UX-04**: Transient menu -- `sss-dispatch` (or equivalent) for discoverability of all commands
 
 ### Cleanup
 
@@ -157,7 +157,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | UX-01 | Phase 5 | Complete |
 | UX-02 | Phase 5 | Complete |
 | UX-03 | Phase 5 | Complete |
-| UX-04 | Phase 5 | Pending |
+| UX-04 | Phase 5 | Complete |
 | EVIL-01 | Phase 6 | Pending |
 | EVIL-02 | Phase 6 | Pending |
 | EVIL-03 | Phase 6 | Pending |

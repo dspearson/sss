@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-21)
 
 **Core value:** Secrets management should be invisible — open, edit, save, sealed.
-**Current focus:** Phase 1 — CLI Foundation (COMPLETE)
+**Current focus:** Phase 2 — sss-mode Core (IN PROGRESS)
 
 ## Current Position
 
-Phase: 1 of 4 (CLI Foundation)
-Plan: 2 of 2 in current phase (Phase 1 COMPLETE)
-Status: Phase 1 Complete
-Last activity: 2026-02-21 — Plan 02 complete: Phase 1 gap-fill tests, all 74/74 passing
+Phase: 2 of 4 (sss-mode Core)
+Plan: 1 of 4 in current phase (Plan 01 COMPLETE)
+Status: Phase 2 In Progress
+Last activity: 2026-02-21 — Plan 02-01 complete: sss-mode.el foundation (header, CLI helper, detection predicate)
 
-Progress: [██░░░░░░░░] 20%
+Progress: [███░░░░░░░] 25%
 
 ## Performance Metrics
 
@@ -28,14 +28,16 @@ Progress: [██░░░░░░░░] 20%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-cli-foundation | 2 | 13 min | 6.5 min |
+| 02-sss-mode-core | 1 | 5 min | 5 min |
 
 **Recent Trend:**
-- Last 5 plans: 8 min, 5 min
+- Last 5 plans: 8 min, 5 min, 5 min
 - Trend: fast
 
 *Updated after each plan completion*
 | Phase 01-cli-foundation P01 | 8 min | 2 tasks | 1 file |
 | Phase 01-cli-foundation P02 | 5 min | 2 tasks | 1 file |
+| Phase 02-sss-mode-core P01 | 5 min | 1 task | 1 file |
 
 ## Accumulated Context
 
@@ -54,6 +56,9 @@ Recent decisions affecting current work:
 - [Phase 01-cli-foundation P02]: Auth failure test uses direct .sss.toml manipulation (strip_toml_section) — users remove requires interactive rotation confirm that auto-cancels on empty stdin
 - [Phase 01-cli-foundation P02]: Phase 1 gate PASSED — all 7 roadmap success criteria covered by named passing tests
 - [Phase 01-cli-foundation P02]: users remove does NOT respect SSS_NONINTERACTIVE for rotation confirmation (reads stdin directly)
+- [Phase 02-sss-mode-core P01]: stderr-dest in call-process MUST be a file path string (not buffer object) — verified Emacs 30.1
+- [Phase 02-sss-mode-core P01]: magic-mode-alist uses MATCH-FUNCTION variant (named predicate) for multibyte-safe ⊠{ detection
+- [Phase 02-sss-mode-core P01]: sss-mode forward reference in magic-mode-alist is acceptable (resolved at call time, not registration)
 
 ### Pending Todos
 
@@ -68,5 +73,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 01-cli-foundation-02-PLAN.md (Phase 1 complete)
+Stopped at: Completed 02-sss-mode-core-01-PLAN.md (Phase 2 Plan 1 complete)
 Resume file: None

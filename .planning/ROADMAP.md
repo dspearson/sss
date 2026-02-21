@@ -13,7 +13,7 @@ This milestone adds two deliverables on top of the existing sss binary: an Emacs
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: CLI Foundation** - Verify and extend sss CLI flags needed by the Emacs mode
-- [ ] **Phase 2: sss-mode Core** - Detection predicate, CLI helper, open flow, save flow
+- [x] **Phase 2: sss-mode Core** - Detection predicate, CLI helper, open flow, save flow (completed 2026-02-21)
 - [ ] **Phase 3: sss-mode Complete** - UX polish, project commands, packaging structure
 - [ ] **Phase 4: Documentation** - README overhaul, usage guide, architecture, security, reference docs
 
@@ -81,6 +81,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CLI Foundation | 2/2 | Complete    | 2026-02-21 |
-| 2. sss-mode Core | 2/3 | In Progress|  |
+| 2. sss-mode Core | 3/3 | Complete   | 2026-02-21 |
 | 3. sss-mode Complete | 0/? | Not started | - |
 | 4. Documentation | 0/? | Not started | - |

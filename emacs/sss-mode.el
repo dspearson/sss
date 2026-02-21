@@ -31,6 +31,14 @@ Example: \"/usr/local/bin/sss\""
   :type 'string
   :group 'sss)
 
+(defcustom sss-use-auth-source t
+  "When non-nil, use auth-source for keystore passphrase lookup.
+Passphrases are stored under host \"sss\" in `auth-sources'.
+Example ~/.authinfo entry: machine sss login default password YOURPASS
+Requires auth-source (bundled with Emacs 27.1+)."
+  :type 'boolean
+  :group 'sss)
+
 (defconst sss--sealed-marker "\xe2\x8a\xa0{"
   "UTF-8 byte sequence for the sealed SSS marker \xe2\x8a\xa0{.
 U+22A0 (SQUARE ORIGINAL OF) followed by U+007B (LEFT CURLY BRACKET).
@@ -76,6 +84,18 @@ Highlights open markers and sealed markers with distinct faces.")
   "Current state of this sss buffer.
 Value is the symbol \\='sealed or \\='open.")
 
+(defun sss--get-passphrase ()
+  "Return passphrase for SSS keystore from auth-source, or nil.
+Checks auth-source when `sss-use-auth-source' is non-nil.
+The passphrase is cached by auth-source in the user's credential store."
+  (when (and sss-use-auth-source (require 'auth-source nil t))
+    (let ((result (auth-source-search :host "sss"
+                                      :require '(:secret)
+                                      :max 1)))
+      (when result
+        (let ((secret (plist-get (car result) :secret)))
+          (if (functionp secret) (funcall secret) secret))))))
+
 (defun sss--call-cli (args &optional input-file)
   "Call the sss binary with ARGS, return (EXIT-CODE STDOUT STDERR).
 ARGS is a list of strings (subcommand and flags, without the binary name).
@@ -84,6 +104,11 @@ The --non-interactive flag is always prepended to prevent TTY blocking.
 EXIT-CODE is an integer (0 = success).  STDOUT and STDERR are strings."
   (let* ((stdout-buf (generate-new-buffer " *sss-stdout*"))
          (stderr-file (make-temp-file "sss-stderr"))
+         (passphrase (sss--get-passphrase))
+         (process-environment
+          (if passphrase
+              (cons (concat "SSS_PASSPHRASE=" passphrase) process-environment)
+            process-environment))
          exit-code stdout stderr)
     (unwind-protect
         (progn

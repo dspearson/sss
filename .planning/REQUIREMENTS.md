@@ -1,0 +1,125 @@
+# Requirements: SSS — Documentation & Emacs Integration
+
+**Defined:** 2026-02-21
+**Core Value:** Secrets management should be invisible — open, edit, save, sealed.
+
+## v1 Requirements
+
+Requirements for this milestone. Each maps to roadmap phases.
+
+### CLI Foundation
+
+- [ ] **CLI-01**: `sss render` and `sss open` support stdout output for piping to Emacs
+- [ ] **CLI-02**: `sss seal --in-place` works for re-sealing an opened file after editing
+
+### Emacs Core
+
+- [ ] **EMAC-01**: sss-mode detects sealed files via marker content scanning (⊠{ magic bytes) using `magic-mode-alist`
+- [ ] **EMAC-02**: sss-mode auto-decrypts sealed files on open using keystore auto-authentication via `sss open`
+- [ ] **EMAC-03**: sss-mode re-seals buffer content on save using `write-contents-functions` (not hooks)
+- [ ] **EMAC-04**: sss-mode disables auto-save and backup files for decrypted buffers
+- [ ] **EMAC-05**: sss-mode uses `call-process` with exit code checking and stderr capture for all CLI invocations
+- [ ] **EMAC-06**: sss-mode provides clear error messages in minibuffer when decryption/sealing fails
+- [ ] **EMAC-07**: sss-mode defines a customization group with `sss-executable` path variable
+- [ ] **EMAC-08**: sss-mode provides a named keymap with `C-c` prefix for commands
+- [ ] **EMAC-09**: sss-mode displays marker-visible plaintext (⊕{} markers shown, not stripped)
+
+### Emacs UX
+
+- [ ] **EMUX-01**: sss-mode syntax-highlights ⊕{} (open) and ⊠{} (sealed) markers with distinct faces
+- [ ] **EMUX-02**: sss-mode shows [SEALED]/[OPEN] state indicator in modeline
+- [ ] **EMUX-03**: sss-mode provides `M-x sss-render-buffer` for pure plaintext view (markers stripped)
+
+### Emacs Project Commands
+
+- [ ] **PROJ-01**: `M-x sss-init` runs `sss init` in the current project directory
+- [ ] **PROJ-02**: `M-x sss-process` runs `sss process` in the current project directory
+- [ ] **PROJ-03**: `M-x sss-keygen` runs `sss keygen` and displays output
+- [ ] **PROJ-04**: `M-x sss-keys-list` shows current keystore/project keys in a read-only buffer
+
+### Emacs Packaging
+
+- [ ] **PACK-01**: sss-mode is a single .el file under `emacs/` directory in the repo
+- [ ] **PACK-02**: sss-mode uses `lexical-binding: t` and requires Emacs 27.1+
+- [ ] **PACK-03**: sss-mode has zero external Emacs package dependencies
+- [ ] **PACK-04**: sss-mode provides proper `provide`, `require`, and autoload cookies
+
+### Documentation
+
+- [ ] **DOC-01**: README overhaul with installation (cargo, pre-built, RPM/DEB), quickstart, feature overview
+- [ ] **DOC-02**: Usage guide covering common workflows: seal, open, edit, process, key management, team collaboration
+- [ ] **DOC-03**: Architecture documentation explaining marker inference, processor pipeline, key loading, FUSE/9P
+- [ ] **DOC-04**: Security model documentation: what is encrypted, algorithms, threat model, what is NOT protected
+- [ ] **DOC-05**: Marker format reference: ⊕{} and ⊠{} semantics, rendering behaviour
+- [ ] **DOC-06**: Configuration reference for .sss.toml and settings.toml
+- [ ] **DOC-07**: sss-mode installation and usage guide (Emacs setup, keyring prerequisites)
+
+## v2 Requirements
+
+Deferred to future milestone. Tracked but not in current roadmap.
+
+### Emacs Enhancements
+
+- **EMAC-V2-01**: `M-x sss-audit` for viewing audit results in a buffer
+- **EMAC-V2-02**: Selective seal/unseal of individual marker regions
+- **EMAC-V2-03**: MELPA package submission
+- **EMAC-V2-04**: Async/background decryption for large files
+
+### Documentation Enhancements
+
+- **DOC-V2-01**: Man page generation via `clap_mangen`
+- **DOC-V2-02**: Auto-generated CLI reference via `clap-markdown`
+- **DOC-V2-03**: mdBook documentation site with search
+
+## Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| Interactive passphrase prompts in Emacs | Contradicts keystore auto-auth design; adds friction |
+| FUSE mount/unmount from Emacs | Stateful, platform-specific, not core to edit workflow |
+| Auto-revert encrypted files | Creates decrypt/seal loop; fragile |
+| Org-crypt integration | Marker system conflicts; research project, not v1 |
+| Emacs async operations | Adds process sentinel complexity; secrets files are small |
+
+## Traceability
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| CLI-01 | Phase 1 | Pending |
+| CLI-02 | Phase 1 | Pending |
+| EMAC-01 | Phase 2 | Pending |
+| EMAC-02 | Phase 2 | Pending |
+| EMAC-03 | Phase 2 | Pending |
+| EMAC-04 | Phase 2 | Pending |
+| EMAC-05 | Phase 2 | Pending |
+| EMAC-06 | Phase 2 | Pending |
+| EMAC-07 | Phase 2 | Pending |
+| EMAC-08 | Phase 2 | Pending |
+| EMAC-09 | Phase 2 | Pending |
+| EMUX-01 | Phase 3 | Pending |
+| EMUX-02 | Phase 3 | Pending |
+| EMUX-03 | Phase 3 | Pending |
+| PROJ-01 | Phase 3 | Pending |
+| PROJ-02 | Phase 3 | Pending |
+| PROJ-03 | Phase 3 | Pending |
+| PROJ-04 | Phase 3 | Pending |
+| PACK-01 | Phase 3 | Pending |
+| PACK-02 | Phase 3 | Pending |
+| PACK-03 | Phase 3 | Pending |
+| PACK-04 | Phase 3 | Pending |
+| DOC-01 | Phase 4 | Pending |
+| DOC-02 | Phase 4 | Pending |
+| DOC-03 | Phase 4 | Pending |
+| DOC-04 | Phase 4 | Pending |
+| DOC-05 | Phase 4 | Pending |
+| DOC-06 | Phase 4 | Pending |
+| DOC-07 | Phase 4 | Pending |
+
+**Coverage:**
+- v1 requirements: 29 total
+- Mapped to phases: 29
+- Unmapped: 0 ✓
+
+---
+*Requirements defined: 2026-02-21*
+*Last updated: 2026-02-21 after initial definition*

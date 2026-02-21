@@ -46,7 +46,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Documentation
 
-- [ ] **DOC-01**: README overhaul with installation (cargo, pre-built, RPM/DEB), quickstart, feature overview
+- [x] **DOC-01**: README overhaul with installation (cargo, pre-built, RPM/DEB), quickstart, feature overview
 - [x] **DOC-02**: Usage guide covering common workflows: seal, open, edit, process, key management, team collaboration
 - [x] **DOC-03**: Architecture documentation explaining marker inference, processor pipeline, key loading, FUSE/9P
 - [x] **DOC-04**: Security model documentation: what is encrypted, algorithms, threat model, what is NOT protected
@@ -107,7 +107,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | PACK-02 | Phase 3 | Complete |
 | PACK-03 | Phase 3 | Complete |
 | PACK-04 | Phase 3 | Complete |
-| DOC-01 | Phase 4 | Pending |
+| DOC-01 | Phase 4 | Complete |
 | DOC-02 | Phase 4 | Complete |
 | DOC-03 | Phase 4 | Complete |
 | DOC-04 | Phase 4 | Complete |

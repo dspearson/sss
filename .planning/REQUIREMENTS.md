@@ -1,7 +1,7 @@
-# Requirements: SSS — Documentation & Emacs Integration
+# Requirements: SSS — Emacs Integration Consolidation
 
 **Defined:** 2026-02-21
-**Core Value:** Secrets management should be invisible — open, edit, save, sealed.
+**Core Value:** Secrets management should be invisible -- open, edit, save, sealed.
 
 ## v1 Requirements
 
@@ -53,6 +53,42 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **DOC-05**: Marker format reference: ⊕{} and ⊠{} semantics, rendering behaviour
 - [x] **DOC-06**: Configuration reference for .sss.toml and settings.toml
 - [x] **DOC-07**: sss-mode installation and usage guide (Emacs setup, keyring prerequisites)
+
+## v1.1 Requirements
+
+Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/emacs/` feature set into `emacs/sss-mode.el` with correct security patterns.
+
+### Core Operations
+
+- [ ] **CORE-01**: Region encrypt -- encrypt selected region in-place, wrapping in sealed marker
+- [ ] **CORE-02**: Region decrypt -- decrypt selected sealed region in-place to plaintext marker
+- [ ] **CORE-03**: Toggle at point -- detect marker type at point and toggle encrypt/decrypt
+- [ ] **CORE-04**: Fix deprecated keygen -- update `sss-keygen` to call `sss keys generate` instead of `sss keygen`
+
+### Evil Integration
+
+- [ ] **EVIL-01**: Evil encrypt operator -- `sss-evil-encrypt` motion-based operator for encrypting text objects
+- [ ] **EVIL-02**: Evil decrypt operator -- `sss-evil-decrypt` motion-based operator for decrypting text objects
+- [ ] **EVIL-03**: Evil toggle operator -- `sss-evil-toggle` motion-based operator for toggling encryption
+
+### Doom Integration
+
+- [ ] **DOOM-01**: Leader bindings -- `SPC e` prefix with encrypt/decrypt/toggle/process commands via `map!`
+- [ ] **DOOM-02**: Localleader bindings -- `, e` prefix for buffer-local sss operations via `map!`
+- [ ] **DOOM-03**: Conditional loading -- Doom integration loads only when `(modulep! :editor evil)` is available
+
+### UX Enhancements
+
+- [ ] **UX-01**: Fancy overlay mode -- inline decrypt previews using overlays on sealed markers
+- [ ] **UX-02**: Preview secret at point -- show decrypted value of marker at point without modifying buffer
+- [ ] **UX-03**: Auth-source integration -- password caching via Emacs auth-source for keystore passphrase
+- [ ] **UX-04**: Transient menu -- `sss-dispatch` (or equivalent) for discoverability of all commands
+
+### Cleanup
+
+- [ ] **CLEAN-01**: Remove `plugins/emacs/` directory after all features are ported
+- [ ] **CLEAN-02**: Update `docs/sss-mode-guide.md` to document new features (evil, doom, overlays, region ops)
+- [ ] **CLEAN-03**: Update README.md Emacs section to reflect consolidated package
 
 ## v2 Requirements
 
@@ -114,12 +150,34 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | DOC-05 | Phase 4 | Complete |
 | DOC-06 | Phase 4 | Complete |
 | DOC-07 | Phase 4 | Complete |
+| CORE-01 | Phase 5 | Pending |
+| CORE-02 | Phase 5 | Pending |
+| CORE-03 | Phase 5 | Pending |
+| CORE-04 | Phase 5 | Pending |
+| UX-01 | Phase 5 | Pending |
+| UX-02 | Phase 5 | Pending |
+| UX-03 | Phase 5 | Pending |
+| UX-04 | Phase 5 | Pending |
+| EVIL-01 | Phase 6 | Pending |
+| EVIL-02 | Phase 6 | Pending |
+| EVIL-03 | Phase 6 | Pending |
+| DOOM-01 | Phase 6 | Pending |
+| DOOM-02 | Phase 6 | Pending |
+| DOOM-03 | Phase 6 | Pending |
+| CLEAN-01 | Phase 7 | Pending |
+| CLEAN-02 | Phase 7 | Pending |
+| CLEAN-03 | Phase 7 | Pending |
 
-**Coverage:**
-- v1 requirements: 29 total
+**v1.0 Coverage:**
+- v1.0 requirements: 29 total
 - Mapped to phases: 29
-- Unmapped: 0 ✓
+- Unmapped: 0
+
+**v1.1 Coverage:**
+- v1.1 requirements: 17 total
+- Mapped to phases: 17
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-02-21*
-*Last updated: 2026-02-21 — DOC-03, DOC-07 marked complete (Phase 4 Plan 03)*
+*Last updated: 2026-02-21 -- v1.1 traceability updated after roadmap creation*

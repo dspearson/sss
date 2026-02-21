@@ -59,11 +59,15 @@ Wave structure:
   2. `SPC e` opens an encryption prefix with project/key/help commands; `, e` in sss-mode buffers provides buffer-local encrypt/decrypt/toggle
   3. Loading sss-mode in vanilla Emacs (no evil, no Doom) produces no errors or warnings -- evil and Doom features are conditionally defined
   4. Evil text objects `is` (inner sss pattern) and `as` (outer sss pattern) select pattern content and full pattern respectively
-**Plans**: 2 plans (suggested)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md -- Evil operators, text objects, conditional loading scaffold (Wave 1)
+- [ ] 06-02-PLAN.md -- Doom leader and localleader bindings (Wave 2)
 
 Wave structure:
-- **Wave 1** (parallel): EVIL-01 + EVIL-02 + EVIL-03 (evil operators + text objects) | DOOM-03 (conditional loading scaffold)
-- **Wave 2**: DOOM-01 + DOOM-02 (leader bindings, needs operators from Wave 1)
+- **Wave 1**: 06-01 (EVIL-01 + EVIL-02 + EVIL-03 + DOOM-03)
+- **Wave 2**: 06-02 (DOOM-01 + DOOM-02) -- depends on 06-01
 
 ### Phase 7: Cleanup & Documentation
 **Goal**: The `plugins/emacs/` directory is removed, documentation reflects the consolidated package, and the repo has a single authoritative Emacs integration

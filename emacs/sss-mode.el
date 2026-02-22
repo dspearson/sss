@@ -699,5 +699,40 @@ Equivalent to \\[save-buffer] — triggers `write-contents-functions'."
   (define-key evil-inner-text-objects-map "s" 'sss-inner-pattern)
   (define-key evil-outer-text-objects-map "s" 'sss-outer-pattern))
 
+;;; Doom integration (DOOM-01, DOOM-02)
+
+;; Silence byte-compiler warning for map! without requiring doom-core at compile time.
+(declare-function map! "doom-core" t t)
+
+(when (fboundp 'map!)
+  ;; Global leader bindings (DOOM-01): SPC e prefix for encryption commands.
+  ;; Sub-prefixes: SPC e p (project), SPC e k (keys).
+  ;; eval prevents byte-compiler from expanding map! macro syntax outside Doom.
+  (eval
+   '(map! :leader
+          (:prefix-map ("e" . "encryption")
+           :desc "Encrypt region"   "e" #'sss-encrypt-region
+           :desc "Decrypt region"   "d" #'sss-decrypt-region
+           :desc "Toggle at point"  "t" #'sss-toggle-at-point
+           :desc "Preview at point" "v" #'sss-preview-at-point
+           :desc "SSS menu"         "SPC" #'sss-dispatch
+           (:prefix ("p" . "project")
+            :desc "Init project"    "i" #'sss-init
+            :desc "Process project" "p" #'sss-process)
+           (:prefix ("k" . "keys")
+            :desc "Generate keys"   "g" #'sss-keygen
+            :desc "List keys"       "l" #'sss-keys-list))))
+  ;; Localleader bindings (DOOM-02): , e prefix in sss-mode buffers only.
+  ;; :map sss-mode-map scopes these bindings to sss-mode buffers.
+  (eval
+   '(map! :localleader
+          :map sss-mode-map
+          (:prefix ("e" . "sss")
+           :desc "Encrypt region"   "e" #'sss-encrypt-region
+           :desc "Decrypt region"   "d" #'sss-decrypt-region
+           :desc "Toggle at point"  "t" #'sss-toggle-at-point
+           :desc "Preview at point" "v" #'sss-preview-at-point
+           :desc "SSS menu"         "SPC" #'sss-dispatch))))
+
 (provide 'sss-mode)
 ;;; sss-mode.el ends here

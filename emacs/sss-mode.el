@@ -25,6 +25,14 @@
 ;; - Auth-source integration for keystore passphrase (sss-use-auth-source)
 ;; - Transient command menu with fallback (sss-dispatch)
 ;; - Fixed keygen to use non-deprecated CLI command
+;;
+;; Evil integration (when evil-mode is loaded):
+;; - ge/gd/gt operators for encrypt/decrypt/toggle via motions (sss-mode buffers only)
+;; - is/as text objects for selecting SSS marker content/boundaries
+;;
+;; Doom Emacs integration (when Doom is detected):
+;; - SPC e prefix for encryption commands (leader)
+;; - , e prefix for buffer-local sss operations (localleader)
 
 ;;; Code:
 

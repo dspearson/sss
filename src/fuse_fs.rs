@@ -1760,6 +1760,168 @@ impl SssFS {
             std::borrow::Cow::Owned(source_rel_path)
         }
     }
+
+    /// Map an inode to the backing source file path that xattr queries should target.
+    /// Strips virtual suffixes (.sss-opened/.sss-sealed) so xattrs are read from the
+    /// real underlying file, and handles the synthetic .overlay root specially.
+    fn resolve_source_for_xattr(&self, ino: u64) -> Option<PathBuf> {
+        if ino == SYNTHETIC_OVERLAY_DIR_INO {
+            return Some(PathBuf::from("."));
+        }
+        let entry = self.get_inode(ino)?;
+        let virtual_path = entry.path.clone();
+
+        let stripped = if let Some(name) = virtual_path.file_name() {
+            let (actual, _mode) = Self::parse_virtual_file_mode(name);
+            if actual != name {
+                let parent = virtual_path.parent().unwrap_or(Path::new(""));
+                parent.join(actual)
+            } else {
+                virtual_path
+            }
+        } else {
+            virtual_path
+        };
+
+        let (rel, _pinned) = self.translate_virtual_to_source(&stripped);
+        Some(rel)
+    }
+
+    /// Open an fd for xattr operations against a source-relative path. Returns a raw
+    /// fd that the caller MUST close (-1 on error, errno set via last_os_error).
+    /// Uses O_PATH|O_NOFOLLOW on Linux so we can inspect symlinks and special files
+    /// without opening them for I/O; fgetxattr on O_PATH fds has been supported since
+    /// Linux 4.17 (RHEL 8 kernel is 4.18+).
+    #[cfg(target_os = "linux")]
+    fn open_fd_for_xattr(&self, rel_path: &Path) -> i32 {
+        use std::os::unix::ffi::OsStrExt;
+        let path_bytes = rel_path.as_os_str().as_bytes();
+        let path_cstr = match std::ffi::CString::new(path_bytes) {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+        // SAFETY: `self.source_fd` is a valid dir fd held for the lifetime of SssFS.
+        // `path_cstr` is NUL-terminated. O_PATH|O_NOFOLLOW opens the dirent itself
+        // without following the final symlink and without acquiring a read reference.
+        unsafe {
+            libc::openat(
+                self.source_fd,
+                path_cstr.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        }
+    }
+
+    /// Implementation of getxattr passthrough.
+    #[cfg(target_os = "linux")]
+    fn xattr_get_impl(&self, rel_path: &Path, name: &OsStr, size: u32, reply: fuser::ReplyXattr) {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fd = self.open_fd_for_xattr(rel_path);
+        if fd < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
+            return;
+        }
+
+        let name_cstr = match std::ffi::CString::new(name.as_bytes()) {
+            Ok(c) => c,
+            Err(_) => {
+                // SAFETY: `fd` was just opened via openat() above and is >=0.
+                unsafe { libc::close(fd); }
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        // When size=0 the kernel just wants the size of the value; otherwise we
+        // must fill the provided buffer or return ERANGE.
+        let (ret, buf): (libc::ssize_t, Vec<u8>) = if size == 0 {
+            // SAFETY: `fd` is a valid O_PATH fd. `name_cstr` is NUL-terminated.
+            // Passing NULL buffer with size=0 is well-defined — returns value size.
+            let r = unsafe {
+                libc::fgetxattr(fd, name_cstr.as_ptr(), std::ptr::null_mut(), 0)
+            };
+            (r, Vec::new())
+        } else {
+            let mut buf = vec![0u8; size as usize];
+            // SAFETY: `fd` is valid, `name_cstr` NUL-terminated, `buf` is a heap slice
+            // of exactly `size` bytes. fgetxattr writes at most `size` bytes.
+            let r = unsafe {
+                libc::fgetxattr(
+                    fd,
+                    name_cstr.as_ptr(),
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    size as usize,
+                )
+            };
+            (r, buf)
+        };
+        let errno = if ret < 0 {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::ENOTSUP)
+        } else { 0 };
+        // SAFETY: close the fd opened above regardless of success.
+        unsafe { libc::close(fd); }
+
+        if ret < 0 {
+            reply.error(errno);
+        } else if size == 0 {
+            reply.size(ret as u32);
+        } else {
+            reply.data(&buf[..ret as usize]);
+        }
+    }
+
+    /// Implementation of listxattr passthrough.
+    #[cfg(target_os = "linux")]
+    fn xattr_list_impl(&self, rel_path: &Path, size: u32, reply: fuser::ReplyXattr) {
+        let fd = self.open_fd_for_xattr(rel_path);
+        if fd < 0 {
+            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
+            reply.error(errno);
+            return;
+        }
+
+        let (ret, buf): (libc::ssize_t, Vec<u8>) = if size == 0 {
+            // SAFETY: fd valid, NULL buffer with size 0 is documented behaviour.
+            let r = unsafe {
+                libc::flistxattr(fd, std::ptr::null_mut(), 0)
+            };
+            (r, Vec::new())
+        } else {
+            let mut buf = vec![0u8; size as usize];
+            // SAFETY: fd valid; buf is a heap slice of exactly `size` bytes.
+            let r = unsafe {
+                libc::flistxattr(fd, buf.as_mut_ptr() as *mut libc::c_char, size as usize)
+            };
+            (r, buf)
+        };
+        let errno = if ret < 0 {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::ENOTSUP)
+        } else { 0 };
+        // SAFETY: close the fd opened above.
+        unsafe { libc::close(fd); }
+
+        if ret < 0 {
+            reply.error(errno);
+        } else if size == 0 {
+            reply.size(ret as u32);
+        } else {
+            reply.data(&buf[..ret as usize]);
+        }
+    }
+
+    /// Non-Linux fallback — we don't have fd-relative xattr on macOS (macFUSE adds a
+    /// position argument and HFS/APFS xattrs aren't used by SELinux tooling anyway).
+    #[cfg(not(target_os = "linux"))]
+    fn xattr_get_impl(&self, _rel_path: &Path, _name: &OsStr, _size: u32, reply: fuser::ReplyXattr) {
+        reply.error(libc::ENOTSUP);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn xattr_list_impl(&self, _rel_path: &Path, _size: u32, reply: fuser::ReplyXattr) {
+        reply.error(libc::ENOTSUP);
+    }
 }
 
 impl Filesystem for SssFS {
@@ -3484,6 +3646,40 @@ impl Filesystem for SssFS {
             // Not our signal - reject
             reply.error(libc::ENOTSUP);
         }
+    }
+
+    /// Get extended attribute — passes through to the backing source file so that
+    /// security.selinux and other xattrs observed through the mount match the raw
+    /// files (important for tools like stat -Z, ls -Z, restorecon and SELinux-aware
+    /// processes such as `openstack undercloud install`).
+    fn getxattr(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        let rel_path = match self.resolve_source_for_xattr(ino) {
+            Some(p) => p,
+            None => { reply.error(libc::ENOENT); return; }
+        };
+        self.xattr_get_impl(&rel_path, name, size, reply);
+    }
+
+    /// List extended attribute names — passthrough, same rationale as getxattr.
+    fn listxattr(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        let rel_path = match self.resolve_source_for_xattr(ino) {
+            Some(p) => p,
+            None => { reply.error(libc::ENOENT); return; }
+        };
+        self.xattr_list_impl(&rel_path, size, reply);
     }
 
     /// Create a symlink

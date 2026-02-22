@@ -311,7 +311,7 @@ fn test_very_long_content_with_markers() {
     assert!(has_any_markers(&beginning));
 
     // Marker in the middle
-    let mut middle = String::from("z".repeat(5_000_000));
+    let mut middle = "z".repeat(5_000_000);
     middle.push_str("⊠{in_middle}");
     middle.push_str(&"z".repeat(5_000_000));
     assert!(has_any_markers(&middle));
@@ -513,7 +513,7 @@ fn test_marker_detection_performance() {
     }
 
     // Test with markers present
-    for size in vec![1_000, 10_000, 100_000] {
+    for size in [1_000, 10_000, 100_000] {
         let mut content = "x".repeat(size / 2);
         content.push_str("⊠{middle}");
         content.push_str(&"x".repeat(size / 2));

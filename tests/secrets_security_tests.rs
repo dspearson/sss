@@ -314,7 +314,7 @@ fn test_excessive_interpolation_markers() -> Result<()> {
     for i in 0..1000 {
         secrets_content.push_str(&format!("key_{}: value_{}\n", i, i));
     }
-    fs::write(&project_root.join("secrets"), &secrets_content)?;
+    fs::write(project_root.join("secrets"), &secrets_content)?;
 
     // Create content with many interpolation markers
     let mut content_with_markers = String::new();
@@ -359,7 +359,7 @@ fn test_very_long_secret_values() -> Result<()> {
     let long_value = "x".repeat(10_000);
     let secrets_content = format!("long_key: {}\n", long_value);
 
-    fs::write(&project_root.join("secrets"), &secrets_content)?;
+    fs::write(project_root.join("secrets"), &secrets_content)?;
 
     let test_file = project_root.join("test.txt");
     fs::write(&test_file, "test")?;
@@ -396,7 +396,7 @@ normal_multiline: |
   line 3
 "#;
 
-    fs::write(&project_root.join("secrets"), multiline_content)?;
+    fs::write(project_root.join("secrets"), multiline_content)?;
 
     let test_file = project_root.join("test.txt");
     fs::write(&test_file, "test")?;
@@ -432,7 +432,7 @@ fn test_encrypted_secrets_invalid_base64() -> Result<()> {
 
     // Create encrypted secrets file with invalid base64
     let invalid_encrypted = "⊠{this-is-not-valid-base64!!!}\n";
-    fs::write(&project_root.join("secrets"), invalid_encrypted)?;
+    fs::write(project_root.join("secrets"), invalid_encrypted)?;
 
     let test_file = project_root.join("test.txt");
     fs::write(&test_file, "test")?;
@@ -463,7 +463,7 @@ fn test_concurrent_secret_access() -> Result<()> {
 
     // Create secrets
     let secrets_content = "secret1: value1\nsecret2: value2\nsecret3: value3\n";
-    fs::write(&project_root.join("secrets"), secrets_content)?;
+    fs::write(project_root.join("secrets"), secrets_content)?;
 
     let test_file = project_root.join("test.txt");
     fs::write(&test_file, "test")?;

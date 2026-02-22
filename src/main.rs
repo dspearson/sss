@@ -45,6 +45,18 @@ fn add_fuse_commands(app: Command) -> Command {
                     .long("read-only")
                     .help("Mount read-only")
                     .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("allow-other")
+                    .long("allow-other")
+                    .help("Allow any user to access the mount (requires 'user_allow_other' in /etc/fuse.conf when mounted as non-root)")
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("no-allow-root")
+                    .long("no-allow-root")
+                    .help("Disable the default AllowRoot mount option (by default, root can access the mount even when mounted by a non-root user, so 'sudo' just works)")
+                    .action(clap::ArgAction::SetTrue),
             ),
     )
     .subcommand(

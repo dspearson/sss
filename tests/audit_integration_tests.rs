@@ -414,7 +414,7 @@ fn test_rate_limiter_stress_test() {
 
     // With concurrent access, might be slightly over limit due to race conditions
     // but should be in reasonable range
-    assert!(total_allowed >= 50 && total_allowed <= 70,
+    assert!((50..=70).contains(&total_allowed),
         "Expected 50-70 allowed requests, got {}", total_allowed);
 }
 

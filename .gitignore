@@ -26,6 +26,11 @@ Thumbs.db
 
 # SSS specific
 .sss.toml
+# Runtime rotation backups created by `sss keys rotate`
+.sss_backup_*/
+
+# Emacs bytecode
+*.elc
 
 # Temporary build/test documentation
 BUILD_AND_USE.md

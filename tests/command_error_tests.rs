@@ -1,12 +1,12 @@
-/// Comprehensive command error handling tests
-///
-/// This test suite covers error scenarios in command execution:
-/// - Invalid arguments
-/// - Missing required parameters
-/// - File not found scenarios
-/// - Permission errors
-/// - Invalid configurations
-/// - Concurrent command execution
+//! Comprehensive command error handling tests
+//!
+//! This test suite covers error scenarios in command execution:
+//! - Invalid arguments
+//! - Missing required parameters
+//! - File not found scenarios
+//! - Permission errors
+//! - Invalid configurations
+//! - Concurrent command execution
 
 use anyhow::Result;
 use sss::project::ProjectConfig;
@@ -55,10 +55,7 @@ fn test_load_config_with_malformed_version() -> Result<()> {
 
     let result = ProjectConfig::load_from_file(&config_path);
     // Should either parse or fail gracefully
-    match result {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = result;
 
     Ok(())
 }
@@ -73,10 +70,7 @@ fn test_load_config_with_missing_required_fields() -> Result<()> {
 
     let result = ProjectConfig::load_from_file(&config_path);
     // Should handle missing optional fields
-    match result {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = result;
 
     Ok(())
 }
@@ -116,11 +110,12 @@ fn test_save_config_to_nonexistent_directory() {
 
 #[test]
 fn test_parse_invalid_ignore_patterns() -> Result<()> {
-    let mut config = ProjectConfig::default();
+    let config = ProjectConfig {
+        ignore: Some("[invalid*pattern".to_string()),
+        ..Default::default()
+    };
 
     // Invalid glob patterns
-    config.ignore = Some("[invalid*pattern".to_string());
-
     let result = config.parse_ignore_patterns();
     assert!(result.is_err());
 
@@ -129,11 +124,12 @@ fn test_parse_invalid_ignore_patterns() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_with_only_negation() -> Result<()> {
-    let mut config = ProjectConfig::default();
+    let config = ProjectConfig {
+        ignore: Some("!file1.txt !file2.txt".to_string()),
+        ..Default::default()
+    };
 
     // Only negation patterns (unusual but should work)
-    config.ignore = Some("!file1.txt !file2.txt".to_string());
-
     let result = config.parse_ignore_patterns()?;
     assert!(result.0.is_empty()); // No positive patterns
     assert!(!result.1.is_empty()); // Has negative patterns
@@ -143,9 +139,10 @@ fn test_parse_ignore_patterns_with_only_negation() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_with_empty_string() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("".to_string()),
+        ..Default::default()
+    };
     let result = config.parse_ignore_patterns()?;
     assert!(result.0.is_empty());
     assert!(result.1.is_empty());
@@ -155,9 +152,10 @@ fn test_parse_ignore_patterns_with_empty_string() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_with_whitespace_only() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("   \t\n   ".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("   \t\n   ".to_string()),
+        ..Default::default()
+    };
     let result = config.parse_ignore_patterns()?;
     assert!(result.0.is_empty());
     assert!(result.1.is_empty());
@@ -167,17 +165,14 @@ fn test_parse_ignore_patterns_with_whitespace_only() -> Result<()> {
 
 #[test]
 fn test_ignore_patterns_with_absolute_paths() -> Result<()> {
-    let mut config = ProjectConfig::default();
+    let config = ProjectConfig {
+        ignore: Some("/absolute/path/*.txt".to_string()),
+        ..Default::default()
+    };
 
     // Absolute paths in patterns (unusual use case)
-    config.ignore = Some("/absolute/path/*.txt".to_string());
-
-    // Should parse but behavior depends on implementation
     let result = config.parse_ignore_patterns();
-    match result {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = result;
 
     Ok(())
 }
@@ -192,10 +187,7 @@ fn test_ignore_patterns_with_very_long_pattern() -> Result<()> {
 
     let result = config.parse_ignore_patterns();
     // Should handle long patterns
-    match result {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = result;
 
     Ok(())
 }
@@ -228,8 +220,10 @@ fn test_concurrent_config_save_load() -> Result<()> {
     let config_path = Arc::new(temp_dir.path().join(".sss.toml"));
 
     // Save initial config
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
+    let mut config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     config.save_to_file(&*config_path)?;
 
     let config_path_clone = Arc::clone(&config_path);
@@ -276,10 +270,7 @@ another_field = 123
 
     // Should load successfully, ignoring unexpected fields (TOML deserialize behavior)
     let result = ProjectConfig::load_from_file(&config_path);
-    match result {
-        Ok(_) => {}
-        Err(_) => {}
-    }
+    let _ = result;
 
     Ok(())
 }
@@ -319,10 +310,10 @@ fn test_should_ignore_with_null_patterns() -> Result<()> {
 
 #[test]
 fn test_should_ignore_with_invalid_path() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
-
-    // Test with various edge case paths
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     assert!(!config.should_ignore(std::path::Path::new(""))?);
 
     Ok(())
@@ -352,9 +343,10 @@ fn test_set_ignore_patterns_empty() -> Result<()> {
 
 #[test]
 fn test_parse_patterns_with_duplicate_entries() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log *.log *.log".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log *.log *.log".to_string()),
+        ..Default::default()
+    };
     let result = config.parse_ignore_patterns()?;
     // Should handle duplicates (globset will deduplicate or not, both acceptable)
     assert!(!result.0.is_empty());
@@ -377,11 +369,8 @@ fn test_config_version_handling() -> Result<()> {
         )?;
 
         let result = ProjectConfig::load_from_file(&config_path);
-        match result {
-            Ok(config) => {
-                assert_eq!(config.version, version);
-            }
-            Err(_) => {}
+        if let Ok(config) = result {
+            assert_eq!(config.version, version);
         }
     }
 

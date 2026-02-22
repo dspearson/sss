@@ -363,7 +363,7 @@ mod tests {
         let _result = get_current_dir();
         // If it succeeds, verify it returns a valid path
         if let Ok(path) = get_current_dir() {
-            assert!(path.as_os_str().len() > 0);
+            assert!(!path.as_os_str().is_empty());
         }
     }
 

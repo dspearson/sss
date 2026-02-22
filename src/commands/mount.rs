@@ -35,6 +35,9 @@ fn load_processor_for_source(source_path: &Path) -> Result<(ProjectConfig, Proce
 pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let in_place = sub_matches.get_flag("in-place");
     let foreground = sub_matches.get_flag("foreground");
+    let read_only = sub_matches.get_flag("read-only");
+    let allow_other = sub_matches.get_flag("allow-other");
+    let no_allow_root = sub_matches.get_flag("no-allow-root");
 
     // Determine source and mountpoint
     let (source, mountpoint) = if in_place {
@@ -107,12 +110,29 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
         eprintln!("Running in foreground mode. Press Ctrl+C to unmount.");
     }
 
-    // Mount options
-    let options = vec![
+    // Mount options.
+    // Note: TTL=0 is set in reply.entry() for passthrough files to disable positive caching.
+    let mut options = vec![
         fuser::MountOption::FSName("sss".to_string()),
-        // Don't use AutoUnmount or AllowOther - they require /etc/fuse.conf changes
-        // Note: TTL=0 is set in reply.entry() for passthrough files to disable positive caching
     ];
+
+    // By default, grant root access to the mount. This is essential so that commands
+    // run via `sudo` (euid=0) can see and access files on a mount that a non-root user
+    // established. Without this, FUSE's default security policy hides the mount from
+    // every uid other than the mount owner — which breaks common workflows such as
+    // `sudo openstack undercloud install` inside the mount.
+    // Pass --no-allow-root to opt out; --allow-other takes precedence and grants access
+    // to all users. Both require `user_allow_other` in /etc/fuse.conf when the mount is
+    // performed by a non-root user (not required when mounting as root).
+    if allow_other {
+        options.push(fuser::MountOption::AllowOther);
+    } else if !no_allow_root {
+        options.push(fuser::MountOption::AllowRoot);
+    }
+
+    if read_only {
+        options.push(fuser::MountOption::RO);
+    }
 
     if !foreground {
         // Daemonize: fork and detach from terminal
@@ -185,7 +205,24 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
             Ok(())
         }
         Err(e) => {
-            Err(anyhow!("Failed to mount filesystem: {}", e))
+            let msg = e.to_string();
+            // fusermount rejects allow_root/allow_other for non-root users unless
+            // `user_allow_other` is set in /etc/fuse.conf. Provide an actionable
+            // hint pointing to the fix (or the --no-allow-root escape hatch).
+            if (allow_other || !no_allow_root)
+                && (msg.contains("user_allow_other") || msg.contains("allow_other"))
+            {
+                Err(anyhow!(
+                    "Failed to mount filesystem: {}\n\n\
+                    Tip: AllowRoot/AllowOther require `user_allow_other` in /etc/fuse.conf when mounting as a non-root user. \
+                    Fix with:\n    \
+                    echo 'user_allow_other' | sudo tee -a /etc/fuse.conf\n\
+                    Or pass --no-allow-root to mount without granting root access (sudo inside the mount will then be blocked).",
+                    e
+                ))
+            } else {
+                Err(anyhow!("Failed to mount filesystem: {}", e))
+            }
         }
     }
 }

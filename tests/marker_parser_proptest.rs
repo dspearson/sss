@@ -66,13 +66,13 @@ fn arb_adversarial() -> impl Strategy<Value = String> {
     prop_oneof![
         // Deeply nested braces
         (1usize..=20usize).prop_map(|n| {
-            let opens: String = std::iter::repeat('{').take(n).collect();
-            let closes: String = std::iter::repeat('}').take(n).collect();
+            let opens: String = std::iter::repeat_n('{', n).collect();
+            let closes: String = std::iter::repeat_n('}', n).collect();
             format!("o+{opens}{closes}")
         }),
         // Unterminated braces
         (1usize..=20usize).prop_map(|n| {
-            let opens: String = std::iter::repeat('{').take(n).collect();
+            let opens: String = std::iter::repeat_n('{', n).collect();
             format!("o+{opens}")
         }),
         // Mixed UTF-8 with braces
@@ -89,7 +89,7 @@ fn arb_adversarial() -> impl Strategy<Value = String> {
         .prop_map(|chars| chars.into_iter().collect()),
         // Only closing braces (stress test for underflow guard)
         (0usize..=50usize).prop_map(|n| {
-            let closes: String = std::iter::repeat('}').take(n).collect();
+            let closes: String = std::iter::repeat_n('}', n).collect();
             format!("o+{closes}")
         }),
     ]
@@ -137,10 +137,10 @@ proptest! {
                 m.end,
                 s.len()
             );
-            // The byte slice must be valid UTF-8 (it is a sub-slice of a valid UTF-8 string).
+            // The byte range must land on char boundaries (str slicing succeeds only then).
             prop_assert!(
-                std::str::from_utf8(s[m.start..m.end].as_bytes()).is_ok(),
-                "Marker byte range must be valid UTF-8"
+                s.get(m.start..m.end).is_some(),
+                "Marker byte range must align to UTF-8 char boundaries"
             );
         }
     }
@@ -230,8 +230,8 @@ mod deterministic {
     #[test]
     fn deeply_nested_braces_no_panic() {
         // 100 levels of nesting — must not overflow or panic.
-        let opens: String = std::iter::repeat('{').take(100).collect();
-        let closes: String = std::iter::repeat('}').take(100).collect();
+        let opens: String = std::iter::repeat_n('{', 100).collect();
+        let closes: String = std::iter::repeat_n('}', 100).collect();
         let input = format!("o+{opens}content{closes}");
         let _ = find_balanced_markers(&input, PREFIXES);
     }

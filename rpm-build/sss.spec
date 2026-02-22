@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.1.9
+Version:        1.2.1
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -75,6 +75,25 @@ fi
 %{_bindir}/sss-askpass-gui
 
 %changelog
+* Wed Apr 22 2026 Dominic Pearson <dsp@technoanimal.net> - 1.2.1-1
+- FUSE: AllowRoot by default so `sudo` commands access mounts owned by a non-root user
+- FUSE: passthrough security.selinux and other xattrs via fgetxattr/flistxattr on the backing source
+- Mount CLI: add --allow-other, --no-allow-root; wire the previously-unused --read-only
+- Mount: clearer error when fuse.conf lacks user_allow_other
+- Dockerfile.rhel8/9: build with --features fuse so the mount subcommand is available
+
+* Fri Apr 11 2026 Dominic Pearson <dsp@technoanimal.net> - 1.2.0-1
+- FUSE mount metadata passthrough: correct file modes, uid/gid, ctime
+- Fix file type bit masking in virtual_fs permissions
+- Edge case and integration tests for error handling, ignore patterns
+
+* Sat Mar 15 2026 Dominic Pearson <dsp@technoanimal.net> - 1.1.9-1
+- VS Code extension for transparent encryption
+- Nested project boundaries and ignore patterns
+- FUSE debug logging improvements
+- Emacs integration consolidation
+- Cleanup and documentation updates
+
 * Thu Oct 16 2025 Dominic Pearson <dsp@technoanimal.net> - 1.1.0-1
 - Added deterministic encryption using BLAKE2b-derived nonces for clean git diffs
 - Added git hooks management (sss hooks install/export/list/show)

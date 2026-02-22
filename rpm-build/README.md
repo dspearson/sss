@@ -111,12 +111,14 @@ OPTIONS:
 
 Built RPM packages will be placed in the `rpm-build/` directory:
 
-- `sss-1.0.0-1.el8.x86_64.rpm` - Binary package for RHEL 8
-- `sss-1.0.0-1.el8.src.rpm` - Source package for RHEL 8
-- `sss-1.0.0-1.el9.x86_64.rpm` - Binary package for RHEL 9
-- `sss-1.0.0-1.el9.src.rpm` - Source package for RHEL 9
-- `sss-1.0.0-1.el10.x86_64.rpm` - Binary package for RHEL 10
-- `sss-1.0.0-1.el10.src.rpm` - Source package for RHEL 10
+- `sss-1.2.0-1.el8.x86_64.rpm` - Binary package for RHEL 8
+- `sss-1.2.0-1.el8.src.rpm` - Source package for RHEL 8
+- `sss-1.2.0-1.el9.x86_64.rpm` - Binary package for RHEL 9
+- `sss-1.2.0-1.el9.src.rpm` - Source package for RHEL 9
+- `sss-1.2.0-1.el10.x86_64.rpm` - Binary package for RHEL 10
+- `sss-1.2.0-1.el10.src.rpm` - Source package for RHEL 10
+- `sss-1.2.0-1.fc42.x86_64.rpm` - Binary package for Fedora 42
+- `sss-1.2.0-1.fc42.src.rpm` - Source package for Fedora 42
 
 ## Installation
 
@@ -126,7 +128,7 @@ Built RPM packages will be placed in the `rpm-build/` directory:
 sudo dnf install -y epel-release
 
 # Install the RPM
-sudo dnf install -y ./rpm-build/sss-1.0.0-1.el8.x86_64.rpm
+sudo dnf install -y ./rpm-build/sss-1.2.0-1.el8.x86_64.rpm
 ```
 
 ### On RHEL 9 / Rocky 9 / AlmaLinux 9
@@ -135,7 +137,7 @@ sudo dnf install -y ./rpm-build/sss-1.0.0-1.el8.x86_64.rpm
 sudo dnf install -y epel-release
 
 # Install the RPM
-sudo dnf install -y ./rpm-build/sss-1.0.0-1.el9.x86_64.rpm
+sudo dnf install -y ./rpm-build/sss-1.2.0-1.el9.x86_64.rpm
 ```
 
 ### On RHEL 10 / Rocky 10 / AlmaLinux 10
@@ -144,7 +146,7 @@ sudo dnf install -y ./rpm-build/sss-1.0.0-1.el9.x86_64.rpm
 sudo dnf install -y epel-release
 
 # Install the RPM
-sudo dnf install -y ./rpm-build/sss-1.0.0-1.el10.x86_64.rpm
+sudo dnf install -y ./rpm-build/sss-1.2.0-1.el10.x86_64.rpm
 ```
 
 ## Package Contents

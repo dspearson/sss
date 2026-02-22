@@ -78,7 +78,7 @@ fn test_editor_command_parsing_security() {
 fn test_editor_security_flags_vim() {
     // This tests the EditorConfig logic (would need access to internal module)
     // For now, document expected security flags:
-    let expected_vim_flags = vec![
+    let expected_vim_flags = [
         "-n",                 // No swap file
         "-i", "NONE",         // No viminfo
         "+set nobackup",      // No backup files
@@ -87,7 +87,6 @@ fn test_editor_security_flags_vim() {
     ];
 
     // Verify these flags prevent data leakage
-    assert!(!expected_vim_flags.is_empty());
     assert!(expected_vim_flags.contains(&"-n"));
 }
 
@@ -100,14 +99,11 @@ fn test_editor_security_flags_vim() {
 /// - Lock files are disabled
 #[test]
 fn test_editor_security_flags_emacs() {
-    let expected_emacs_flags = vec![
-        "--no-init-file",
+    let expected_emacs_flags = ["--no-init-file",
         "--eval", "(setq make-backup-files nil)",
         "--eval", "(setq auto-save-default nil)",
-        "--eval", "(setq create-lockfiles nil)",
-    ];
+        "--eval", "(setq create-lockfiles nil)"];
 
-    assert!(!expected_emacs_flags.is_empty());
     assert!(expected_emacs_flags.contains(&"--no-init-file"));
 }
 
@@ -123,10 +119,8 @@ fn test_tmpdir_security() {
     use std::path::Path;
 
     // Check if /dev/shm exists (memory-backed tmpfs)
-    if Path::new("/dev/shm").exists() {
-        // Editor should set TMPDIR=/dev/shm
-        assert!(true); // Document expected behavior
-    }
+    // Editor should set TMPDIR=/dev/shm when /dev/shm exists
+    let _ = Path::new("/dev/shm").exists();
 }
 
 // ============================================================================
@@ -532,8 +526,6 @@ fn test_concurrent_process_limits() {
 
     // In real implementation, track active child processes
     // and enforce a reasonable limit (e.g., 10 concurrent)
-
-    assert!(true); // Placeholder for documentation
 }
 
 /// Test: Process timeout enforcement

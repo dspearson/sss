@@ -26,17 +26,17 @@ if ! command -v cargo &> /dev/null; then
     source \$HOME/.cargo/env
 fi
 
-# Install libsodium if not present
-if ! pkg-config --exists libsodium; then
-    echo \"==> Installing libsodium...\"
+# Install libsodium + libfuse3 if not present (fuse3 needed for the `sss mount` subcommand)
+if ! pkg-config --exists libsodium fuse3; then
+    echo \"==> Installing libsodium and libfuse3...\"
     sudo apt-get update
-    sudo apt-get install -y libsodium-dev pkg-config
+    sudo apt-get install -y libsodium-dev libfuse3-dev fuse3 pkg-config
 fi
 
-# Build release binary
+# Build release binary with FUSE support
 echo \"==> Building release binary for ARM64 Linux...\"
 source \$HOME/.cargo/env
-cargo build --release
+cargo build --release --features fuse
 
 echo \"\"
 echo \"==> Build successful!\"

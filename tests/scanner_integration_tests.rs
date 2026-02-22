@@ -124,7 +124,7 @@ fn test_scanner_symbolic_links() -> Result<()> {
 
     // Should find the pattern in at least the target file
     // Symlink behavior may vary by platform
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 
     Ok(())
 }
@@ -148,7 +148,7 @@ fn test_scanner_directory_symlink() -> Result<()> {
     let results = scanner.scan_directory(root)?;
 
     // Should find the pattern (symlinks to directories are typically followed)
-    assert!(results.len() >= 1);
+    assert!(!results.is_empty());
 
     Ok(())
 }
@@ -175,9 +175,8 @@ fn test_scanner_unreadable_directory() -> Result<()> {
 
     // Scanner should handle permission errors gracefully
     // Either succeed with empty results or return an error
-    if result.is_ok() {
+    if let Ok(results) = result {
         // If successful, should have found nothing in protected dir
-        let results = result.unwrap();
         assert!(!results.iter().any(|p| p.to_string_lossy().contains("protected")));
     }
 
@@ -221,7 +220,7 @@ fn test_scanner_large_file_excluded() -> Result<()> {
 
     // Create a file larger than MAX_FILE_SIZE
     let large_file = temp_dir.path().join("large.txt");
-    let large_content = "x".repeat((MAX_FILE_SIZE + 1000) as usize);
+    let large_content = "x".repeat(MAX_FILE_SIZE + 1000);
     fs::write(&large_file, large_content)?;
 
     // Create a normal file with pattern

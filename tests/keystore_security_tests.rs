@@ -268,11 +268,10 @@ fn test_missing_salt_field() -> Result<()> {
     let mut content = fs::read_to_string(&key_file)?;
 
     // Remove salt line (simple text replacement for test)
-    if let Some(pos) = content.find("salt = ") {
-        if let Some(newline) = content[pos..].find('\n') {
+    if let Some(pos) = content.find("salt = ")
+        && let Some(newline) = content[pos..].find('\n') {
             content.replace_range(pos..pos + newline + 1, "");
         }
-    }
     fs::write(&key_file, &content)?;
 
     // Should still load (salt is optional for passwordless keys)
@@ -307,7 +306,7 @@ fn test_excessive_keys_handling() -> Result<()> {
     // Should be able to access individual keys with correct password
     let (key_id, password) = &key_ids[10];
     let loaded = keystore.load_keypair(key_id, Some(password))?;
-    assert!(loaded.public_key.to_base64().len() > 0);
+    assert!(!loaded.public_key.to_base64().is_empty());
 
     Ok(())
 }

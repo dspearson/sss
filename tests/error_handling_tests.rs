@@ -1,11 +1,11 @@
-/// Comprehensive error handling tests for SssError types
-///
-/// This test suite covers error type behavior:
-/// - Display formatting
-/// - Error source chains
-/// - Conversion from other error types
-/// - Error propagation
-/// - Error matching and recovery
+//! Comprehensive error handling tests for SssError types
+//!
+//! This test suite covers error type behavior:
+//! - Display formatting
+//! - Error source chains
+//! - Conversion from other error types
+//! - Error propagation
+//! - Error matching and recovery
 
 use sss::error::SssError;
 use std::error::Error;

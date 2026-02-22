@@ -22,9 +22,11 @@ fn test_scan_respects_ignore_patterns() -> Result<()> {
     fs::write(root.join("important.log"), "password=⊕{secret3}")?;
 
     // Create .sss.toml with ignore patterns
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log !important.log".to_string());
-    config.save_to_file(&root.join(".sss.toml"))?;
+    let config = ProjectConfig {
+        ignore: Some("*.log !important.log".to_string()),
+        ..Default::default()
+    };
+    config.save_to_file(root.join(".sss.toml"))?;
 
     // Scan with patterns
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
@@ -72,8 +74,10 @@ fn test_scan_directory_exclusion() -> Result<()> {
     fs::write(root.join("src/main.rs"), "password=⊕{secret2}")?;
 
     // Ignore build directory
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("build/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -98,8 +102,10 @@ fn test_scan_nested_directories() -> Result<()> {
     fs::write(root.join("a/b/c/file.txt"), "password=⊕{secret}")?;
 
     // Ignore a/b/ and everything under it
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("a/b/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("a/b/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -124,8 +130,10 @@ fn test_scan_with_stats_respects_patterns() -> Result<()> {
     fs::write(root.join("ignored.log"), "password=⊕{secret}")?;
     fs::write(root.join("normal.txt"), "no patterns here")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -154,8 +162,10 @@ fn test_large_directory_scan_with_patterns() -> Result<()> {
     }
 
     // Ignore all .log files
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -187,8 +197,10 @@ fn test_pattern_matching_performance() -> Result<()> {
     }
     patterns.push("*.log".to_string());
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some(patterns.join(" "));
+    let config = ProjectConfig {
+        ignore: Some(patterns.join(" ")),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -217,8 +229,10 @@ fn test_mixed_sss_patterns_and_normal_files() -> Result<()> {
     fs::write(root.join("normal.txt"), "no secret here")?;
     fs::write(root.join("secret.log"), "password=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -244,8 +258,10 @@ fn test_negation_with_directory_patterns() -> Result<()> {
     fs::write(root.join("logs/error.log"), "password=⊕{secret}")?;
 
     // Ignore logs directory but keep important.log
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("logs/ !logs/important.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("logs/ !logs/important.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -278,8 +294,10 @@ fn test_complex_real_world_scenario() -> Result<()> {
     fs::write(root.join(".env"), "SECRET_KEY=⊕{secret}")?;
 
     // Typical ignore patterns
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/ *.log !.env".to_string());
+    let config = ProjectConfig {
+        ignore: Some("build/ *.log !.env".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -298,10 +316,10 @@ fn test_complex_real_world_scenario() -> Result<()> {
 
 #[test]
 fn test_pattern_compilation_error_handling() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("[invalid".to_string());
-
-    // Should return error for invalid pattern
+    let config = ProjectConfig {
+        ignore: Some("[invalid".to_string()),
+        ..Default::default()
+    };
     let result = config.parse_ignore_patterns();
     assert!(result.is_err());
 
@@ -313,8 +331,10 @@ fn test_empty_directory_scan() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let root = temp_dir.path();
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -345,8 +365,10 @@ fn test_deeply_nested_structures() -> Result<()> {
         fs::write(nested.join("data.txt"), "password=⊕{nested}")?;
     }
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("level5/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("level5/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();

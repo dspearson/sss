@@ -4,7 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VERSION="1.1.9"
+VERSION="1.2.1"
 NAME="sss"
 
 # Colors for output
@@ -127,7 +127,7 @@ build_local() {
 
     # Copy source tarball and spec file
     cp "$PROJECT_ROOT/rpm-build/$NAME-$VERSION.tar.gz" "$rpmbuild_dir/SOURCES/"
-    cp "$PROJECT_ROOT/sss.spec" "$rpmbuild_dir/SPECS/"
+    cp "$PROJECT_ROOT/rpm-build/sss.spec" "$rpmbuild_dir/SPECS/"
 
     # Build RPM
     rpmbuild -ba \

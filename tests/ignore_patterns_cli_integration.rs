@@ -16,10 +16,11 @@ use tempfile::TempDir;
 // Helper to create a test .sss.toml file
 fn create_test_config(dir: &std::path::Path, ignore: Option<&str>) -> Result<PathBuf> {
     let config_path = dir.join(".sss.toml");
-    let mut config = ProjectConfig::default();
-    config.version = "1.0".to_string();
-    config.created = chrono::Utc::now().to_rfc3339();
-
+    let mut config = ProjectConfig {
+        version: "1.0".to_string(),
+        created: chrono::Utc::now().to_rfc3339(),
+        ..Default::default()
+    };
     if let Some(patterns) = ignore {
         config.ignore = Some(patterns.to_string());
     }

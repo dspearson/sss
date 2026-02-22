@@ -4,7 +4,7 @@ FROM rockylinux:8.4
 # Enable EPEL repository (required for libsodium)
 RUN dnf install -y epel-release && dnf clean all
 
-# Install build dependencies
+# Install build dependencies (fuse3 needed so the binary includes the mount subcommand)
 RUN dnf install -y \
     gcc \
     gcc-c++ \
@@ -12,6 +12,8 @@ RUN dnf install -y \
     libsodium-devel \
     pkg-config \
     openssl-devel \
+    fuse3 \
+    fuse3-devel \
     perl \
     && dnf clean all
 
@@ -25,8 +27,8 @@ WORKDIR /build
 # Copy source
 COPY . .
 
-# Build release binary
-RUN cargo build --release
+# Build release binary with FUSE support (provides `sss mount`)
+RUN cargo build --release --features fuse
 
 # The binary will be in /build/target/release/
 # Additional binaries: sss-agent, sss-askpass-tty, sss-askpass-gui

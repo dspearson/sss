@@ -25,9 +25,10 @@ fn test_parse_ignore_patterns_empty() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_simple() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log *.tmp".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log *.tmp".to_string()),
+        ..Default::default()
+    };
     let (positive, negative) = config.parse_ignore_patterns()?;
 
     assert!(!positive.is_empty());
@@ -43,9 +44,10 @@ fn test_parse_ignore_patterns_simple() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_with_negation() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.db !important.db".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.db !important.db".to_string()),
+        ..Default::default()
+    };
     let (positive, negative) = config.parse_ignore_patterns()?;
 
     assert!(!positive.is_empty());
@@ -61,9 +63,10 @@ fn test_parse_ignore_patterns_with_negation() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_comma_separated() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log,*.tmp,build/".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log,*.tmp,build/".to_string()),
+        ..Default::default()
+    };
     let (positive, _) = config.parse_ignore_patterns()?;
 
     assert!(positive.is_match(Path::new("debug.log")));
@@ -75,9 +78,10 @@ fn test_parse_ignore_patterns_comma_separated() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_mixed_separators() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log build/ *.tmp,cache/".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log build/ *.tmp,cache/".to_string()),
+        ..Default::default()
+    };
     let (positive, _) = config.parse_ignore_patterns()?;
 
     assert!(positive.is_match(Path::new("debug.log")));
@@ -90,9 +94,10 @@ fn test_parse_ignore_patterns_mixed_separators() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_directories() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/ node_modules/".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("build/ node_modules/".to_string()),
+        ..Default::default()
+    };
     let (positive, _) = config.parse_ignore_patterns()?;
 
     assert!(positive.is_match(Path::new("build/output.txt")));
@@ -104,9 +109,10 @@ fn test_parse_ignore_patterns_directories() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_wildcard() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("temp*.txt *.db test_*".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("temp*.txt *.db test_*".to_string()),
+        ..Default::default()
+    };
     let (positive, _) = config.parse_ignore_patterns()?;
 
     assert!(positive.is_match(Path::new("temp123.txt")));
@@ -129,9 +135,10 @@ fn test_should_ignore_no_patterns() -> Result<()> {
 
 #[test]
 fn test_should_ignore_matching_pattern() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("debug.log"))?);
     assert!(!config.should_ignore(Path::new("data.txt"))?);
 
@@ -140,9 +147,10 @@ fn test_should_ignore_matching_pattern() -> Result<()> {
 
 #[test]
 fn test_should_ignore_with_negation() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log !important.log".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.log !important.log".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("debug.log"))?);
     assert!(config.should_ignore(Path::new("test.log"))?);
     assert!(!config.should_ignore(Path::new("important.log"))?);
@@ -153,9 +161,10 @@ fn test_should_ignore_with_negation() -> Result<()> {
 
 #[test]
 fn test_should_ignore_multiple_negations() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.db !session.db !user.db".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("*.db !session.db !user.db".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("temp.db"))?);
     assert!(!config.should_ignore(Path::new("session.db"))?);
     assert!(!config.should_ignore(Path::new("user.db"))?);
@@ -165,9 +174,10 @@ fn test_should_ignore_multiple_negations() -> Result<()> {
 
 #[test]
 fn test_should_ignore_paths() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/ temp/".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("build/ temp/".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("build/output.txt"))?);
     assert!(config.should_ignore(Path::new("temp/cache.db"))?);
     assert!(!config.should_ignore(Path::new("src/main.rs"))?);
@@ -177,9 +187,10 @@ fn test_should_ignore_paths() -> Result<()> {
 
 #[test]
 fn test_invalid_pattern_error() {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("[invalid".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("[invalid".to_string()),
+        ..Default::default()
+    };
     assert!(config.parse_ignore_patterns().is_err());
 }
 
@@ -197,8 +208,10 @@ fn test_scanner_with_ignore_patterns() -> Result<()> {
     fs::write(root.join("data.txt"), "normal content")?;
 
     // Set up config with ignore patterns
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log !important.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log !important.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     // Create scanner with ignore patterns
@@ -228,8 +241,10 @@ fn test_scanner_ignore_directories() -> Result<()> {
     fs::write(root.join("build/output.txt"), "api_key=⊕{secret}")?;
     fs::write(root.join("src/main.rs"), "password=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("build/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -253,8 +268,10 @@ fn test_scanner_complex_patterns() -> Result<()> {
     fs::write(root.join("session.db"), "token=⊕{secret}")?;
     fs::write(root.join("config.yaml"), "key=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("temp*.txt *.db !session.db".to_string());
+    let config = ProjectConfig {
+        ignore: Some("temp*.txt *.db !session.db".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -297,8 +314,10 @@ fn test_scanner_ignore_all_with_one_exception() -> Result<()> {
     fs::write(root.join("file2.txt"), "password=⊕{secret}")?;
     fs::write(root.join("important.txt"), "token=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.txt !important.txt".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.txt !important.txt".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -325,8 +344,10 @@ fn test_scanner_nested_directories_with_ignore() -> Result<()> {
     fs::write(root.join("src/main.rs"), "token=⊕{secret}")?;
     fs::write(root.join("src/utils/helper.rs"), "key=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("build/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -359,8 +380,10 @@ fn test_real_world_example() -> Result<()> {
     fs::write(root.join("README.md"), "# Documentation\napi_key=⊕{secret}")?;
 
     // Typical .sss.toml ignore patterns
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("Justfile *.log build/ !README.md".to_string());
+    let config = ProjectConfig {
+        ignore: Some("Justfile *.log build/ !README.md".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -383,9 +406,10 @@ fn test_real_world_example() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_only_negations() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("!important.log !session.db".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("!important.log !session.db".to_string()),
+        ..Default::default()
+    };
     let (positive, negative) = config.parse_ignore_patterns()?;
 
     // Only negations - positive should be empty, negative should have patterns
@@ -397,9 +421,10 @@ fn test_parse_ignore_patterns_only_negations() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_whitespace_handling() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("  *.log   build/    !important.log  ".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("  *.log   build/    !important.log  ".to_string()),
+        ..Default::default()
+    };
     let (positive, negative) = config.parse_ignore_patterns()?;
 
     // Should handle extra whitespace correctly
@@ -413,9 +438,10 @@ fn test_parse_ignore_patterns_whitespace_handling() -> Result<()> {
 
 #[test]
 fn test_parse_ignore_patterns_empty_after_negation() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("!".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("!".to_string()),
+        ..Default::default()
+    };
     let (positive, negative) = config.parse_ignore_patterns()?;
 
     // Just "!" should be ignored (empty after stripping)
@@ -446,9 +472,10 @@ fn test_get_set_ignore_pattern_strings() -> Result<()> {
 
 #[test]
 fn test_clear_ignore_patterns() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log build/".to_string());
-
+    let mut config = ProjectConfig {
+        ignore: Some("*.log build/".to_string()),
+        ..Default::default()
+    };
     config.clear_ignore_patterns();
     assert_eq!(config.ignore, None);
 
@@ -460,10 +487,10 @@ fn test_clear_ignore_patterns() -> Result<()> {
 
 #[test]
 fn test_should_ignore_with_complex_negations() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.* !*.rs !*.toml".to_string());
-
-    // Should ignore most files but not .rs and .toml
+    let config = ProjectConfig {
+        ignore: Some("*.* !*.rs !*.toml".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("test.log"))?);
     assert!(config.should_ignore(Path::new("data.txt"))?);
     assert!(!config.should_ignore(Path::new("main.rs"))?);
@@ -474,9 +501,10 @@ fn test_should_ignore_with_complex_negations() -> Result<()> {
 
 #[test]
 fn test_should_ignore_directory_paths() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("build/ target/".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("build/ target/".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("build/output.txt"))?);
     assert!(config.should_ignore(Path::new("target/debug/app"))?);
     assert!(config.should_ignore(Path::new("build/nested/deep/file.txt"))?);
@@ -487,9 +515,10 @@ fn test_should_ignore_directory_paths() -> Result<()> {
 
 #[test]
 fn test_parse_patterns_with_special_glob_chars() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("test[12].log temp?.txt **/*.cache".to_string());
-
+    let config = ProjectConfig {
+        ignore: Some("test[12].log temp?.txt **/*.cache".to_string()),
+        ..Default::default()
+    };
     let (positive, _) = config.parse_ignore_patterns()?;
 
     assert!(positive.is_match(Path::new("test1.log")));
@@ -509,8 +538,10 @@ fn test_scanner_pattern_priority() -> Result<()> {
     fs::write(root.join("debug.log"), "password=⊕{secret}")?;
 
     // Pattern: ignore all .log but make exception for important.log
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.log !important.log".to_string());
+    let config = ProjectConfig {
+        ignore: Some("*.log !important.log".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();
@@ -527,10 +558,10 @@ fn test_scanner_pattern_priority() -> Result<()> {
 
 #[test]
 fn test_ignore_patterns_case_sensitivity() -> Result<()> {
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("*.LOG".to_string());
-
-    // Glob patterns are case-sensitive by default
+    let config = ProjectConfig {
+        ignore: Some("*.LOG".to_string()),
+        ..Default::default()
+    };
     assert!(config.should_ignore(Path::new("DEBUG.LOG"))?);
     assert!(!config.should_ignore(Path::new("debug.log"))?); // Different case
 
@@ -547,8 +578,10 @@ fn test_multiple_directory_levels() -> Result<()> {
     fs::write(root.join("a/b/file.txt"), "password=⊕{secret}")?;
     fs::write(root.join("a/b/c/file.txt"), "password=⊕{secret}")?;
 
-    let mut config = ProjectConfig::default();
-    config.ignore = Some("a/b/".to_string());
+    let config = ProjectConfig {
+        ignore: Some("a/b/".to_string()),
+        ..Default::default()
+    };
     let (ignore_set, negation_set) = config.parse_ignore_patterns()?;
 
     let mut scanner = FileScanner::new();

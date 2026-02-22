@@ -1,14 +1,14 @@
-/// Comprehensive edge case tests for FileScanner module
-///
-/// This test suite covers edge cases not typically covered in regular integration tests:
-/// - Symlink handling
-/// - Permission errors
-/// - Corrupted/malformed files
-/// - Binary files with partial UTF-8
-/// - Files exactly at size limits
-/// - Concurrent scanning
-/// - Empty directories and files
-/// - Special file names (unicode, spaces, special chars)
+//! Comprehensive edge case tests for FileScanner module
+//!
+//! This test suite covers edge cases not typically covered in regular integration tests:
+//! - Symlink handling
+//! - Permission errors
+//! - Corrupted/malformed files
+//! - Binary files with partial UTF-8
+//! - Files exactly at size limits
+//! - Concurrent scanning
+//! - Empty directories and files
+//! - Special file names (unicode, spaces, special chars)
 
 use anyhow::Result;
 use sss::scanner::FileScanner;
@@ -508,8 +508,8 @@ fn test_scanner_with_allowed_extensions() -> Result<()> {
 
     // Should only find .toml and .rs files
     assert_eq!(results.len(), 2);
-    assert!(results.iter().any(|p| p.extension().map_or(false, |e| e == "toml")));
-    assert!(results.iter().any(|p| p.extension().map_or(false, |e| e == "rs")));
+    assert!(results.iter().any(|p| p.extension().is_some_and(|e| e == "toml")));
+    assert!(results.iter().any(|p| p.extension().is_some_and(|e| e == "rs")));
 
     Ok(())
 }

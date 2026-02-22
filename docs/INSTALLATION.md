@@ -1,188 +1,73 @@
 # Installation Guide
 
-This guide covers installation methods for SSS (Shamir Secret Sharing) and development environment setup on macOS.
+This guide covers installation methods for sss (Secret String Substitution) across all supported platforms, as well as development environment setup.
 
 ## Table of Contents
 
-1. [SSS Installation](#sss-installation)
-2. [Development Environment Setup](#development-environment-setup)
-3. [Building from Source](#building-from-source)
+1. [Pre-built Packages](#pre-built-packages)
+2. [Building from Source](#building-from-source)
+3. [Platform-Specific Notes](#platform-specific-notes)
+4. [Optional Features](#optional-features)
+5. [Development Environment Setup](#development-environment-setup)
+6. [Verifying Your Installation](#verifying-your-installation)
+7. [Uninstallation](#uninstallation)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
-## SSS Installation
+## Pre-built Packages
 
-### One-Line Install (macOS Apple Silicon)
-
-The easiest way to install SSS on macOS:
+### Debian/Ubuntu (.deb)
 
 ```bash
-curl -fsSL https://technoanimal.net/sss/install-macos.sh | bash
+./debian/build-deb.sh
+sudo dpkg -i target/debian/sss_*.deb
 ```
 
-Or download and run:
+### RHEL/CentOS/Fedora (.rpm)
 
 ```bash
-chmod +x install-macos.sh
-./install-macos.sh
+./rpm-build/build-rpm.sh
+sudo rpm -i target/rpm/sss-*.rpm
 ```
 
-### What Gets Installed
-
-The installer will:
-
-1. ✅ Extract all SSS binaries (sss, sss-agent, sss-askpass-tty, sss-askpass-gui)
-2. ✅ Install Homebrew (if not present)
-3. ✅ Install libsodium dependency
-4. ✅ Install macFUSE (with system extension approval prompt)
-5. ✅ Copy binaries to `~/.local/bin`
-6. ✅ Add `~/.local/bin` to your PATH
-7. ✅ Configure shell environment
-
-### Requirements
-
-- **macOS**: 12.0 (Monterey) or later
-- **Architecture**: Apple Silicon (ARM64)
-- **System Extensions**: Must approve macFUSE extension
-
-### Post-Installation
-
-After installation completes:
+### Alpine Linux (musl static binary)
 
 ```bash
-# Reload your shell
-source ~/.zshrc  # or ~/.bash_profile for bash
-
-# Verify installation
-sss --version
-
-# Quick start
-sss init
-sss keygen
-sss mount --in-place
+docker build -f Dockerfile.alpine -t sss-alpine .
+docker run --rm sss-alpine cat /usr/local/bin/sss > sss
+chmod +x sss
+sudo mv sss /usr/local/bin/
 ```
 
-### Manual Installation
-
-If you prefer manual installation:
-
-1. Download the binary from [releases](https://github.com/dspearson/sss/releases)
-2. Install dependencies:
-   ```bash
-   brew install libsodium
-   brew install --cask macfuse
-   ```
-3. Move binary to your PATH:
-   ```bash
-   sudo mv sss /usr/local/bin/
-   chmod +x /usr/local/bin/sss
-   ```
-
----
-
-## Development Environment Setup
-
-For developers who want to build SSS or contribute to the project, we provide an automated development environment installer.
-
-### One-Line Install
+### macOS (Apple Silicon / Intel)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dspearson/sss/main/scripts/devenv-macos-installer.sh | bash
+# Install dependencies
+brew install libsodium pkg-config
+
+# Build from source
+cargo build --release
+sudo cp target/release/sss /usr/local/bin/
+
+# Optional: FUSE support
+brew install --cask macfuse
+cargo build --features fuse --release
 ```
 
-Or download and run:
+### Windows
 
 ```bash
-chmod +x scripts/devenv-macos-installer.sh
-./scripts/devenv-macos-installer.sh
-```
+# Install dependencies:
+# - Rust toolchain: https://rustup.rs/
+# - libsodium: via vcpkg or pre-built binaries
 
-### What Gets Installed
-
-The development environment installer sets up:
-
-1. **Determinate Nix** (noninteractive)
-   - Nix package manager with flakes enabled by default
-   - Better than standard Nix for development
-   - Drop-in replacement with improved UX
-
-2. **direnv**
-   - Automatic environment loading
-   - Loads Nix environments when you cd into project directory
-   - No need to manually run `nix develop`
-
-3. **Shell Integration**
-   - Configures direnv hooks for your shell (zsh/bash)
-   - Backs up existing shell config before modification
-   - Adds PATH configuration automatically
-
-4. **Optional: nix-direnv**
-   - Caches Nix environments for faster loading
-   - Significantly speeds up direnv operations
-   - Highly recommended for Nix+direnv workflow
-
-### Why Determinate Nix?
-
-Determinate Nix is preferred over standard Nix because:
-
-- ✅ Flakes enabled by default (no manual configuration)
-- ✅ Noninteractive installation (great for automation)
-- ✅ Better uninstall support
-- ✅ More user-friendly error messages
-- ✅ Drop-in replacement for standard Nix
-- ✅ Works with all existing Nix flakes
-
-### Post-Installation Workflow
-
-After installing the development environment:
-
-```bash
-# Reload your shell
-source ~/.zshrc  # or ~/.bash_profile for bash
-
-# Verify installation
-nix --version
-direnv version
-
-# Clone the SSS repository
-git clone https://github.com/dspearson/sss.git
-cd sss
-
-# Allow direnv (first time only)
-direnv allow
-
-# The environment will automatically load!
-# All build tools, dependencies, and compilers are now available
-
-# Build the project
 cargo build --release
 
-# Run tests
-cargo test
+# Optional: WinFSP support
+# Install WinFSP from https://winfsp.dev/
+cargo build --features winfsp --release
 ```
-
-### Using with Nix Flakes
-
-The SSS project includes a `flake.nix` with development shells:
-
-```bash
-# Enter development shell manually (if not using direnv)
-nix develop
-
-# Or with direnv, just cd into the directory
-cd sss
-# direnv automatically loads the environment!
-```
-
-### What's in the Development Environment?
-
-The Nix flake provides:
-
-- Rust toolchain (stable/nightly as configured)
-- Cross-compilation tools for macOS (osxcross)
-- All required libraries (libsodium, libfuse, etc.)
-- Build tools (cargo, rustc, pkg-config)
-- Development tools (rust-analyzer, clippy, rustfmt)
 
 ---
 
@@ -190,156 +75,329 @@ The Nix flake provides:
 
 ### Prerequisites
 
-If you installed the development environment (recommended):
+- **Rust**: 2024 edition (1.85+) -- install via [rustup](https://rustup.rs/)
+- **libsodium**: linked automatically by `libsodium-sys` (builds from source if not found)
+- **pkg-config** (Linux/macOS): for locating system libsodium
+- **C compiler**: for libsodium-sys build (gcc, clang, or MSVC)
+
+### Basic Build
 
 ```bash
-# Just cd into the project directory
+git clone <repository-url>
 cd sss
-# All dependencies are automatically available via direnv!
+cargo build --release
 ```
 
-Without the development environment:
+Binaries are placed in `target/release/`:
+
+| Binary | Description |
+|--------|-------------|
+| `sss` | Main CLI tool |
+| `sss-agent` | Key management daemon (Unix) |
+| `sss-askpass-tty` | TTY confirmation helper for agent |
+| `sss-askpass-gui` | GUI confirmation helper for agent |
+
+### Install to PATH
+
+```bash
+# System-wide
+sudo cp target/release/sss /usr/local/bin/
+sudo cp target/release/sss-agent /usr/local/bin/
+
+# User-local
+mkdir -p ~/.local/bin
+cp target/release/sss ~/.local/bin/
+cp target/release/sss-agent ~/.local/bin/
+# Ensure ~/.local/bin is in your PATH
+```
+
+### Editor Symlink
+
+Create an `ssse` symlink for transparent edit-in-place from any editor:
+
+```bash
+ln -s /usr/local/bin/sss /usr/local/bin/ssse
+```
+
+When invoked as `ssse <file>`, it automatically opens, launches your editor, and re-seals on save.
+
+---
+
+## Platform-Specific Notes
+
+### Linux
+
+libsodium is typically available via your package manager:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install libsodium-dev pkg-config
+
+# Fedora/RHEL
+sudo dnf install libsodium-devel pkgconf-pkg-config
+
+# Arch Linux
+sudo pacman -S libsodium pkg-config
+```
+
+For FUSE support:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get install libfuse3-dev fuse3
+
+# Fedora/RHEL
+sudo dnf install fuse3-devel fuse3
+
+# Arch Linux
+sudo pacman -S fuse3
+```
+
+### macOS
+
+```bash
+brew install libsodium pkg-config
+
+# For FUSE support, install macFUSE:
+brew install --cask macfuse
+```
+
+**Note:** macFUSE requires approval of a system extension. After installation:
+
+1. Open **System Settings**
+2. Go to **Privacy & Security**
+3. Find the blocked extension and click **Allow**
+4. Restart if prompted
+
+### Cross-Compilation (Linux to macOS)
+
+If building macOS binaries from Linux, you will need osxcross or a similar toolchain. The Nix development environment (see below) provides this automatically.
+
+```bash
+# With osxcross configured:
+cargo build --target aarch64-apple-darwin --release
+```
+
+---
+
+## Optional Features
+
+sss has three optional Cargo features:
+
+| Feature | Platform | Description |
+|---------|----------|-------------|
+| `fuse` | Linux, macOS | FUSE filesystem for transparent rendering |
+| `winfsp` | Windows | WinFSP filesystem for transparent rendering |
+| `ninep` | All | 9P network file server |
+
+Build with one or more features:
+
+```bash
+cargo build --features fuse --release
+cargo build --features ninep --release
+cargo build --features fuse,ninep --release
+cargo build --features winfsp --release
+```
+
+### FUSE Dependencies
+
+- **Linux**: `libfuse3-dev` / `fuse3-devel` and `fuse3`
+- **macOS**: [macFUSE](https://osxfuse.github.io/) (`brew install --cask macfuse`)
+
+### WinFSP Dependencies
+
+- **Windows**: [WinFSP](https://winfsp.dev/) (download and install the MSI package)
+
+### 9P Dependencies
+
+No additional system dependencies. The 9P server uses a vendored Rust implementation.
+
+---
+
+## Development Environment Setup
+
+### Using Nix (Recommended)
+
+The project includes a `flake.nix` providing a complete development environment:
+
+```bash
+# Install Determinate Nix (if not already present)
+curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh
+
+# Enter the development shell
+nix develop
+
+# Or with direnv (automatic environment loading)
+direnv allow
+```
+
+The Nix flake provides:
+
+- Rust toolchain (stable)
+- Cross-compilation tools (including osxcross for macOS targets)
+- All required libraries (libsodium, libfuse, etc.)
+- Build tools (cargo, rustc, pkg-config)
+- Development tools (rust-analyzer, clippy, rustfmt)
+
+### Using direnv
+
+With [direnv](https://direnv.net/) installed and configured, the development environment loads automatically when you `cd` into the project directory:
+
+```bash
+# Install direnv
+brew install direnv   # macOS
+sudo apt install direnv  # Debian/Ubuntu
+
+# Add hook to your shell
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc   # or bash equivalent
+
+# Allow direnv for this project
+cd sss
+direnv allow
+```
+
+### Manual Setup
+
+Without Nix, install the prerequisites manually:
 
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install dependencies
-brew install libsodium pkg-config
-brew install --cask macfuse
-```
+# Install system dependencies (Debian/Ubuntu)
+sudo apt-get install libsodium-dev pkg-config libfuse3-dev fuse3
 
-### Build Commands
-
-```bash
-# Build for local architecture
-cargo build --release
-
-# Cross-compile for macOS Apple Silicon (from Linux)
-./build-macos-cross.sh
-
-# Run tests
+# Build and test
+cargo build
 cargo test
-
-# Generate installer (after building)
-./generate-installer.sh
-```
-
-### Build Outputs
-
-Built binaries are located in:
-
-```
-target/release/sss              # Main binary
-target/release/sss-agent         # SSH agent integration
-target/release/sss-askpass-tty   # Terminal password prompt
-target/release/sss-askpass-gui   # GUI password prompt
-```
-
-For cross-compilation:
-
-```
-target/aarch64-apple-darwin/release/sss
+cargo clippy -- -D warnings
 ```
 
 ---
 
-## Troubleshooting
-
-### macFUSE System Extension
-
-If you see an error about system extensions:
-
-1. Open **System Settings**
-2. Go to **Privacy & Security**
-3. Scroll down to find the blocked extension
-4. Click **Allow** next to "System software from developer 'Benjamin Fleischer'"
-5. Restart your Mac if prompted
-
-### PATH Not Working
-
-If `sss` command is not found after installation:
+## Verifying Your Installation
 
 ```bash
-# For zsh (default on modern macOS)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+# Check version
+sss --version
 
-# For bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bash_profile
-source ~/.bash_profile
-```
+# Generate a test keypair
+sss keys generate
 
-### Nix Installation Issues
+# Initialise a test project
+mkdir /tmp/sss-test && cd /tmp/sss-test
+sss init testuser
 
-If Determinate Nix installation fails:
+# Seal and open a test file
+echo "secret=⊕{hello-world}" > test.txt
+sss seal -x test.txt
+cat test.txt            # Shows ⊠{...} ciphertext
+sss open test.txt       # Shows ⊕{hello-world}
 
-```bash
-# Check for existing Nix installation
-which nix
-
-# If using standard Nix, uninstall first:
-# https://nixos.org/manual/nix/stable/installation/uninstall.html
-
-# Then retry the installer
-./scripts/devenv-macos-installer.sh
-```
-
-### direnv Not Loading
-
-If direnv doesn't automatically load:
-
-```bash
-# Check if hook is configured
-cat ~/.zshrc | grep direnv
-
-# If not present, add manually:
-echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
-source ~/.zshrc
-
-# Allow direnv in the project directory
-cd sss
-direnv allow
+# Clean up
+cd -
+rm -rf /tmp/sss-test
 ```
 
 ---
 
 ## Uninstallation
 
-### Remove SSS
+### Remove Binaries
 
 ```bash
-# Remove binaries
-rm -f ~/.local/bin/sss*
+# If installed to /usr/local/bin
+sudo rm -f /usr/local/bin/sss /usr/local/bin/sss-agent
+sudo rm -f /usr/local/bin/sss-askpass-tty /usr/local/bin/sss-askpass-gui
+sudo rm -f /usr/local/bin/ssse
 
-# Remove from PATH (edit your shell config manually)
-# Remove the line: export PATH="$HOME/.local/bin:$PATH"
+# If installed to ~/.local/bin
+rm -f ~/.local/bin/sss ~/.local/bin/sss-agent
+rm -f ~/.local/bin/sss-askpass-tty ~/.local/bin/sss-askpass-gui
+rm -f ~/.local/bin/ssse
 ```
 
-### Remove Development Environment
+### Remove Configuration
 
 ```bash
-# Uninstall Determinate Nix
+# User configuration and keys
+rm -rf ~/.config/sss/
+
+# On macOS
+rm -rf ~/Library/Application\ Support/sss/
+```
+
+**Warning:** removing `~/.config/sss/` deletes your private keys. Ensure you have backups or that no projects depend on those keys before proceeding.
+
+### Remove Nix Development Environment
+
+```bash
 /nix/nix-installer uninstall
-
-# Uninstall direnv
-brew uninstall direnv
-
-# Remove shell hooks (edit your ~/.zshrc or ~/.bash_profile)
-# Remove lines containing: direnv hook
 ```
 
 ---
 
-## Support
+## Troubleshooting
 
-- **Issues**: https://github.com/dspearson/sss/issues
-- **Documentation**: https://github.com/dspearson/sss
-- **Determinate Nix Docs**: https://determinate.systems/nix/
-- **direnv Docs**: https://direnv.net/
+### libsodium not found
 
----
+If `cargo build` fails with libsodium errors, ensure the development headers are installed:
 
-## License
+```bash
+# Debian/Ubuntu
+sudo apt-get install libsodium-dev
 
-SSS is licensed under the ISC License. See [LICENSE](../LICENSE) for details.
+# Fedora
+sudo dnf install libsodium-devel
+
+# macOS
+brew install libsodium
+```
+
+If libsodium is installed but not found, set `PKG_CONFIG_PATH`:
+
+```bash
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+```
+
+### FUSE mount permission denied
+
+Ensure your user is in the `fuse` group (Linux):
+
+```bash
+sudo usermod -a -G fuse $USER
+# Log out and back in for the change to take effect
+```
+
+### macFUSE system extension blocked
+
+See [Platform-Specific Notes -- macOS](#macos) above for instructions on approving the system extension.
+
+### PATH not configured
+
+If `sss` is not found after installation:
+
+```bash
+# For zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+
+# For bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Passphrase prompts in CI/CD
+
+Use the `SSS_PASSPHRASE` environment variable and `--non-interactive` flag:
+
+```bash
+export SSS_PASSPHRASE="your-passphrase"
+sss --non-interactive seal --project
+```
+
+Or generate keys without a passphrase for CI environments:
+
+```bash
+sss keys generate --no-password
+```

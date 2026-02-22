@@ -25,7 +25,7 @@ fn test_load_project_config_current_dir() -> Result<()> {
 
     // Create a basic config
     let config = create_test_config()?;
-    config.save_to_file(&temp_path.join(".sss.toml"))?;
+    config.save_to_file(temp_path.join(".sss.toml"))?;
 
     // Save original directory
     let original_dir = std::env::current_dir()?;
@@ -59,7 +59,7 @@ fn test_load_project_config_searches_upward() -> Result<()> {
 
     // Create config in parent
     let config = create_test_config()?;
-    config.save_to_file(&temp_path.join(".sss.toml"))?;
+    config.save_to_file(temp_path.join(".sss.toml"))?;
 
     // Save original directory
     let original_dir = std::env::current_dir()?;
@@ -120,7 +120,7 @@ fn test_load_project_config_from_specific_dir() -> Result<()> {
 
     // Create config in specific directory
     let config = create_test_config()?;
-    config.save_to_file(&project_dir.join(".sss.toml"))?;
+    config.save_to_file(project_dir.join(".sss.toml"))?;
 
     // Load from that directory
     let result = load_project_config_from(&project_dir);
@@ -143,7 +143,7 @@ fn test_load_project_config_from_searches_upward() -> Result<()> {
 
     // Create config in project root
     let config = create_test_config()?;
-    config.save_to_file(&project_dir.join(".sss.toml"))?;
+    config.save_to_file(project_dir.join(".sss.toml"))?;
 
     // Load from subdirectory - should search upward
     let result = load_project_config_from(&subdir);
@@ -166,7 +166,7 @@ fn test_helpers_consistency() -> Result<()> {
 
     // Create config
     let config = create_test_config()?;
-    config.save_to_file(&temp_dir.path().join(".sss.toml"))?;
+    config.save_to_file(temp_dir.path().join(".sss.toml"))?;
 
     // Save original directory
     let original_dir = std::env::current_dir()?;
@@ -226,7 +226,7 @@ fn test_load_config_with_users() -> Result<()> {
 
     // Create config with initial user
     let config = create_test_config()?;
-    config.save_to_file(&temp_dir.path().join(".sss.toml"))?;
+    config.save_to_file(temp_dir.path().join(".sss.toml"))?;
 
     // Load and verify
     let (_, loaded_config) = load_project_config_from(temp_dir.path())?;
@@ -248,7 +248,7 @@ fn test_deeply_nested_search() -> Result<()> {
 
     // Create config at root
     let config = create_test_config()?;
-    config.save_to_file(&temp_dir.path().join(".sss.toml"))?;
+    config.save_to_file(temp_dir.path().join(".sss.toml"))?;
 
     // Should find it from deep path
     let result = load_project_config_from(&deep_path);

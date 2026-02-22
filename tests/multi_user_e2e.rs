@@ -63,8 +63,8 @@ fn init_project_with_alice(
 ///   3. Seal a file as Alice — write plaintext with ⊕ marker, seal in-place
 ///   4. Open as Bob — Bob opens his sealed repo key, decrypts the file
 ///   5. Remove Bob, rotate key — generate new RepositoryKey, re-encrypt file,
-///        re-seal only for Alice; verify Bob's old sealed key is rejected and
-///        Alice can decrypt the rotated content
+///      re-seal only for Alice; verify Bob's old sealed key is rejected and
+///      Alice can decrypt the rotated content
 #[test]
 fn test_complete_multi_user_lifecycle() -> Result<()> {
     let temp_dir = TempDir::new()?;

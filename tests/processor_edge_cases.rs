@@ -1,12 +1,12 @@
-/// Comprehensive edge case tests for pattern detection
-///
-/// This test suite covers edge cases in SSS pattern detection:
-/// - Multiple patterns in single line
-/// - Mixed pattern types (⊕, o+, ⊠)
-/// - Malformed patterns
-/// - Large files with many patterns
-/// - Binary data mixed with patterns
-/// - Pattern validation
+//! Comprehensive edge case tests for pattern detection
+//!
+//! This test suite covers edge cases in SSS pattern detection:
+//! - Multiple patterns in single line
+//! - Mixed pattern types (⊕, o+, ⊠)
+//! - Malformed patterns
+//! - Large files with many patterns
+//! - Binary data mixed with patterns
+//! - Pattern validation
 
 use anyhow::Result;
 use sss::scanner::FileScanner;

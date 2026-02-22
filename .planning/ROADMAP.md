@@ -23,7 +23,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details.
 
 - [x] **Phase 5: Core Operations & UX** - Region encrypt/decrypt, toggle-at-point, keygen fix, overlays, preview, auth-source, transient menu (completed 2026-02-21)
 - [x] **Phase 6: Evil & Doom Integration** - Evil operators, Doom leader/localleader bindings, conditional loading (completed 2026-02-23)
-- [x] **Phase 7: Cleanup & Documentation** - Remove plugins/emacs/, update guides and README (in progress 2026-02-23)
+- [x] **Phase 7: Cleanup & Documentation** - Remove plugins/emacs/, update guides and README (completed 2026-02-23)
 
 ## Phase Details
 
@@ -77,11 +77,11 @@ Wave structure:
   1. The `plugins/emacs/` directory does not exist in the repo; no file in the codebase references it
   2. `docs/sss-mode-guide.md` documents region encrypt/decrypt, toggle-at-point, evil operators, Doom bindings, overlay mode, and transient menu
   3. The README.md Emacs section describes the consolidated package and its capabilities (not the old two-package split)
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 07-01-PLAN.md -- Remove plugins/emacs/, update README Emacs section (Wave 1) -- completed 2026-02-23
-- [ ] 07-02-PLAN.md -- Update docs/sss-mode-guide.md with v1.1 features (Wave 1)
+- [x] 07-02-PLAN.md -- Update docs/sss-mode-guide.md with v1.1 features (Wave 1) -- completed 2026-02-23
 
 Wave structure:
 - **Wave 1** (parallel): 07-01 (CLEAN-01 + CLEAN-03) | 07-02 (CLEAN-02)
@@ -96,4 +96,4 @@ Wave structure:
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
 | 5. Core Operations & UX | 3/3 | Complete    | 2026-02-21 | - |
 | 6. Evil & Doom Integration | 2/2 | Complete    | 2026-02-23 | - |
-| 7. Cleanup & Documentation | v1.1 | 1/2 | In progress | 2026-02-23 |
+| 7. Cleanup & Documentation | 2/2 | Complete   | 2026-02-23 | 2026-02-23 |

@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 7 (Cleanup & Documentation)
-Plan: 1/1 (07-01 complete -- Phase 7 complete)
+Plan: 2/2 (07-02 complete -- Phase 7 complete)
 Status: Phase 7 complete -- v1.1 consolidation done
-Last activity: 2026-02-23 -- 07-01 complete (removed plugins/emacs/, updated README Emacs section)
+Last activity: 2026-02-23 -- 07-02 complete (sss-mode-guide v1.1 documentation: 6 new sections)
 
 Progress: [██████████] 100%
 
@@ -66,6 +66,12 @@ Phase 7 Plan 01 decisions (2026-02-23):
 - plugins/emacs/ directory removed; all features consolidated into emacs/sss-mode.el (v1.1)
 - README Emacs section rewritten to cover v1.1 features, evil/doom bindings, and installation snippets
 
+Phase 7 Plan 02 decisions (2026-02-23):
+- Preserve all v1.0 content verbatim; insert new sections 8-13 before renumbered legacy sections 14-17
+- Document buffer-local scope of evil ge/gd/gt bindings explicitly (prevents confusion with default evil bindings)
+- Include 6-step example workflow in Region Operations section for new-user onboarding
+- Fix sss-keygen description to "sss keys generate" (removes deprecated form)
+
 ### Pending Todos
 
 None.
@@ -79,5 +85,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 07-cleanup-documentation 07-01-PLAN.md
-Resume with: v1.1 consolidation complete -- no further phases planned
+Stopped at: Completed 07-cleanup-documentation 07-02-PLAN.md
+Resume with: v1.1 consolidation complete -- all phases done

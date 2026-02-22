@@ -87,7 +87,7 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 ### Cleanup
 
 - [x] **CLEAN-01**: Remove `plugins/emacs/` directory after all features are ported
-- [ ] **CLEAN-02**: Update `docs/sss-mode-guide.md` to document new features (evil, doom, overlays, region ops)
+- [x] **CLEAN-02**: Update `docs/sss-mode-guide.md` to document new features (evil, doom, overlays, region ops)
 - [x] **CLEAN-03**: Update README.md Emacs section to reflect consolidated package
 
 ## v2 Requirements
@@ -165,7 +165,7 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | DOOM-02 | Phase 6 | Complete |
 | DOOM-03 | Phase 6 | Complete |
 | CLEAN-01 | Phase 7 | Complete |
-| CLEAN-02 | Phase 7 | Pending |
+| CLEAN-02 | Phase 7 | Complete |
 | CLEAN-03 | Phase 7 | Complete |
 
 **v1.0 Coverage:**

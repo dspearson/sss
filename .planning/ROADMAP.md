@@ -23,7 +23,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details.
 
 - [x] **Phase 5: Core Operations & UX** - Region encrypt/decrypt, toggle-at-point, keygen fix, overlays, preview, auth-source, transient menu (completed 2026-02-21)
 - [x] **Phase 6: Evil & Doom Integration** - Evil operators, Doom leader/localleader bindings, conditional loading (completed 2026-02-23)
-- [ ] **Phase 7: Cleanup & Documentation** - Remove plugins/emacs/, update guides and README
+- [x] **Phase 7: Cleanup & Documentation** - Remove plugins/emacs/, update guides and README (in progress 2026-02-23)
 
 ## Phase Details
 
@@ -63,7 +63,7 @@ Wave structure:
 
 Plans:
 - [x] 06-01-PLAN.md -- Evil operators, text objects, conditional loading scaffold (Wave 1) -- completed 2026-02-23
-- [ ] 06-02-PLAN.md -- Doom leader and localleader bindings (Wave 2)
+- [x] 06-02-PLAN.md -- Doom leader and localleader bindings (Wave 2) -- completed 2026-02-23
 
 Wave structure:
 - **Wave 1**: 06-01 (EVIL-01 + EVIL-02 + EVIL-03 + DOOM-03)
@@ -80,7 +80,7 @@ Wave structure:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 07-01-PLAN.md -- Remove plugins/emacs/, update README Emacs section (Wave 1)
+- [x] 07-01-PLAN.md -- Remove plugins/emacs/, update README Emacs section (Wave 1) -- completed 2026-02-23
 - [ ] 07-02-PLAN.md -- Update docs/sss-mode-guide.md with v1.1 features (Wave 1)
 
 Wave structure:
@@ -96,4 +96,4 @@ Wave structure:
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
 | 5. Core Operations & UX | 3/3 | Complete    | 2026-02-21 | - |
 | 6. Evil & Doom Integration | 2/2 | Complete    | 2026-02-23 | - |
-| 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |
+| 7. Cleanup & Documentation | v1.1 | 1/2 | In progress | 2026-02-23 |

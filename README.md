@@ -189,14 +189,48 @@ See [docs/security-model.md](docs/security-model.md) for the full security model
 
 ## Emacs Integration
 
-`sss-mode` provides transparent encryption for Emacs:
+`emacs/sss-mode.el` (v1.1) is a single-file Emacs package providing transparent encryption for sss-sealed files.
 
-- Sealed files (`⊠{…}`) are automatically unsealed on open
-- Re-sealed on save — the plaintext never touches disk
-- Font-lock highlighting for both marker forms
+**Core behaviour** (unchanged from v1.0):
+
+- Sealed files (`⊠{…}`) are automatically decrypted on open — plaintext `⊕{…}` markers are visible for editing
+- Re-sealed on save — plaintext never touches disk
+- Font-lock highlighting for open and sealed marker forms
 - Mode-line indicator (`SSS[open]` / `SSS[sealed]`)
 
-See [docs/sss-mode-guide.md](docs/sss-mode-guide.md) for installation, daemon-mode configuration, key bindings, and troubleshooting.
+**New in v1.1:**
+
+- Region encrypt/decrypt: `C-c C-e` / `C-c C-d`
+- Toggle marker state at point: `C-c C-t`
+- Preview decrypted secret at point (transient overlay): `C-c C-v`
+- Overlay mode for visual marker highlighting (`sss-toggle-overlay-mode`)
+- Auth-source integration — passphrase cached via `~/.authinfo` (no repeated prompts)
+- Transient command menu with `completing-read` fallback: `C-c C-m`
+
+**Evil integration** (when `evil` is loaded, sss-mode buffers only):
+
+- `ge` / `gd` / `gt` — encrypt / decrypt / toggle operators (compose with any motion)
+- `is` / `as` — inner / outer SSS text objects (use with `v`, `d`, `c`, etc.)
+
+**Doom Emacs** (when Doom is detected):
+
+- `SPC e` — global leader prefix for encryption commands
+- `, e` — localleader prefix for sss-mode buffers
+
+**Installation (vanilla Emacs):**
+
+```elisp
+(add-to-list 'load-path "/path/to/sss/emacs/")
+(require 'sss-mode)
+```
+
+**Doom Emacs setup:** Copy `emacs/sss-mode.el` to `~/.config/doom/lisp/`, then add to `config.el`:
+
+```elisp
+(load! "lisp/sss-mode")
+```
+
+See [docs/sss-mode-guide.md](docs/sss-mode-guide.md) for full installation options, daemon-mode configuration, key binding reference, and troubleshooting.
 
 ## Optional Features
 

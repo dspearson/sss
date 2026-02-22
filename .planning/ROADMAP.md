@@ -77,11 +77,14 @@ Wave structure:
   1. The `plugins/emacs/` directory does not exist in the repo; no file in the codebase references it
   2. `docs/sss-mode-guide.md` documents region encrypt/decrypt, toggle-at-point, evil operators, Doom bindings, overlay mode, and transient menu
   3. The README.md Emacs section describes the consolidated package and its capabilities (not the old two-package split)
-**Plans**: 2 plans (suggested)
+**Plans:** 2 plans
+
+Plans:
+- [ ] 07-01-PLAN.md -- Remove plugins/emacs/, update README Emacs section (Wave 1)
+- [ ] 07-02-PLAN.md -- Update docs/sss-mode-guide.md with v1.1 features (Wave 1)
 
 Wave structure:
-- **Wave 1** (parallel): CLEAN-01 (remove plugins/emacs/) | CLEAN-02 (update guide) | CLEAN-03 (update README)
-- All three are independent and can execute in parallel once Phase 6 is complete
+- **Wave 1** (parallel): 07-01 (CLEAN-01 + CLEAN-03) | 07-02 (CLEAN-02)
 
 ## Progress
 

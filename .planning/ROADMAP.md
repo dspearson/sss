@@ -22,7 +22,7 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full phase details.
 ### v1.1 Emacs Integration Consolidation
 
 - [x] **Phase 5: Core Operations & UX** - Region encrypt/decrypt, toggle-at-point, keygen fix, overlays, preview, auth-source, transient menu (completed 2026-02-21)
-- [ ] **Phase 6: Evil & Doom Integration** - Evil operators, Doom leader/localleader bindings, conditional loading
+- [x] **Phase 6: Evil & Doom Integration** - Evil operators, Doom leader/localleader bindings, conditional loading (completed 2026-02-23)
 - [ ] **Phase 7: Cleanup & Documentation** - Remove plugins/emacs/, update guides and README
 
 ## Phase Details
@@ -59,7 +59,7 @@ Wave structure:
   2. `SPC e` opens an encryption prefix with project/key/help commands; `, e` in sss-mode buffers provides buffer-local encrypt/decrypt/toggle
   3. Loading sss-mode in vanilla Emacs (no evil, no Doom) produces no errors or warnings -- evil and Doom features are conditionally defined
   4. Evil text objects `is` (inner sss pattern) and `as` (outer sss pattern) select pattern content and full pattern respectively
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
 - [x] 06-01-PLAN.md -- Evil operators, text objects, conditional loading scaffold (Wave 1) -- completed 2026-02-23
@@ -92,5 +92,5 @@ Wave structure:
 | 3. sss-mode Complete | v1.0 | 2/2 | Complete | 2026-02-21 |
 | 4. Documentation | v1.0 | 4/4 | Complete | 2026-02-21 |
 | 5. Core Operations & UX | 3/3 | Complete    | 2026-02-21 | - |
-| 6. Evil & Doom Integration | v1.1 | 1/2 | In progress | - |
+| 6. Evil & Doom Integration | 2/2 | Complete   | 2026-02-23 | - |
 | 7. Cleanup & Documentation | v1.1 | 0/2 | Not started | - |

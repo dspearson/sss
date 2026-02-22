@@ -73,8 +73,8 @@ Requirements for the Emacs Integration Consolidation milestone. Merges `plugins/
 
 ### Doom Integration
 
-- [ ] **DOOM-01**: Leader bindings -- `SPC e` prefix with encrypt/decrypt/toggle/process commands via `map!`
-- [ ] **DOOM-02**: Localleader bindings -- `, e` prefix for buffer-local sss operations via `map!`
+- [x] **DOOM-01**: Leader bindings -- `SPC e` prefix with encrypt/decrypt/toggle/process commands via `map!`
+- [x] **DOOM-02**: Localleader bindings -- `, e` prefix for buffer-local sss operations via `map!`
 - [x] **DOOM-03**: Conditional loading -- Doom integration loads only when `(modulep! :editor evil)` is available
 
 ### UX Enhancements
@@ -161,8 +161,8 @@ Deferred to future milestone. Tracked but not in current roadmap.
 | EVIL-01 | Phase 6 | Complete |
 | EVIL-02 | Phase 6 | Complete |
 | EVIL-03 | Phase 6 | Complete |
-| DOOM-01 | Phase 6 | Pending |
-| DOOM-02 | Phase 6 | Pending |
+| DOOM-01 | Phase 6 | Complete |
+| DOOM-02 | Phase 6 | Complete |
 | DOOM-03 | Phase 6 | Complete |
 | CLEAN-01 | Phase 7 | Pending |
 | CLEAN-02 | Phase 7 | Pending |

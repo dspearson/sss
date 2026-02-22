@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-21)
 ## Current Position
 
 Phase: 6 (Evil & Doom Bindings)
-Plan: 1/? (06-01 complete)
-Status: Phase 6 in progress
-Last activity: 2026-02-23 -- 06-01 complete (evil operators, text objects, buffer-local bindings)
+Plan: 2/2 (06-02 complete -- Phase 6 complete)
+Status: Phase 6 complete, Phase 7 next
+Last activity: 2026-02-23 -- 06-02 complete (Doom leader SPC e, localleader , e bindings)
 
-Progress: [████░░░░░░] 40%
+Progress: [█████░░░░░] 50%
 
 ## Accumulated Context
 
@@ -56,6 +56,12 @@ Phase 6 Plan 01 decisions (2026-02-23):
 - sss--any-marker-regexp already defined in Phase 5 -- no new defconst needed in evil block
 - All evil code (operators + bindings + text objects) in single with-eval-after-load 'evil block
 
+Phase 6 Plan 02 decisions (2026-02-23):
+- Wrap map! calls in (eval '(...)) so byte-compiler does not parse Doom macro syntax at compile time (exit 0, no errors)
+- Use (declare-function map! "doom-core" t t) before when guard to suppress byte-compiler unknown-function warning
+- Use (when (fboundp 'map!) ...) top-level guard rather than (with-eval-after-load 'doom-core ...) -- simpler, same effect
+- No (require 'sss) or (require 'sss-ui) inside Doom block -- all target functions already defined earlier in sss-mode.el
+
 ### Pending Todos
 
 None.
@@ -69,5 +75,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 06-evil-doom-integration 06-01-PLAN.md
-Resume with: `/gsd:execute-phase 6` (Phase 6 -- next plan, Doom leader/localleader bindings if planned)
+Stopped at: Completed 06-evil-doom-integration 06-02-PLAN.md
+Resume with: `/gsd:execute-phase 7` (Phase 7 -- cleanup, remove plugins/emacs/)

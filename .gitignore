@@ -6,6 +6,7 @@ Cargo.lock
 
 # IDE files
 .vscode/
+!vscode/.vscode/
 .idea/
 *.swp
 *.swo

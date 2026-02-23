@@ -17,3 +17,21 @@
 
 ---
 
+
+## v1.1 Emacs Integration Consolidation (Shipped: 2026-02-23)
+
+**Phases completed:** 3 phases (5-7), 7 plans, 12 tasks
+
+**Key accomplishments:**
+- Consolidated two Emacs implementations into one: `emacs/sss-mode.el` grew from 354 to 746 lines with correct security patterns and full feature coverage
+- Region encrypt/decrypt (`C-c C-e`/`C-c C-d`), toggle-at-point (`C-c C-t`), and preview-at-point (`C-c C-v`) via `call-process-region` stdin piping
+- Evil operators `ge`/`gd`/`gt` (buffer-local to sss-mode) and text objects `is`/`as` for marker selection, inside `with-eval-after-load 'evil`
+- Doom Emacs `SPC e` leader (9 bindings) and `, e` localleader (5 bindings) with `(eval '(map! ...))` byte-compiler safety
+- Auth-source passphrase caching, overlay mode for inline visual previews, and transient dispatch menu (`C-c C-m`) with completing-read fallback
+- Removed legacy `plugins/emacs/` (7 files, 2,790 lines); updated README and docs/sss-mode-guide.md (11 to 17 sections)
+
+**Deliverables:** 716 insertions, 2,809 deletions across 10 files (net reduction: single package replaces 8 files)
+**Timeline:** 2026-02-21 to 2026-02-23 (3 phases, 7 plans, 33 commits)
+
+---
+

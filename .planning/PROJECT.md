@@ -1,16 +1,20 @@
-# SSS — Emacs Integration Consolidation
+# SSS — Secrets Management CLI + Emacs Integration
 
 ## What This Is
 
-SSS is a Rust CLI tool for encrypting secrets in-place using Shamir's Secret Sharing, with transparent filesystem access via FUSE/9P. v1.0 delivered documentation and a minimal Emacs mode. v1.1 consolidates two existing Emacs implementations into a single, feature-complete package: the correct save/open patterns from `emacs/sss-mode.el` merged with the rich feature set from `plugins/emacs/` (evil operators, Doom integration, region encrypt/decrypt, fancy overlays, auth-source integration).
-
-## Current Milestone: v1.1 Emacs Integration Consolidation
-
-**Goal:** Unify the two Emacs implementations into a single package that has both correct security patterns and full feature coverage.
+SSS is a Rust CLI tool for encrypting secrets in-place using Shamir's Secret Sharing, with transparent filesystem access via FUSE/9P. The Emacs integration (`emacs/sss-mode.el`, v1.1) provides a single-file package with transparent decrypt-on-open, re-seal-on-save, region operations, evil operators, Doom Emacs bindings, overlay previews, auth-source integration, and a transient command menu.
 
 ## Core Value
 
 Secrets management should be invisible — open a sealed file, edit it, save it, and it's sealed again.
+
+## Current State
+
+Shipped v1.1 on 2026-02-23. Two milestones complete:
+- **v1.0** (2026-02-21): CLI foundation, sss-mode.el core (354 lines), 6 documentation files, README overhaul
+- **v1.1** (2026-02-23): Consolidated two Emacs implementations into one package (746 lines), removed legacy `plugins/emacs/`
+
+Tech stack: Rust CLI, Emacs Lisp (single .el file), libsodium (XChaCha20-Poly1305, BLAKE2b, Argon2id).
 
 ## Requirements
 
@@ -26,28 +30,28 @@ Secrets management should be invisible — open a sealed file, edit it, save it,
 - ✓ Ignore patterns (.gitignore-style) for selective processing — existing
 - ✓ Multi-user key sharing and project collaboration — existing
 - ✓ Cross-platform builds (Linux, macOS, Windows) with RPM/DEB packaging — existing
-- ✓ Usage guide covering complete edit workflow — v1.0 (docs/usage-guide.md, 493 lines)
-- ✓ README overhaul with quickstart and installation — v1.0 (272 lines, correct crypto claims)
-- ✓ Architecture documentation for contributors — v1.0 (docs/architecture.md, 430 lines)
-- ✓ Emacs major mode (sss-mode) transparent editing — v1.0 (emacs/sss-mode.el, 354 lines)
+- ✓ Usage guide covering complete edit workflow — v1.0
+- ✓ README overhaul with quickstart and installation — v1.0
+- ✓ Architecture documentation for contributors — v1.0
+- ✓ Emacs major mode (sss-mode) transparent editing — v1.0
 - ✓ Emacs auto-decrypt on open via magic-mode-alist — v1.0
 - ✓ Emacs re-seal on save via write-contents-functions — v1.0
 - ✓ Emacs project commands (init, process, keygen, keys-list, render-buffer) — v1.0
 - ✓ Emacs package bundled in repo under emacs/ — v1.0
+- ✓ Region encrypt/decrypt in-place — v1.1
+- ✓ Toggle encryption at point — v1.1
+- ✓ Evil operators (ge/gd/gt) and text objects (is/as) — v1.1
+- ✓ Doom leader (SPC e) and localleader (, e) bindings — v1.1
+- ✓ Auth-source passphrase caching — v1.1
+- ✓ Overlay mode for inline visual previews — v1.1
+- ✓ Preview secret at point — v1.1
+- ✓ Transient dispatch menu with completing-read fallback — v1.1
+- ✓ Consolidated single-file Emacs package (plugins/emacs/ removed) — v1.1
+- ✓ Updated documentation (sss-mode-guide 17 sections, README v1.1) — v1.1
 
 ### Active
 
-- [ ] Merge plugins/emacs/ feature set into emacs/sss-mode.el with correct save/open patterns
-- [ ] Evil operator integration (encrypt/decrypt/toggle as evil motions)
-- [ ] Doom Emacs integration (leader bindings, localleader, which-key descriptions)
-- [ ] Region-based encrypt/decrypt (not just whole-file operations)
-- [ ] Toggle encryption at point
-- [ ] Fancy overlay mode (visual inline decrypt previews)
-- [ ] Auth-source integration for password caching
-- [ ] Preview secret at point without full file decrypt
-- [ ] UI components (transient menu, progress reporting)
-- [ ] Remove plugins/emacs/ directory after consolidation
-- [ ] Update Doom config and documentation to point at unified package
+(None — next milestone not yet defined)
 
 ### Out of Scope
 
@@ -56,22 +60,7 @@ Secrets management should be invisible — open a sealed file, edit it, save it,
 - Mount/unmount from Emacs — FUSE management adds complexity, not core to edit workflow
 - Emacs async/background operations — keep it synchronous; secrets files are small
 - GUI/web interface — CLI and Emacs only
-- Selective seal/unseal of individual marker regions — v2 enhancement
-- MELPA packaging — revisit after consolidation is stable
-
-## Context
-
-Two Emacs implementations exist that must be consolidated:
-
-- **emacs/sss-mode.el** (354 lines, v1.0): Correct patterns — `write-contents-functions` save flow, `magic-mode-alist` detection, auto-save/backup disable, `(error ...)` on seal failure. But limited to whole-file operations only, no evil integration, no Doom bindings.
-- **plugins/emacs/** (7 files, ~97k, pre-v1.0): Feature-rich — evil operators, Doom leader/localleader bindings, region encrypt/decrypt, toggle-at-point, fancy overlay mode, auth-source password caching, preview-secret-at-point, transient UI menus, project detection. But uses different save/open patterns that may have the security issues research identified (before-save-hook, no auto-save disable).
-
-The consolidation strategy: take `emacs/sss-mode.el` as the foundation (correct security patterns), port features from `plugins/emacs/` into it, then remove `plugins/emacs/`.
-
-Additionally shipped in v1.0:
-- **docs/** (6 files, 2,086 lines): Usage guide, security model, marker format, architecture, config ref, sss-mode guide.
-- **README.md** (272 lines): Overhauled with correct crypto claims.
-- Known issue: `sss keygen` deprecated in favour of `sss keys generate`; sss-mode still calls the deprecated form.
+- Org-crypt integration — marker system conflicts; research project
 
 ## Constraints
 
@@ -87,20 +76,19 @@ Additionally shipped in v1.0:
 | Keystore auto-auth for Emacs | Seamless editing UX — no prompts breaking flow | ✓ Good |
 | Magic bytes for file detection | Reuse existing marker system (magic-mode-alist with named predicate) | ✓ Good |
 | Bundle in-repo (emacs/) | Simplest distribution, ships with sss itself | ✓ Good |
-| Parallel docs + Emacs work | Independent tracks, no blocking dependencies | ✓ Good |
-| No FUSE management from Emacs | Reduces scope, edit workflow doesn't need mount/unmount | ✓ Good |
 | write-contents-functions for save | Correct Emacs pattern — before-save-hook ruled out (EPA bug#63293) | ✓ Good |
-| magic-mode-alist named predicate | Multibyte-safe ⊠{ detection vs bare regexp | ✓ Good |
-| sss open (not render) for buffer | Preserves ⊕{} markers per EMAC-09 requirement | ✓ Good |
 | (error ...) on seal failure | Prevents nil return falling through to plaintext disk write | ✓ Good |
-| sss-process maps to seal --project | No `sss process` subcommand exists in CLI | ✓ Good |
 | C-c C-x key pattern | Package-lint compliance (C-c + letter reserved for users) | ✓ Good |
-| Markdown docs not mdBook | Simpler for v1, mdBook deferred to v2 | ✓ Good |
 | XChaCha20 + Argon2id in docs | Corrected from inaccurate age/scrypt claims in old README | ✓ Good |
-
-| Consolidate into single package | Two implementations is tech debt; one correct + feature-rich package | — Pending |
-| emacs/sss-mode.el as foundation | Has the correct security patterns (write-contents-functions, error-on-fail) | — Pending |
-| Port features from plugins/emacs/ | Don't rewrite what exists — adapt and integrate | — Pending |
+| Consolidate into single package | Two implementations was tech debt; one correct + feature-rich package | ✓ Good |
+| emacs/sss-mode.el as foundation | Has the correct security patterns (write-contents-functions, error-on-fail) | ✓ Good |
+| Port features from plugins/emacs/ | Don't rewrite what exists — adapt and integrate | ✓ Good |
+| Buffer-local evil bindings | evil-define-key 'normal sss-mode-map preserves ge/gd/gt in non-sss buffers | ✓ Good |
+| with-eval-after-load 'evil | Works for all evil users, not just Doom; avoids modulep! dependency | ✓ Good |
+| (eval '(map! ...)) for Doom | Prevents byte-compiler from expanding Doom macro syntax at compile time | ✓ Good |
+| Auth-source opt-in with guard | (require 'auth-source nil t) — zero hard dependencies, graceful fallback | ✓ Good |
+| Transient with completing-read fallback | Graceful degradation on Emacs 27.1 without transient package | ✓ Good |
+| re-search-forward marker walk | Safe marker-to-marker jumping in evil toggle — avoids user-error on inter-marker text | ✓ Good |
 
 ---
-*Last updated: 2026-02-21 after v1.1 milestone start*
+*Last updated: 2026-02-23 after v1.1 milestone*

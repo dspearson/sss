@@ -53,6 +53,7 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use globset::GlobSet;
 use rs9p::{
     srv::{Fid, Filesystem},
     *,
@@ -70,7 +71,8 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 
-use crate::filesystem_common::has_encrypted_markers;
+use crate::filesystem_common::{has_encrypted_markers, has_balanced_markers};
+use crate::project::ProjectConfig;
 use crate::Processor;
 
 /// Convert anyhow errors to rs9p IO errors
@@ -133,11 +135,21 @@ pub struct SssNinepFS {
     /// Shared cache for confirmed sealed mode content (path -> sealed content)
     /// Used for two-factor sealed mode protocol
     sealed_cache: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<PathBuf, Vec<u8>>>>,
+    /// Processors for nested projects (relative path from root → Processor)
+    nested_processors: std::sync::Arc<std::collections::HashMap<PathBuf, tokio::sync::RwLock<Processor>>>,
+    /// Relative paths of nested projects where we have no matching keys
+    no_key_roots: std::sync::Arc<std::collections::HashSet<PathBuf>>,
+    /// Ignore patterns from root project config (positive matches → skip processing)
+    ignore_patterns: Option<GlobSet>,
+    /// Negation patterns from root project config (overrides ignore)
+    negation_patterns: Option<GlobSet>,
+    /// Per-nested-project ignore patterns (rel_path → (positive, negation))
+    nested_ignore: std::sync::Arc<std::collections::HashMap<PathBuf, (GlobSet, GlobSet)>>,
 }
 
 impl SssNinepFS {
     /// Create a new 9P filesystem for an sss project
-    pub fn new(root: PathBuf, processor: Processor) -> anyhow::Result<Self> {
+    pub fn new(root: PathBuf, processor: Processor, config: Option<&ProjectConfig>) -> anyhow::Result<Self> {
         if !root.exists() {
             return Err(anyhow!("Root path does not exist: {:?}", root));
         }
@@ -145,11 +157,158 @@ impl SssNinepFS {
             return Err(anyhow!("Root path is not a directory: {:?}", root));
         }
 
+        // Parse root project ignore patterns from config
+        let (ignore_patterns, negation_patterns) = if let Some(cfg) = config {
+            let (pos, neg) = cfg.parse_ignore_patterns()
+                .map_err(|e| anyhow!("Failed to parse ignore patterns: {}", e))?;
+            (
+                if pos.is_empty() { None } else { Some(pos) },
+                if neg.is_empty() { None } else { Some(neg) },
+            )
+        } else {
+            (None, None)
+        };
+
+        // Scan for nested projects
+        let mut nested_processors = std::collections::HashMap::new();
+        let mut no_key_roots = std::collections::HashSet::new();
+        let mut nested_ignore = std::collections::HashMap::new();
+
+        for entry in walkdir::WalkDir::new(&root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                if name.starts_with('.') { return false; }
+                if e.file_type().is_dir() {
+                    let skip = ["target", "node_modules", "dist", "build"];
+                    return !skip.contains(&name.as_ref());
+                }
+                true
+            })
+        {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_dir() { continue; }
+            if entry.path() == root { continue; }
+
+            let config_path = entry.path().join(".sss.toml");
+            if !config_path.exists() { continue; }
+
+            let rel_path = entry.path().strip_prefix(&root)
+                .unwrap_or(entry.path())
+                .to_path_buf();
+
+            match crate::commands::utils::try_create_processor_for_config(&config_path) {
+                Ok(Some((cfg, proc))) => {
+                    // Parse ignore patterns for this nested project
+                    if let Ok((pos, neg)) = cfg.parse_ignore_patterns() {
+                        if !pos.is_empty() {
+                            nested_ignore.insert(rel_path.clone(), (pos, neg));
+                        }
+                    }
+                    nested_processors.insert(rel_path, tokio::sync::RwLock::new(proc));
+                }
+                Ok(None) => {
+                    eprintln!("Note: 9P - no keys for nested project at {}", rel_path.display());
+                    no_key_roots.insert(rel_path);
+                }
+                Err(e) => {
+                    eprintln!("Warning: 9P - cannot load nested project at {}: {}", rel_path.display(), e);
+                    no_key_roots.insert(rel_path);
+                }
+            }
+        }
+
         Ok(Self {
             root,
             processor: std::sync::Arc::new(tokio::sync::RwLock::new(processor)),
             sealed_cache: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            nested_processors: std::sync::Arc::new(nested_processors),
+            no_key_roots: std::sync::Arc::new(no_key_roots),
+            ignore_patterns,
+            negation_patterns,
+            nested_ignore: std::sync::Arc::new(nested_ignore),
         })
+    }
+
+    /// Get the nested-project processor for a path, if any.
+    /// Returns `None` if the path is in a no-key root (passthrough).
+    /// Returns `Some(RwLock<Processor>)` for a nested project, or the root processor otherwise.
+    fn get_processor_for_path(&self, path: &Path) -> Option<&tokio::sync::RwLock<Processor>> {
+        let rel_path = path.strip_prefix(&self.root).unwrap_or(path);
+        let mut current = Some(rel_path);
+        while let Some(p) = current {
+            if self.no_key_roots.contains(p) {
+                return None;
+            }
+            if let Some(proc) = self.nested_processors.get(p) {
+                return Some(proc);
+            }
+            current = p.parent();
+        }
+        Some(self.processor.as_ref())
+    }
+
+    /// Check if a file should skip SSS processing due to ignore patterns.
+    /// Ignored files are still visible but returned as raw bytes (no decrypt/render).
+    fn should_skip_processing(&self, path: &Path) -> bool {
+        let rel_path = path.strip_prefix(&self.root).unwrap_or(path);
+
+        // Walk up from rel_path to find the nearest nested project with ignore patterns
+        let mut current = Some(rel_path);
+        while let Some(p) = current {
+            if let Some((positive, negative)) = self.nested_ignore.get(p) {
+                // Found nested project — check path relative to this project root
+                let sub_path = rel_path.strip_prefix(p).unwrap_or(rel_path);
+                return Self::matches_ignore_patterns(sub_path, positive, negative);
+            }
+            current = p.parent();
+        }
+
+        // No nested project found, use root patterns
+        if let Some(ref positive) = self.ignore_patterns {
+            let empty = GlobSet::empty();
+            let neg = self.negation_patterns.as_ref().unwrap_or(&empty);
+            Self::matches_ignore_patterns(rel_path, positive, neg)
+        } else {
+            false
+        }
+    }
+
+    /// Check if a path matches positive ignore patterns without being overridden by negation.
+    fn matches_ignore_patterns(path: &Path, positive: &GlobSet, negative: &GlobSet) -> bool {
+        if positive.is_empty() {
+            return false;
+        }
+
+        // Check both full path and filename (so *.log matches subdir/debug.log)
+        let matches_ignore = positive.is_match(path)
+            || path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| positive.is_match(name))
+                .unwrap_or(false);
+
+        if !matches_ignore {
+            return false;
+        }
+
+        // Check negation override
+        if !negative.is_empty() {
+            let matches_negation = negative.is_match(path)
+                || path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|name| negative.is_match(name))
+                    .unwrap_or(false);
+
+            if matches_negation {
+                return false; // Negation overrides ignore
+            }
+        }
+
+        true
     }
 
     /// Parse filename to extract real name and access mode
@@ -187,15 +346,27 @@ impl SssNinepFS {
     async fn read_and_render(&self, path: &Path) -> anyhow::Result<Vec<u8>> {
         let bytes = fs::read(path).await?;
 
+        // Skip processing for files matching ignore patterns — return raw bytes
+        if self.should_skip_processing(path) {
+            return Ok(bytes);
+        }
+
         // Try to convert to string
         let content = match String::from_utf8(bytes.clone()) {
             Ok(c) => c,
             Err(_) => return Ok(bytes), // Not text, return as-is
         };
 
-        // Only process if file has encrypted markers
-        if has_encrypted_markers(&content) {
-            let processor = self.processor.read().await;
+        // Check for nested-project processor (None → no keys, passthrough)
+        let proc_lock = match self.get_processor_for_path(path) {
+            Some(p) => p,
+            None => return Ok(content.into_bytes()), // no keys — return as-is
+        };
+
+        // Only process if file has balanced encrypted markers (avoids false positives
+        // from files that mention marker chars in strings/grep patterns)
+        if has_balanced_markers(&content) && has_encrypted_markers(&content) {
+            let processor = proc_lock.read().await;
             // Use decrypt_to_raw_with_path for secrets interpolation
             let rendered = processor.decrypt_to_raw_with_path(&content, path)?;
             Ok(rendered.into_bytes())
@@ -208,13 +379,24 @@ impl SssNinepFS {
     async fn read_and_open(&self, path: &Path) -> anyhow::Result<Vec<u8>> {
         let bytes = fs::read(path).await?;
 
+        // Skip processing for files matching ignore patterns — return raw bytes
+        if self.should_skip_processing(path) {
+            return Ok(bytes);
+        }
+
         let content = match String::from_utf8(bytes.clone()) {
             Ok(c) => c,
             Err(_) => return Ok(bytes),
         };
 
-        if has_encrypted_markers(&content) {
-            let processor = self.processor.read().await;
+        // Check for nested-project processor (None → no keys, passthrough)
+        let proc_lock = match self.get_processor_for_path(path) {
+            Some(p) => p,
+            None => return Ok(content.into_bytes()), // no keys — return as-is
+        };
+
+        if has_balanced_markers(&content) && has_encrypted_markers(&content) {
+            let processor = proc_lock.read().await;
             let opened = processor.decrypt_content(&content)?;
             Ok(opened.into_bytes())
         } else {
@@ -256,8 +438,12 @@ impl SssNinepFS {
         let opened_str = String::from_utf8(opened_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
+        // Select the correct processor for this path
+        let proc_lock = self.get_processor_for_path(path)
+            .unwrap_or(self.processor.as_ref());
+
         // Seal the content (⊕{} → ⊠{})
-        let processor = self.processor.read().await;
+        let processor = proc_lock.read().await;
         let sealed_content = processor.encrypt_content(&opened_str)?;
 
         // Write atomically via temp file with secure permissions
@@ -272,6 +458,17 @@ impl SssNinepFS {
 
     /// Write rendered content with smart reconstruction
     async fn write_and_seal(&self, path: &Path, rendered_content: &[u8]) -> anyhow::Result<()> {
+        // If no keys for this nested project, write raw
+        let proc_lock = match self.get_processor_for_path(path) {
+            Some(p) => p,
+            None => return self.write_raw(path, rendered_content).await,
+        };
+
+        // Skip processing for files matching ignore patterns — write raw
+        if self.should_skip_processing(path) {
+            return self.write_raw(path, rendered_content).await;
+        }
+
         let rendered_str = String::from_utf8(rendered_content.to_vec())
             .map_err(|_| anyhow!("Content is not valid UTF-8"))?;
 
@@ -284,13 +481,13 @@ impl SssNinepFS {
             }
         };
 
-        // If no markers, just write rendered
-        if !has_encrypted_markers(&sealed_current) {
+        // If no balanced markers, just write rendered
+        if !has_balanced_markers(&sealed_current) || !has_encrypted_markers(&sealed_current) {
             return self.write_raw(path, rendered_content).await;
         }
 
         // Smart reconstruction:
-        let processor = self.processor.read().await;
+        let processor = proc_lock.read().await;
         // 1. Open current sealed version to get markers
         let opened_current = processor.decrypt_content(&sealed_current)?;
 
@@ -514,7 +711,7 @@ impl Filesystem for SssNinepFS {
 
         // Process based on mode (if it's text content)
         let data = if let Ok(content_str) = String::from_utf8(buf.clone()) {
-            if has_encrypted_markers(&content_str) {
+            if has_balanced_markers(&content_str) && has_encrypted_markers(&content_str) {
                 match mode {
                     FileMode::Sealed => buf, // Return as-is
                     FileMode::Opened => {
@@ -624,7 +821,7 @@ impl Filesystem for SssNinepFS {
                     self.write_raw(&path, content).await
                 } else {
                     let content_str = String::from_utf8_lossy(content);
-                    let is_sealed = has_encrypted_markers(&content_str);
+                    let is_sealed = has_balanced_markers(&content_str) && has_encrypted_markers(&content_str);
 
                     // Check if sealed mode was used
                     if sealed_mode || (mode == FileMode::Sealed && is_sealed) {

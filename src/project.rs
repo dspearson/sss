@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -284,6 +285,187 @@ impl ProjectConfig {
         Ok(keys)
     }
 
+    /// Get ignore patterns as a vector of strings
+    ///
+    /// Returns the individual patterns from the ignore field as a vector,
+    /// split by whitespace or commas. Useful for display and editing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use sss::project::ProjectConfig;
+    /// let mut config = ProjectConfig::default();
+    /// config.ignore = Some("*.log build/ !important.log".to_string());
+    /// let patterns = config.get_ignore_pattern_strings();
+    /// assert_eq!(patterns, vec!["*.log", "build/", "!important.log"]);
+    /// ```
+    pub fn get_ignore_pattern_strings(&self) -> Vec<String> {
+        match &self.ignore {
+            Some(s) => s
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    /// Set ignore patterns from a vector of pattern strings
+    ///
+    /// Joins the patterns with spaces into a single string for storage.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use sss::project::ProjectConfig;
+    /// let mut config = ProjectConfig::default();
+    /// config.set_ignore_patterns(vec!["*.log".to_string(), "build/".to_string()]);
+    /// assert_eq!(config.ignore, Some("*.log build/".to_string()));
+    /// ```
+    pub fn set_ignore_patterns(&mut self, patterns: Vec<String>) {
+        if patterns.is_empty() {
+            self.ignore = None;
+        } else {
+            self.ignore = Some(patterns.join(" "));
+        }
+    }
+
+    /// Parse ignore patterns from the config and build a GlobSet
+    ///
+    /// Supports gitignore-style patterns:
+    /// - Simple patterns: `*.log`, `build/`, `temp*.txt`
+    /// - Negation with `!`: `*.db !important.db` (matches all .db files except important.db)
+    /// - Space or comma separated: `*.log build/ *.tmp`
+    ///
+    /// # Returns
+    ///
+    /// Returns (GlobSet, GlobSet) where:
+    /// - First GlobSet contains positive patterns to match files to ignore
+    /// - Second GlobSet contains negation patterns that override ignores (files matching these should NOT be ignored)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use sss::project::ProjectConfig;
+    /// let mut config = ProjectConfig::default();
+    /// config.ignore = Some("*.log build/ !important.log".to_string());
+    /// let (ignore_set, negations) = config.parse_ignore_patterns().unwrap();
+    /// ```
+    pub fn parse_ignore_patterns(&self) -> Result<(GlobSet, GlobSet)> {
+        let ignore_str = match &self.ignore {
+            Some(s) => s,
+            None => return Ok((GlobSet::empty(), GlobSet::empty())),
+        };
+
+        let mut positive_builder = GlobSetBuilder::new();
+        let mut negative_builder = GlobSetBuilder::new();
+
+        // Split by whitespace or commas
+        let patterns: Vec<&str> = ignore_str
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        for pattern in patterns {
+            if let Some(neg_pattern) = pattern.strip_prefix('!') {
+                // Negation pattern - files matching this should NOT be ignored
+                if !neg_pattern.is_empty() {
+                    // Transform directory patterns: "dir/" -> "dir/**"
+                    let glob_pattern = if neg_pattern.ends_with('/') {
+                        format!("{}**", neg_pattern)
+                    } else {
+                        neg_pattern.to_string()
+                    };
+
+                    let glob = Glob::new(&glob_pattern).map_err(|e| {
+                        anyhow!("Invalid negation ignore pattern '{}': {}", neg_pattern, e)
+                    })?;
+                    negative_builder.add(glob);
+                }
+            } else {
+                // Positive pattern - files matching this should be ignored
+                // Transform directory patterns: "dir/" -> "dir/**"
+                let glob_pattern = if pattern.ends_with('/') {
+                    format!("{}**", pattern)
+                } else {
+                    pattern.to_string()
+                };
+
+                let glob =
+                    Glob::new(&glob_pattern).map_err(|e| anyhow!("Invalid ignore pattern '{}': {}", pattern, e))?;
+                positive_builder.add(glob);
+            }
+        }
+
+        let positive_set = positive_builder
+            .build()
+            .map_err(|e| anyhow!("Failed to build ignore GlobSet: {}", e))?;
+        let negative_set = negative_builder
+            .build()
+            .map_err(|e| anyhow!("Failed to build negation GlobSet: {}", e))?;
+
+        Ok((positive_set, negative_set))
+    }
+
+    /// Check if a file path should be ignored based on the ignore patterns
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The file path to check (can be relative or absolute)
+    ///
+    /// # Returns
+    ///
+    /// Returns `true` if the file should be ignored, `false` otherwise
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use sss::project::ProjectConfig;
+    /// # use std::path::Path;
+    /// let mut config = ProjectConfig::default();
+    /// config.ignore = Some("*.log !important.log".to_string());
+    ///
+    /// assert!(config.should_ignore(Path::new("debug.log")).unwrap());
+    /// assert!(!config.should_ignore(Path::new("important.log")).unwrap());
+    /// assert!(!config.should_ignore(Path::new("data.txt")).unwrap());
+    /// ```
+    pub fn should_ignore(&self, path: &Path) -> Result<bool> {
+        let (positive_set, negative_set) = self.parse_ignore_patterns()?;
+
+        // If no patterns, don't ignore
+        if positive_set.is_empty() {
+            return Ok(false);
+        }
+
+        // Check if path matches any ignore pattern (try both full path and filename)
+        let matches_ignore = positive_set.is_match(path)
+            || path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|name| positive_set.is_match(name))
+                .unwrap_or(false);
+
+        // If doesn't match ignore patterns, don't ignore
+        if !matches_ignore {
+            return Ok(false);
+        }
+
+        // Check if path matches any negation pattern (should NOT be ignored)
+        if !negative_set.is_empty() {
+            let matches_negation = negative_set.is_match(path)
+                || path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|name| negative_set.is_match(name))
+                    .unwrap_or(false);
+
+            if matches_negation {
+                return Ok(false); // Negation overrides ignore
+            }
+        }
+
+        // Matches ignore and doesn't match negation
+        Ok(true)
+    }
+
     /// Validate the project configuration
     pub fn validate(&self) -> Result<()> {
         // Validate all user configurations
@@ -351,26 +533,6 @@ impl ProjectConfig {
     /// Get the ignore patterns as a single string
     pub fn get_ignore_patterns(&self) -> Option<&str> {
         self.ignore.as_deref()
-    }
-
-    /// Parse ignore patterns into a vector of individual patterns
-    /// Splits on whitespace and commas, filters out empty strings
-    pub fn parse_ignore_patterns(&self) -> Vec<String> {
-        self.ignore
-            .as_ref()
-            .map(|patterns| {
-                patterns
-                    .split(|c: char| c.is_whitespace() || c == ',')
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Set the ignore patterns (gitignore-style, space or comma separated)
-    pub fn set_ignore_patterns(&mut self, patterns: String) {
-        self.ignore = Some(patterns);
     }
 
     /// Clear the ignore patterns

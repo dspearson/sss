@@ -8,6 +8,8 @@ use clap::ArgMatches;
 use std::env;
 use std::path::PathBuf;
 
+use std::path::Path;
+
 use crate::{
     config, config_manager::ConfigManager,
     constants::{
@@ -196,6 +198,45 @@ pub fn create_processor_from_project_config() -> Result<(ProjectConfig, Processo
         secrets_filename,
     )?;
     Ok((config, processor, project_root))
+}
+
+/// Try to load a project config at the given path and create a Processor.
+///
+/// Returns `Ok(Some((config, processor)))` if the current user's keys match,
+/// `Ok(None)` if no matching keys are available (the user is not authorised),
+/// or `Err` only for genuine I/O or malformed-config errors.
+///
+/// Unlike `create_processor_from_project_config()`, this does NOT search
+/// upward for the project root — it loads the config at `config_path` directly.
+pub fn try_create_processor_for_config(
+    config_path: &Path,
+) -> Result<Option<(ProjectConfig, Processor)>> {
+    match config::load_project_config_for_user(config_path) {
+        Ok((cfg, repository_key)) => {
+            let project_root = config_path
+                .parent()
+                .ok_or_else(|| anyhow!("Config path has no parent directory"))?
+                .to_path_buf();
+            let secrets_filename = cfg.get_secrets_filename().to_string();
+            let processor = Processor::new_with_context_and_secrets_filename(
+                repository_key,
+                project_root,
+                cfg.created.clone(),
+                secrets_filename,
+            )?;
+            Ok(Some((cfg, processor)))
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            // "None of your keypairs are authorized" is the expected
+            // non-error case — we simply have no access to this project.
+            if msg.contains("None of your keypairs are authorized") {
+                Ok(None)
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

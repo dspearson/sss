@@ -22,19 +22,133 @@ struct MarkerMatch {
     start: usize,
     /// End position of the entire marker (including closing brace)
     end: usize,
-    /// The captured content between braces
+    /// The captured content between the delimiter pair
     content: String,
 }
 
-/// Find markers with balanced brace counting, returning matched prefix alongside each match.
+/// Supported open/close delimiter pairs for markers, in preference order.
 ///
-/// Supports nested braces like o+{a:{}} or ⊕{{"key":"value"}}.
-/// Returns `(matched_prefix, MarkerMatch)` tuples in order of appearance.
+/// `{}` is the historical default and stays first so unchanged files remain
+/// byte-identical. `[]` is a lightweight ASCII fallback for values containing
+/// unbalanced braces. The remaining entries are drawn from distinct Unicode
+/// blocks so the likelihood that a single value collides with every candidate
+/// is vanishing — no value we encounter in practice will exhaust the table.
+const DELIMITER_PAIRS: &[(char, char)] = &[
+    ('{', '}'),
+    ('[', ']'),
+    ('\u{27E6}', '\u{27E7}'),   // ⟦ ⟧  mathematical white square brackets
+    ('\u{27E8}', '\u{27E9}'),   // ⟨ ⟩  mathematical angle brackets
+    ('\u{27EA}', '\u{27EB}'),   // ⟪ ⟫  mathematical double angle brackets
+    ('\u{27EC}', '\u{27ED}'),   // ⟬ ⟭  mathematical white tortoise-shell brackets
+    ('\u{27EE}', '\u{27EF}'),   // ⟮ ⟯  mathematical flattened parentheses
+    ('\u{2983}', '\u{2984}'),   // ⦃ ⦄  white curly brackets
+    ('\u{2985}', '\u{2986}'),   // ⦅ ⦆  white parentheses
+    ('\u{2987}', '\u{2988}'),   // ⦇ ⦈  Z notation image brackets
+    ('\u{2989}', '\u{298A}'),   // ⦉ ⦊  Z notation binding brackets
+    ('\u{298B}', '\u{298C}'),   // ⦋ ⦌  square brackets with underbar
+    ('\u{300C}', '\u{300D}'),   // 「 」 CJK corner brackets
+    ('\u{300E}', '\u{300F}'),   // 『 』 CJK white corner brackets
+];
+
+/// Look up the closing delimiter for an opening character from the supported set.
+fn close_for_open(open: char) -> Option<char> {
+    DELIMITER_PAIRS
+        .iter()
+        .find(|(o, _)| *o == open)
+        .map(|(_, c)| *c)
+}
+
+/// Pick a delimiter pair whose open and close chars do not appear in `value`.
 ///
-/// # Optimisation notes
-/// - Pre-computes prefix byte-lengths once before the scan loop.
-/// - Uses a byte fast-path for the common ASCII brace-counting case to avoid
-///   `char_indices()` overhead when the inner content contains no multi-byte chars.
+/// Scans `value` once per candidate and returns the first non-colliding pair.
+/// `{}` is tried first — if `value` balances its braces and contains neither an
+/// opening nor an impossible sequence we emit the historical form. Otherwise we
+/// fall back to `[]` when possible, and then through the exotic Unicode ladder.
+///
+/// Returns `None` if every candidate collides — mathematically possible, but not
+/// reachable by any input we expect to see.
+fn pick_delimiter_for_value(value: &str) -> Option<(char, char)> {
+    // Special case the default pair: it's fine as long as braces in the value
+    // balance to zero and never go negative (no stray close before open).
+    if braces_balance(value) {
+        return Some(('{', '}'));
+    }
+    DELIMITER_PAIRS
+        .iter()
+        .skip(1)
+        .copied()
+        .find(|(o, c)| !value.contains(*o) && !value.contains(*c))
+}
+
+/// Return true if curly braces in `value` balance — every `}` is preceded by an
+/// open, and the final depth is zero. This is the exact condition under which
+/// the default `{}` delimiter can round-trip without ambiguity.
+fn braces_balance(value: &str) -> bool {
+    let mut depth: i32 = 0;
+    for ch in value.chars() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// Unescape `\{`, `\}`, and `\\` in a captured default-pair content string.
+///
+/// Applied only after scanning with the default `{}` delimiter pair, so the
+/// escape convention is local to that form. Other characters preceded by `\`
+/// are preserved literally — we don't touch `\n`, `\t`, etc.
+fn unescape_default_delimiter(raw: &str) -> String {
+    if !raw.contains('\\') {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.clone().next() {
+                Some('{') | Some('}') | Some('\\') => {
+                    // Escaped brace or backslash — emit the literal.
+                    out.push(chars.next().unwrap());
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Emit a marker string with the best available delimiter for `value`.
+///
+/// Panics never happen in practice: the exotic ladder is long enough that at
+/// least one pair is always clean. If the unthinkable occurs we fall back to
+/// the raw braces form — callers upstream will surface any parse mismatch.
+fn format_marker(prefix: &str, value: &str) -> String {
+    let (open, close) = pick_delimiter_for_value(value).unwrap_or(('{', '}'));
+    let mut out = String::with_capacity(prefix.len() + value.len() + 4);
+    out.push_str(prefix);
+    out.push(open);
+    out.push_str(value);
+    out.push(close);
+    out
+}
+
+/// Find markers with balanced delimiter counting, returning matched prefix alongside each match.
+///
+/// For each recognised prefix, peeks the next char to determine which
+/// delimiter pair is in use (from `DELIMITER_PAIRS`) and scans with balanced
+/// counting on that pair. `o+{a:{}}` and `⊕⟦foo}bar⟧` are both parsed
+/// correctly. Returns `(matched_prefix, MarkerMatch)` tuples in order of
+/// appearance.
 fn find_balanced_markers_with_prefix<'a>(
     content: &str,
     prefixes: &[&'a str],
@@ -45,97 +159,85 @@ fn find_balanced_markers_with_prefix<'a>(
 
     while byte_pos < bytes.len() {
         // Try to match each prefix at current position
-        let mut matched_prefix: Option<(&str, usize)> = None; // (prefix, prefix_len)
+        let mut matched: Option<(&str, usize, char, char)> = None;
 
         for &prefix in prefixes {
-            // str::len() is O(1) — stored as metadata, no scanning needed
             let plen = prefix.len();
-            let remaining_bytes = &bytes[byte_pos..];
-            if remaining_bytes.len() >= plen
-                && &remaining_bytes[..plen] == prefix.as_bytes()
-                && remaining_bytes.get(plen) == Some(&b'{')
-            {
-                matched_prefix = Some((prefix, plen));
+            let remaining = &bytes[byte_pos..];
+            if remaining.len() <= plen || &remaining[..plen] != prefix.as_bytes() {
+                continue;
+            }
+            // Peek the char after the prefix to see if it's a supported opener.
+            let after_prefix = &content[byte_pos + plen..];
+            let Some(open) = after_prefix.chars().next() else { continue };
+            if let Some(close) = close_for_open(open) {
+                matched = Some((prefix, plen + open.len_utf8(), open, close));
                 break;
             }
         }
 
-        if let Some((prefix, plen)) = matched_prefix {
+        if let Some((prefix, header_len, open, close)) = matched {
             let marker_start = byte_pos;
-            byte_pos += plen + 1; // Skip prefix + '{'
-            let content_start = byte_pos;
+            let content_start = byte_pos + header_len;
             let mut depth = 1u32;
             let mut found = false;
 
-            // Fast ASCII brace-counting path: scan bytes directly when slice is ASCII.
-            // Falls back to char_indices for multi-byte content automatically.
-            let inner = &bytes[byte_pos..];
+            // Escapes (\{, \}, \\) are recognised only for the default {}
+            // pair — that's the form hand-typers use. Other pairs sidestep
+            // the problem by using a delimiter that isn't in the value.
+            let escapes_enabled = open == '{' && close == '}';
 
-            if inner.is_ascii() {
-                // Pure ASCII: iterate bytes directly (no UTF-8 decode overhead)
-                for (offset, &b) in inner.iter().enumerate() {
-                    match b {
-                        b'{' => depth += 1,
-                        b'}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                let content_end = byte_pos + offset;
-                                let marker_end = content_end + 1;
-                                // SAFETY: content_start..content_end are valid byte offsets
-                                // within the ASCII slice, so they are valid UTF-8 boundaries.
-                                let captured = content[content_start..content_end]
-                                    .to_string();
-                                matches.push((prefix, MarkerMatch {
-                                    start: marker_start,
-                                    end: marker_end,
-                                    content: captured,
-                                }));
-                                byte_pos = marker_end;
-                                found = true;
-                                break;
-                            }
+            let inner = &content[content_start..];
+            let mut iter = inner.char_indices();
+            while let Some((char_offset, ch)) = iter.next() {
+                // Skip over \{, \}, or \\ so escaped delimiters don't move depth.
+                if escapes_enabled && ch == '\\' {
+                    // Peek the next char — if it's one of the escape targets,
+                    // consume it and continue without touching depth.
+                    if let Some((_, next)) = iter.clone().next() {
+                        if next == '{' || next == '}' || next == '\\' {
+                            iter.next();
+                            continue;
                         }
-                        _ => {}
                     }
+                    continue;
                 }
-            } else {
-                // UTF-8 fallback: use char_indices for correctness with multi-byte chars
-                for (char_offset, ch) in content[byte_pos..].char_indices() {
-                    match ch {
-                        '{' => depth += 1,
-                        '}' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                let content_end = byte_pos + char_offset;
-                                let marker_end = content_end + 1;
-                                let captured = content[content_start..content_end]
-                                    .to_string();
-                                matches.push((prefix, MarkerMatch {
-                                    start: marker_start,
-                                    end: marker_end,
-                                    content: captured,
-                                }));
-                                byte_pos = marker_end;
-                                found = true;
-                                break;
-                            }
-                        }
-                        _ => {}
+                if ch == open {
+                    depth += 1;
+                } else if ch == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        let content_end = content_start + char_offset;
+                        let marker_end = content_end + ch.len_utf8();
+                        let raw = &content[content_start..content_end];
+                        let captured = if escapes_enabled {
+                            unescape_default_delimiter(raw)
+                        } else {
+                            raw.to_string()
+                        };
+                        matches.push((prefix, MarkerMatch {
+                            start: marker_start,
+                            end: marker_end,
+                            content: captured,
+                        }));
+                        byte_pos = marker_end;
+                        found = true;
+                        break;
                     }
                 }
             }
 
-            // Unbalanced braces: retreat to just after the opening '{'
+            // Unbalanced delimiter: retreat to just after the opening char so
+            // we don't lose ground and so the outer loop can advance by one.
             if !found {
                 byte_pos = content_start;
             }
         } else {
-            // Advance by one UTF-8 character (fast single-byte path for ASCII)
+            // Advance by one UTF-8 character
             let b = bytes[byte_pos];
             if b < 0x80 {
                 byte_pos += 1;
             } else {
-                // Multi-byte character: find boundary via char
                 let remaining = &content[byte_pos..];
                 if let Some(ch) = remaining.chars().next() {
                     byte_pos += ch.len_utf8();
@@ -679,10 +781,10 @@ impl Processor {
             if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
                     Ok(decrypted) => {
-                        // Push plaintext marker directly — avoids fmt::Write format parsing
-                        result.push_str("⊕{");
-                        result.push_str(&decrypted);
-                        result.push('}');
+                        // Pick a delimiter pair that doesn't collide with the
+                        // decrypted value — values containing unbalanced `}`
+                        // cannot round-trip through the default `{}` form.
+                        result.push_str(&format_marker("⊕", &decrypted));
                     }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
@@ -721,10 +823,7 @@ impl Processor {
             if self.check_marker_size(&marker.content, "Ciphertext") {
                 match self.decrypt_with_repository_key(&marker.content) {
                     Ok(decrypted) => {
-                        // Push plaintext marker directly — avoids fmt::Write format parsing
-                        result.push_str("⊕{");
-                        result.push_str(&decrypted);
-                        result.push('}');
+                        result.push_str(&format_marker("⊕", &decrypted));
                     }
                     Err(e) => {
                         let original = &content[marker.start..marker.end];
@@ -1469,6 +1568,206 @@ mod tests {
         ).unwrap();
         let opened = proc.open_content_with_path(&sealed, std::path::Path::new("unicode.txt")).unwrap();
         assert_eq!(opened.as_bytes(), original.as_bytes(), "unicode round-trip: byte mismatch");
+    }
+
+    // =========================================================================
+    // Delimiter-override tests — values containing unbalanced braces or other
+    // delimiters must round-trip via an alternate pair without chomping bytes.
+    // =========================================================================
+
+    /// The reported case: a secrets file with a value ending in `}`.
+    /// Must seal → open → seal byte-identically, and after edit-cycle the
+    /// plaintext marker must still capture the full value including the `}`.
+    #[test]
+    fn secrets_file_value_with_unbalanced_close_brace() {
+        use tempfile::tempdir;
+        let temp = tempdir().unwrap();
+        let secrets_path = temp.path().join("secrets");
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_project_root(key, temp.path().to_path_buf()).unwrap();
+
+        let original = "a: abc\nb: def}\n";
+
+        // Full seal/open cycle — secrets-file-level encryption wraps the whole
+        // blob in ⊠{base64}, so this part is brace-safe by construction.
+        let sealed = proc.seal_content_with_path(original, &secrets_path).unwrap();
+        let opened = proc.open_content_with_path(&sealed, &secrets_path).unwrap();
+        assert_eq!(opened, original, "secrets-file seal/open must preserve bytes");
+
+        // Edit cycle: prepare_for_editing wraps the decrypted blob in a
+        // plaintext marker; encrypt_content then re-encrypts it. The bug was
+        // that the trailing `}` in `def}` was treated as the marker close.
+        let prepared = proc.prepare_for_editing(&sealed).unwrap();
+        let reencrypted = proc.encrypt_content(&prepared).unwrap();
+        let opened_after_edit = proc.open_content_with_path(&reencrypted, &secrets_path).unwrap();
+        assert_eq!(
+            opened_after_edit, original,
+            "edit round-trip must preserve bytes — trailing `}}` must not be chomped",
+        );
+    }
+
+    /// A plaintext marker wrapping a value with a single unbalanced `}` must
+    /// pick an alternate delimiter and survive encrypt → decrypt round-trip.
+    #[test]
+    fn plaintext_marker_wraps_unbalanced_close_brace() {
+        let proc = make_processor();
+        let secret_value = "pass}word";
+        let marker = format_marker("⊕", secret_value);
+        assert!(
+            !marker.starts_with("⊕{"),
+            "value with unbalanced `}}` must NOT use default {{}} delimiter, got: {}",
+            marker,
+        );
+        // Full content round-trip through encrypt/decrypt.
+        let document = format!("secret: {marker}\n");
+        let encrypted = proc.encrypt_content(&document).unwrap();
+        let decrypted = proc.decrypt_content(&encrypted).unwrap();
+        // The alternate delimiter may not survive the decrypt path literally,
+        // but the captured value must be exactly `pass}word`.
+        let markers = find_plaintext_markers(&decrypted);
+        assert_eq!(markers.len(), 1, "expected exactly one plaintext marker after decrypt");
+        assert_eq!(markers[0].content, secret_value, "captured value must match original");
+    }
+
+    /// When the value contains both `}` and `]`, the second-tier ASCII fallback
+    /// is unavailable — we must land on an exotic Unicode pair.
+    #[test]
+    fn value_with_brace_and_bracket_forces_exotic_delimiter() {
+        let value = r#"{"json": "blob]"#; // unbalanced braces, contains both `]` and `}`
+        let (open, close) = pick_delimiter_for_value(value).expect("ladder must yield a pair");
+        assert_ne!(open, '{', "default {{}} must not be chosen for unbalanced braces");
+        assert_ne!(open, '[', "[] must not be chosen when value contains `]`");
+        assert!(!value.contains(open), "selected opener must be absent from value");
+        assert!(!value.contains(close), "selected closer must be absent from value");
+    }
+
+    /// A value with balanced `{...}` inside must still prefer the default
+    /// `{}` delimiter — no unnecessary switching that would churn old files.
+    #[test]
+    fn balanced_braces_inside_value_keep_default_delimiter() {
+        let value = r#"{"a": 1}"#;
+        let (open, close) = pick_delimiter_for_value(value).unwrap();
+        assert_eq!((open, close), ('{', '}'), "balanced braces must stay with default");
+    }
+
+    /// Existing `⊕{foo}` content with no problematic chars must parse and
+    /// round-trip unchanged — this is the byte-identity regression guard.
+    #[test]
+    fn legacy_brace_form_unchanged() {
+        let proc = make_processor();
+        let original = "key = ⊕{plain}\n";
+        let encrypted = proc.encrypt_content(original).unwrap();
+        let decrypted = proc.decrypt_content(&encrypted).unwrap();
+        assert_eq!(decrypted, original, "legacy {{}} form must round-trip byte-identically");
+    }
+
+    /// Exotic delimiter pair must survive the full encrypt/decrypt cycle with
+    /// the correct inner content captured.
+    #[test]
+    fn exotic_delimiter_marker_parses_correctly() {
+        // Hand-written marker using white square brackets around a value with `}`.
+        let content = "secret: \u{2983}pass}word\u{2984}\n"; // ⦃pass}word⦄
+        // Wait — ⦃/⦄ aren't in the prefix table as "opener after prefix"; they're
+        // the delimiter *after* the prefix. Construct the real form:
+        let marker = "⊕\u{2983}pass}word\u{2984}";
+        let document = format!("secret: {marker}\n");
+        let proc = make_processor();
+        let encrypted = proc.encrypt_content(&document).unwrap();
+        let decrypted = proc.decrypt_content(&encrypted).unwrap();
+        let markers = find_plaintext_markers(&decrypted);
+        assert_eq!(markers.len(), 1, "exotic-delimited marker must parse to one match");
+        assert_eq!(markers[0].content, "pass}word");
+        // Silence unused — we kept `content` as documentation of the underlying form.
+        let _ = content;
+    }
+
+    /// The ASCII `o+` prefix with the default `{}` delimiter must still work —
+    /// this is the hand-typed form and must remain zero-friction.
+    #[test]
+    fn ascii_prefix_default_delimiter_still_parses() {
+        let content = "key = o+{value}\n";
+        let markers = find_plaintext_markers(content);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].content, "value");
+    }
+
+    /// Unbalanced brace in prefix + `{` form must NOT produce a false match
+    /// (this tests the retreat path when braces are unbalanced).
+    #[test]
+    fn unbalanced_default_delimiter_retreats_cleanly() {
+        let content = "⊕{no close here\nnext line";
+        let markers = find_plaintext_markers(content);
+        assert_eq!(markers.len(), 0, "unbalanced default delimiter must not match");
+    }
+
+    // =========================================================================
+    // Backslash escape tests — escapes are recognised only for the default
+    // {} pair. Emission never produces escapes (the tool picks a clean
+    // delimiter instead), so escapes only appear in user-typed input.
+    // =========================================================================
+
+    /// `\}` inside a default-pair marker must not end the marker early.
+    /// The captured value must be unescaped back to the literal `}`.
+    #[test]
+    fn escaped_close_brace_parses_as_literal() {
+        let content = r"key = o+{pass\}word}";
+        let markers = find_plaintext_markers(content);
+        assert_eq!(markers.len(), 1, "escaped `}}` must not close the marker");
+        assert_eq!(markers[0].content, "pass}word");
+    }
+
+    /// `\{` and `\\` must likewise be unescaped on capture.
+    #[test]
+    fn escaped_open_brace_and_backslash_parse_correctly() {
+        let content = r"a: o+{lit\{inside} b: o+{back\\slash}";
+        let markers = find_plaintext_markers(content);
+        assert_eq!(markers.len(), 2);
+        assert_eq!(markers[0].content, "lit{inside");
+        assert_eq!(markers[1].content, r"back\slash");
+    }
+
+    /// Escapes are LOCAL to the default `{}` pair. `\]` inside an `[]` marker
+    /// stays literal — no unescaping happens for non-default delimiters.
+    #[test]
+    fn escapes_do_not_apply_to_alternate_delimiters() {
+        let content = r"⊕[has\]literal]";
+        let markers = find_plaintext_markers(content);
+        assert_eq!(markers.len(), 1, "`[]` marker with unrelated `\\]` inside");
+        // `\]` should close the marker at the first unescaped `]`, because
+        // escapes are not recognised for `[]`. Captured content is `has\`.
+        assert_eq!(markers[0].content, r"has\");
+    }
+
+    /// End-to-end: a user hand-types `o+{pass\}word}`, seals, then opens.
+    /// After the round-trip the emission path re-wraps the value in an
+    /// auto-selected delimiter (because the value now contains `}`), so the
+    /// opened form uses an alternate pair rather than leftover escapes.
+    #[test]
+    fn hand_typed_escape_roundtrips_via_delimiter_override() {
+        let proc = make_processor();
+        let original = "pw = o+{pass\\}word}\n";
+        let sealed = proc.encrypt_content(original).unwrap();
+        let opened = proc.decrypt_content(&sealed).unwrap();
+        // After open, the plaintext marker wraps `pass}word` directly. The
+        // emission helper picked a non-default pair to avoid ambiguity.
+        let markers = find_plaintext_markers(&opened);
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].content, "pass}word");
+        assert!(
+            !opened.contains("o+{pass\\}"),
+            "opened form must not retain the escape — emission picks a clean delimiter"
+        );
+    }
+
+    /// Unescape helper direct tests — easier debugging when parse tests fail.
+    #[test]
+    fn unescape_helper_handles_all_cases() {
+        assert_eq!(unescape_default_delimiter("plain"), "plain");
+        assert_eq!(unescape_default_delimiter(r"pass\}word"), "pass}word");
+        assert_eq!(unescape_default_delimiter(r"a\{b\}c"), "a{b}c");
+        assert_eq!(unescape_default_delimiter(r"back\\slash"), r"back\slash");
+        // Unrecognised escapes are passed through literally.
+        assert_eq!(unescape_default_delimiter(r"tab\t"), r"tab\t");
     }
 }
 

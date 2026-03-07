@@ -31,10 +31,12 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
         }
 
         // Check for marker start
-        if let Some(format) = detect_marker_start(remaining) {
+        if let Some((format, open, close)) = detect_marker_start(remaining) {
             pos = process_marker(
                 edited,
                 format,
+                open,
+                close,
                 pos,
                 &mut validated,
                 &mut user_markers,
@@ -59,38 +61,42 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
 fn process_marker(
     edited: &str,
     format: MarkerFormat,
+    open: char,
+    close: char,
     pos: usize,
     validated: &mut String,
     user_markers: &mut Vec<UserMarker>,
     warnings: &mut Vec<String>,
 ) -> usize {
     let marker_start = pos;
-    let prefix_len = format.prefix_len();
-    let content_start = pos + prefix_len;
+    // Header is the prefix ("o+" / "⊕") plus the opening delimiter char.
+    let header_len = format.prefix_len() + open.len_utf8();
+    let content_start = pos + header_len;
 
-    if let Some(close_pos) = find_unescaped_close(&edited[content_start..]) {
+    if let Some(close_pos) = find_unescaped_close(&edited[content_start..], close) {
         let abs_close = content_start + close_pos;
         let content = &edited[content_start..abs_close];
+        let marker_end = abs_close + close.len_utf8();
 
         if contains_nested_markers(content) {
             // Nested markers - escape and warn
             handle_nested_user_marker(format, content, content_start, validated, warnings);
-            abs_close + 1
+            marker_end
         } else {
             // Valid marker - add to list
             add_user_marker(
-                &edited[marker_start..=abs_close],
-                prefix_len,
+                &edited[marker_start..marker_end],
+                header_len,
                 content,
                 validated,
                 user_markers,
             );
-            abs_close + 1
+            marker_end
         }
     } else {
         // Unclosed marker - escape and warn
         handle_unclosed_marker(format, marker_start, validated, warnings);
-        pos + prefix_len
+        pos + header_len
     }
 }
 

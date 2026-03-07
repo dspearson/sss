@@ -226,4 +226,49 @@ mod tests {
         assert_eq!(result.output, expected,
             "Output should match expected format");
     }
+
+    #[test]
+    fn test_source_with_alternate_delimiter_recognised() {
+        // Source already uses an alternate delimiter pair because the value
+        // contains `}`. Inference must recognise the marker (not treat it as
+        // plain text) and reconstruct a marker around the same value.
+        //
+        // The emitted pair is content-determined (pick_delimiter picks the
+        // first non-colliding pair from the ladder), so it may differ from
+        // the source — that's correct, because value identity is what
+        // matters, not delimiter fidelity.
+        let source = "password: ⊕⦃pass}word⦄\n";
+        let edited = "password: pass}word\n"; // rendered form (delimiters stripped)
+
+        let result = infer_markers(source, edited).unwrap();
+        // Re-parse the output — the marker must round-trip cleanly with the
+        // correct captured value.
+        let (rendered, markers) = parser::parse_markers(&result.output).unwrap();
+        assert_eq!(rendered, edited, "output must render back to the edited text");
+        assert_eq!(markers.len(), 1, "expected exactly one marker");
+        assert_eq!(markers[0].content, "pass}word", "value must be preserved byte-for-byte");
+    }
+
+    #[test]
+    fn test_edit_value_into_unbalanced_brace_picks_alternate() {
+        // Source has a regular marker; user edits the content to contain `}`.
+        // The reconstructor must auto-switch to an alternate delimiter.
+        let source = "pw: ⊕{before}\n";
+        let edited = "pw: after}value\n"; // user typed `}` into the rendered value
+
+        let result = infer_markers(source, edited).unwrap();
+        let output = result.output;
+        // The value now contains `}` so the default `{}` pair would chomp it.
+        // Verify reconstructor picked something else.
+        assert!(
+            !output.contains("⊕{after}value}"),
+            "default pair would mis-parse — must use alternate. Output: {output}",
+        );
+        // The new value must be wrapped in a marker form that parses correctly
+        // when we re-parse the output.
+        let (rendered, markers) = parser::parse_markers(&output).unwrap();
+        assert_eq!(rendered, edited, "re-parsing must recover the original rendered form");
+        assert_eq!(markers.len(), 1, "expected one marker");
+        assert_eq!(markers[0].content, "after}value");
+    }
 }

@@ -41,37 +41,41 @@ pub fn parse_markers(source: &str) -> Result<(String, Vec<Marker>)> {
         }
 
         // Check for marker start
-        if let Some(format) = detect_marker_start(remaining) {
+        if let Some((format, open, close)) = detect_marker_start(remaining) {
             let marker_start = source_pos;
-            let prefix_len = format.prefix_len();
-            let content_start = source_pos + prefix_len;
+            // Header is the prefix ("o+" / "⊕") plus the opening delimiter char.
+            let header_len = format.prefix_len() + open.len_utf8();
+            let content_start = source_pos + header_len;
 
-            // Find matching closing brace
-            if let Some(close_pos) = find_unescaped_close(&source[content_start..]) {
+            // Find matching closing delimiter (escape-aware only for `}`).
+            if let Some(close_pos) = find_unescaped_close(&source[content_start..], close) {
                 let abs_close = content_start + close_pos;
                 let content = &source[content_start..abs_close];
+                // Marker end includes the close delimiter char.
+                let marker_end = abs_close + close.len_utf8();
 
                 // Check for nested markers (not allowed)
                 if contains_nested_markers(content) {
                     handle_nested_marker(format, content, &mut rendered, &mut rendered_pos);
-                    source_pos = abs_close + 1;
+                    source_pos = marker_end;
                 } else {
                     // Valid marker - add to list
                     add_valid_marker(
                         &mut markers,
                         marker_start,
-                        abs_close + 1,
+                        marker_end,
                         rendered_pos,
                         content,
                     );
                     rendered.push_str(content);
                     rendered_pos += content.len();
-                    source_pos = abs_close + 1;
+                    source_pos = marker_end;
                 }
             } else {
                 // Unclosed marker - escape it
                 rendered.push_str(format.escaped());
-                source_pos += prefix_len;
+                // Advance past the prefix + opener so we don't re-detect.
+                source_pos += header_len;
                 rendered_pos += format.escaped().len();
             }
         } else {

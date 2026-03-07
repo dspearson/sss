@@ -1,21 +1,25 @@
 //! Output reconstruction (Step 8)
 //!
-//! Reconstruct text with markers in canonical ⊕{...} format.
+//! Reconstruct text with markers in canonical ⊕{...} format, auto-selecting
+//! an alternate delimiter pair when the content contains unbalanced `}`.
 
+use super::marker_syntax::pick_delimiter;
 use super::types::Marker;
 
 /// Reconstruct text with markers in canonical format
 ///
-/// Takes the edited text and markers, and outputs text with markers
-/// in the canonical ⊕{...} format.
+/// Takes the edited text and markers, and outputs text with markers in the
+/// `⊕{...}` canonical form. For values containing unbalanced braces, picks
+/// a non-colliding delimiter pair from `pick_delimiter` so the marker
+/// survives a subsequent parse-round-trip without chomping bytes.
 pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
     if markers.is_empty() {
         return text.to_string();
     }
 
-    // Pre-allocate capacity: text length + overhead for marker syntax
-    // Each marker adds "⊕{" (4 bytes) + "}" (1 byte) = 5 bytes overhead
-    let estimated_capacity = text.len() + (markers.len() * 5);
+    // Pre-allocate capacity: text length + worst-case per-marker overhead.
+    // ⊕ is 3 bytes; exotic delimiters up to 3 bytes each → 9 bytes max.
+    let estimated_capacity = text.len() + (markers.len() * 9);
     let mut output = String::with_capacity(estimated_capacity);
     let mut pos = 0;
 
@@ -45,10 +49,12 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
             continue;
         }
 
-        // Add marker in canonical format (⊕{...})
-        output.push_str("⊕{");
+        // Emit with a delimiter pair that doesn't collide with the content.
+        let (open, close) = pick_delimiter(&content);
+        output.push('⊕');
+        output.push(open);
         output.push_str(&content);
-        output.push('}');
+        output.push(close);
 
         pos = marker.source_end;
     }

@@ -656,20 +656,28 @@ export class SSSWrapper {
      */
     hasMarkers(content: string): boolean {
         // Check for sss markers: ⊕{...}, ⊠{...}, o+{...}, <{...}, ⊲{...}
-        return PATTERNS.ALL_MARKERS.test(content);
+        return testStateless(PATTERNS.ALL_MARKERS, content);
     }
 
     /**
      * Check if file is encrypted (has sealed markers)
      */
     isEncrypted(content: string): boolean {
-        return PATTERNS.ENCRYPTED_MARKER.test(content);
+        return testStateless(PATTERNS.ENCRYPTED_MARKER, content);
     }
 
     /**
      * Check if file has plaintext markers
      */
     hasPlaintextMarkers(content: string): boolean {
-        return PATTERNS.ANY_PLAINTEXT_MARKER.test(content);
+        return testStateless(PATTERNS.ANY_PLAINTEXT_MARKER, content);
     }
+}
+
+// The shared PATTERNS regexes are /g (stateful). RegExp.prototype.test on a /g
+// regex advances lastIndex on match, so repeat calls flip between true/false
+// for the same content. Reset before testing to keep these checks pure.
+function testStateless(regex: RegExp, content: string): boolean {
+    regex.lastIndex = 0;
+    return regex.test(content);
 }

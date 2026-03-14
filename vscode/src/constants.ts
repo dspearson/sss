@@ -25,27 +25,35 @@ export const MARKERS = {
 } as const;
 
 /**
- * Common regex patterns for SSS marker detection
+ * Common regex patterns for SSS marker detection.
+ *
+ * Every pattern is built from the shared `DELIMITER_PAIRS` table so an
+ * alternate-delimiter marker (e.g. `⊕⦃pass}word⦄`) matches identically to
+ * the default `⊕{secret}` form. To extract the content from a match use
+ * `extractMarkerContent` from `utils/delimiters` — the capture group index
+ * varies by which pair matched.
  */
+import { buildMarkerRegex } from './utils/delimiters';
+
 export const PATTERNS = {
-    /** Matches ALL SSS markers: ⊕{...}, ⊠{...}, ⊲{...}, o+{...}, <{...} */
-    ALL_MARKERS: /[⊕⊠]\{[^}]*\}|o\+\{[^}]*\}|<\{[^}]*\}|⊲\{[^}]*\}/g,
-    /** Matches both encrypted and plaintext markers: [⊕⊠]{...} */
-    ANY_MARKER: /[⊕⊠]\{[^}]*\}/g,
-    /** Matches only encrypted markers: ⊠{...} */
-    ENCRYPTED_MARKER: /⊠\{[^}]*\}/g,
-    /** Matches only plaintext markers: ⊕{...} */
-    PLAINTEXT_MARKER: /⊕\{[^}]*\}/g,
-    /** Matches plaintext markers (both Unicode and ASCII): ⊕{...} or o+{...} */
-    ANY_PLAINTEXT_MARKER: /[⊕]\{[^}]*\}|o\+\{[^}]*\}/g,
-    /** Matches only interpolation markers: ⊲{...} */
-    INTERPOLATION_MARKER: /⊲\{[^}]*\}/g,
-    /** Matches both interpolation markers: ⊲{...} or <{...} */
-    ANY_INTERPOLATION_MARKER: /[⊲<]\{[^}]+\}/g,
-    /** Matches ASCII plaintext marker: o+{...} */
-    ASCII_PLAINTEXT_MARKER: /o\+\{[^}]*\}/g,
-    /** Matches ASCII interpolation marker: <{...} */
-    ASCII_INTERPOLATION_MARKER: /<\{[^}]*\}/g,
+    /** Matches ALL SSS markers (⊕, ⊠, ⊲, o+, <) across every delimiter pair. */
+    ALL_MARKERS: buildMarkerRegex(['⊕', '⊠', '⊲', 'o+', '<']),
+    /** Matches both encrypted and plaintext markers. */
+    ANY_MARKER: buildMarkerRegex(['⊕', '⊠']),
+    /** Matches only encrypted markers. */
+    ENCRYPTED_MARKER: buildMarkerRegex(['⊠']),
+    /** Matches only plaintext markers. */
+    PLAINTEXT_MARKER: buildMarkerRegex(['⊕']),
+    /** Matches plaintext markers (both Unicode and ASCII prefix). */
+    ANY_PLAINTEXT_MARKER: buildMarkerRegex(['⊕', 'o+']),
+    /** Matches only interpolation markers. */
+    INTERPOLATION_MARKER: buildMarkerRegex(['⊲']),
+    /** Matches both interpolation markers (Unicode and ASCII prefix). */
+    ANY_INTERPOLATION_MARKER: buildMarkerRegex(['⊲', '<']),
+    /** Matches ASCII plaintext marker (o+ prefix). */
+    ASCII_PLAINTEXT_MARKER: buildMarkerRegex(['o+']),
+    /** Matches ASCII interpolation marker (< prefix). */
+    ASCII_INTERPOLATION_MARKER: buildMarkerRegex(['<']),
 } as const;
 
 /**

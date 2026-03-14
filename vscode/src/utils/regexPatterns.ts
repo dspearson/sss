@@ -2,8 +2,14 @@
  * Shared regex patterns used across the extension
  */
 
-/** Matches sss interpolation markers: ⊲{key} or <{key} */
-export const INTERPOLATION_MARKER_REGEX = /[⊲<]\{([^}]+)\}/g;
+import { buildMarkerRegex } from './delimiters';
+
+/**
+ * Matches sss interpolation markers (`⊲`/`<` prefix) across every supported
+ * delimiter pair. The key lands in one of many capture groups — read it via
+ * `extractMarkerContent` from `./delimiters`.
+ */
+export const INTERPOLATION_MARKER_REGEX = buildMarkerRegex(['⊲', '<']);
 
 /** Matches single-line secret format: key: value */
 export const SINGLE_LINE_SECRET_REGEX = /^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|(.*))\s*$/;

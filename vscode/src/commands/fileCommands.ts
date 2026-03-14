@@ -2,7 +2,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { SSSWrapper } from '../sssWrapper';
 import { SSSRenderProvider } from '../types';
-import { URI_SCHEMES, MARKER_SEQUENCES } from '../constants';
+import { URI_SCHEMES, MARKER_SEQUENCES, MARKERS } from '../constants';
+import { formatMarker, normaliseAsciiPrefixes, hasAsciiMarker } from '../utils';
 
 /**
  * File operation commands (seal, open, render, etc.)
@@ -101,13 +102,13 @@ export class FileCommands {
         }
 
         const selectedText = editor.document.getText(selection);
-        const wrappedText = `${MARKER_SEQUENCES.PLAINTEXT_OPEN}${selectedText}}`;
+        const wrappedText = formatMarker(MARKERS.PLAINTEXT, selectedText);
 
         await editor.edit(editBuilder => {
             editBuilder.replace(selection, wrappedText);
         });
 
-        vscode.window.showInformationMessage(`Text wrapped with ${MARKER_SEQUENCES.PLAINTEXT_OPEN}...} marker`);
+        vscode.window.showInformationMessage(`Text wrapped with ${MARKERS.PLAINTEXT}{...} marker`);
     }
 
     async normaliseMarkers(): Promise<void> {
@@ -119,20 +120,9 @@ export class FileCommands {
         }
 
         const document = editor.document;
-        let text = document.getText();
-        let changesMade = false;
-
-        // o+{...} → ⊕{...}
-        if (text.includes(MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN)) {
-            text = text.replaceAll(MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN, MARKER_SEQUENCES.PLAINTEXT_OPEN);
-            changesMade = true;
-        }
-
-        // <{...} → ⊲{...}
-        if (text.includes(MARKER_SEQUENCES.INTERPOLATION_ALT_OPEN)) {
-            text = text.replaceAll(MARKER_SEQUENCES.INTERPOLATION_ALT_OPEN, MARKER_SEQUENCES.INTERPOLATION_OPEN);
-            changesMade = true;
-        }
+        const originalText = document.getText();
+        const changesMade = hasAsciiMarker(originalText);
+        const text = changesMade ? normaliseAsciiPrefixes(originalText) : originalText;
 
         if (changesMade) {
             const fullRange = new vscode.Range(

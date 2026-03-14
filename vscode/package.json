@@ -2,7 +2,7 @@
   "name": "sss-vscode",
   "displayName": "Secret String Substitution",
   "description": "Transparent encryption/decryption for SSS (Secret String Substitution) projects with project and key management",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "publisher": "sss",
   "license": "ISC",
   "author": "Dominic Pearson <dsp@technoanimal.net>",
@@ -58,7 +58,8 @@
         {
           "id": "sss.projectView",
           "name": "Project",
-          "when": "sss.isProject"
+          "when": "sss.isProject",
+          "visibility": "visible"
         },
         {
           "id": "sss.usersView",

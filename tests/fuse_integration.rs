@@ -90,6 +90,9 @@ impl TestProject {
             .arg(self.source_path())
             .arg(self.mount_path())
             .arg("--foreground")  // Use foreground mode - daemon mode crashes immediately
+            // Suppress the default AllowRoot option — it needs `user_allow_other`
+            // in /etc/fuse.conf, which test runners typically don't configure.
+            .arg("--no-allow-root")
             .env("HOME", self.home_dir.path())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -689,4 +692,57 @@ fn test_fuse_multiple_markers_in_file() {
     assert!(source_content.contains("root"), "Should contain 'root'");
     assert!(source_content.contains("newsecret"), "Should contain 'newsecret'. Content: {}", source_content);
     assert!(source_content.contains("xyz-789"), "Should contain 'xyz-789'");
+}
+
+/// FUSE write path must route the inferred marker through the delimiter
+/// ladder. Editing a rendered value to introduce `}` was the original bug —
+/// the source file ended up with `⊕{pass}word}` and the next parse chomped
+/// everything after the first `}`. The fix auto-picks a non-colliding pair.
+#[test]
+#[ignore] // Requires FUSE to be available
+fn test_fuse_edit_introduces_unbalanced_close_brace() {
+    let mut project = TestProject::new().expect("Failed to create project");
+
+    project
+        .write_source_file("cfg.conf", "password: o+{safe}")
+        .expect("write source");
+
+    project.mount().expect("mount");
+
+    // Through FUSE, the user sees `password: safe`. Changing it to
+    // `password: pass}word` introduces an unbalanced `}` into the inferred
+    // marker value.
+    project
+        .edit_file_with_ed("cfg.conf", "s/safe/pass}word/\n")
+        .expect("edit through FUSE");
+
+    thread::sleep(Duration::from_millis(200));
+    project.unmount().expect("unmount");
+
+    let source = project.read_source_file("cfg.conf").expect("read source");
+
+    // The new value must appear exactly once, wrapped in a non-default pair.
+    // `⊕[pass}word]` is the canonical choice (tier 2); accept any non-default
+    // form the ladder might pick.
+    assert!(
+        source.contains("pass}word"),
+        "value must be present in source. Content: {}",
+        source
+    );
+    assert!(
+        !source.contains("⊕{pass}word}") && !source.contains("o+{pass}word}"),
+        "default `{{}}` pair would chomp the value. Content: {}",
+        source
+    );
+
+    // Re-parse via the marker inference entry point: rendered form must be
+    // the clean user-visible string.
+    let result = sss::marker_inference::infer_markers(&source, "password: pass}word")
+        .expect("infer_markers round-trip");
+    // No changes compared to the user's edited view — idempotent.
+    assert!(
+        result.output.contains("pass}word"),
+        "inference idempotent: {}",
+        result.output
+    );
 }

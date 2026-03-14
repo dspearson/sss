@@ -1811,3 +1811,131 @@ fn e2e_nested_three_levels_deep() {
     assert_eq!(env.read_file("child/c.txt"), "c=child_val");
     assert_eq!(env.read_file("child/grandchild/g.txt"), "g=grand_val");
 }
+
+// ===========================================================================
+// Unbalanced-`}` value round-trip (delimiter ladder + escape forms)
+// ===========================================================================
+
+/// Full CLI round-trip for marker values containing an unbalanced `}`.
+///
+/// The three input forms are all equivalent ways to mark the value `pass}word`:
+/// an auto-picked alternate pair, a hand-typed escape, and a user-chosen exotic
+/// pair. Each must survive `seal` → `open` → `render` without byte loss.
+///
+/// Regression: before the delimiter-ladder work, the default `{}` pair chomped
+/// at the first `}`, silently losing the `word}` suffix.
+#[test]
+fn e2e_roundtrip_value_with_unbalanced_close_brace() {
+    let env = SssTestEnv::new();
+    env.setup();
+
+    let inputs = [
+        ("alt.conf",    "password: \u{2295}[pass}word]"),
+        ("escape.conf", "password: \u{2295}{pass\\}word}"),
+        ("exotic.conf", "password: \u{2295}\u{2983}pass}word\u{2984}"),
+    ];
+
+    for (name, content) in inputs {
+        env.write_file(name, content);
+    }
+
+    // Seal: ciphertext marker appears, plaintext must not leak.
+    for (name, _) in inputs {
+        env.run_ok(&["seal", "-x", name]);
+        let sealed = env.read_file(name);
+        assert!(
+            sealed.contains("\u{22A0}"),
+            "{name}: expected sealed marker, got: {sealed}"
+        );
+        assert!(
+            !sealed.contains("pass}word"),
+            "{name}: plaintext leaked after seal: {sealed}"
+        );
+    }
+
+    // Open: plaintext marker recovered, value preserved. The canonical form
+    // emitted is `⊕[pass}word]` (tier-2 pair — first non-colliding after the
+    // default). Reject the broken default-pair form.
+    for (name, _) in inputs {
+        env.run_ok(&["open", "-x", name]);
+        let opened = env.read_file(name);
+        assert!(
+            opened.contains("pass}word"),
+            "{name}: value lost after round-trip: {opened}"
+        );
+        assert!(
+            !opened.contains("\u{2295}{pass}word}"),
+            "{name}: default-pair form would chomp: {opened}"
+        );
+    }
+
+    // Render: literal value, no marker syntax, `}` byte survives.
+    for (name, _) in inputs {
+        env.run_ok(&["render", "-x", name]);
+        assert_eq!(
+            env.read_file(name),
+            "password: pass}word",
+            "{name}: render output wrong"
+        );
+    }
+}
+
+/// A value containing both `}` AND `]` forces the parser past tiers 1 and 2
+/// onto an exotic Unicode pair. Verifies the ladder walks past multiple
+/// collisions rather than falling back to a broken default.
+#[test]
+fn e2e_roundtrip_value_colliding_with_first_two_tiers() {
+    let env = SssTestEnv::new();
+    env.setup();
+
+    // Value collides with both `{}` (unbalanced `}`) and `[]` (contains `]`).
+    let value = "api]v1.0}release";
+    env.write_file("cfg", &format!("token: \u{2295}\u{27E6}{value}\u{27E7}"));
+
+    env.run_ok(&["seal", "-x", "cfg"]);
+    let sealed = env.read_file("cfg");
+    assert!(!sealed.contains(value), "plaintext leaked: {sealed}");
+
+    env.run_ok(&["open", "-x", "cfg"]);
+    let opened = env.read_file("cfg");
+    assert!(opened.contains(value), "value survived: {opened}");
+
+    env.run_ok(&["render", "-x", "cfg"]);
+    assert_eq!(env.read_file("cfg"), format!("token: {value}"));
+}
+
+/// A file with multiple markers on different lines, one of which holds an
+/// unbalanced `}`. Verifies per-marker delimiter selection — other markers
+/// must keep the default `{}` pair; only the `}`-bearing one switches.
+#[test]
+fn e2e_roundtrip_mixed_markers_only_one_needs_alt() {
+    let env = SssTestEnv::new();
+    env.setup();
+
+    let content = "\
+user: \u{2295}{admin}
+password: \u{2295}[p@ss}w0rd]
+api_key: \u{2295}{abc-123}
+";
+    env.write_file("mixed.conf", content);
+
+    env.run_ok(&["seal", "-x", "mixed.conf"]);
+    env.run_ok(&["open", "-x", "mixed.conf"]);
+    let opened = env.read_file("mixed.conf");
+
+    // All three values must be recoverable.
+    assert!(opened.contains("admin"), "lost admin: {opened}");
+    assert!(opened.contains("p@ss}w0rd"), "lost password: {opened}");
+    assert!(opened.contains("abc-123"), "lost api_key: {opened}");
+
+    // Default-pair markers must stay default — don't drag everything into
+    // exotic delimiters when only one marker needs them.
+    assert!(opened.contains("\u{2295}{admin}"), "admin lost default pair: {opened}");
+    assert!(opened.contains("\u{2295}{abc-123}"), "api_key lost default pair: {opened}");
+
+    env.run_ok(&["render", "-x", "mixed.conf"]);
+    assert_eq!(
+        env.read_file("mixed.conf"),
+        "user: admin\npassword: p@ss}w0rd\napi_key: abc-123\n"
+    );
+}

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { SSSWrapper } from '../sssWrapper';
-import { URI_SCHEMES, MARKER_SEQUENCES } from '../constants';
+import { URI_SCHEMES } from '../constants';
+import { asciiPrefixScanRegex, hasAsciiMarker, normaliseAsciiPrefixes } from '../utils';
 
 /**
  * Document-related event handlers (save, open, change)
@@ -182,7 +183,7 @@ export class DocumentEventHandlers {
 
             this.log('Auto-normalise', `Line text: "${lineText}"`);
 
-            if (lineText.includes(MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN) || lineText.includes(MARKER_SEQUENCES.INTERPOLATION_ALT_OPEN)) {
+            if (hasAsciiMarker(lineText)) {
                 await this.normaliseLineMarkers(editor, line, lineText);
             }
         }
@@ -198,9 +199,7 @@ export class DocumentEventHandlers {
         const cursorPos = editor.selection.active;
         const offsetAdjustment = this.calculateOffsetAdjustment(lineText, cursorPos.character);
 
-        let normalisedLine = lineText
-            .replaceAll(MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN, MARKER_SEQUENCES.PLAINTEXT_OPEN)
-            .replaceAll(MARKER_SEQUENCES.INTERPOLATION_ALT_OPEN, MARKER_SEQUENCES.INTERPOLATION_OPEN);
+        const normalisedLine = normaliseAsciiPrefixes(lineText);
 
         if (normalisedLine !== lineText) {
             this.log('Auto-normalise', `Normalised: "${normalisedLine}"`);
@@ -228,17 +227,20 @@ export class DocumentEventHandlers {
     }
 
     private calculateOffsetAdjustment(lineText: string, cursorOffset: number): number {
+        // Every `o+<opener>` before the cursor shrinks by 1 UTF-16 unit once
+        // normalised to `⊕<opener>` (o+ is 2 units, ⊕ is 1). `<<opener>` is
+        // same length (< and ⊲ are both 1 UTF-16 unit) so ignore it.
+        const regex = asciiPrefixScanRegex();
         let adjustment = 0;
-        let searchPos = 0;
+        let m: RegExpExecArray | null;
 
-        // Count o+{ replacements before cursor (3 chars -> 2 chars = -1 char each)
-        while (true) {
-            const oplusIndex = lineText.indexOf(MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN, searchPos);
-            if (oplusIndex === -1 || oplusIndex >= cursorOffset) {
+        while ((m = regex.exec(lineText))) {
+            if (m.index >= cursorOffset) {
                 break;
             }
-            adjustment += 1;
-            searchPos = oplusIndex + MARKER_SEQUENCES.ASCII_PLAINTEXT_OPEN.length;
+            if (m[1] === 'o+') {
+                adjustment += 1;
+            }
         }
 
         return adjustment;

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { SSSWrapper } from './sssWrapper';
-import { SecretsFileLocator, SecretsFileParser, INTERPOLATION_MARKER_REGEX } from './utils';
+import { SecretsFileLocator, SecretsFileParser, INTERPOLATION_MARKER_REGEX, extractMarkerContent } from './utils';
 import { DISPLAY } from './constants';
 
 /**
@@ -86,7 +86,8 @@ export class SSSHoverProvider implements vscode.HoverProvider {
      * Returns the key and range if found
      */
     private findReferenceAtPosition(text: string, character: number): { key: string; range: vscode.Range } | null {
-        const interpolationRegex = new RegExp(INTERPOLATION_MARKER_REGEX);
+        // Rebuild from source so we own `lastIndex` — the shared constant is /g.
+        const interpolationRegex = new RegExp(INTERPOLATION_MARKER_REGEX.source, 'gu');
         let match;
 
         while ((match = interpolationRegex.exec(text))) {
@@ -95,7 +96,7 @@ export class SSSHoverProvider implements vscode.HoverProvider {
 
             // Check if cursor is within this match
             if (character >= start && character <= end) {
-                const key = match[1];
+                const key = extractMarkerContent(match);
                 return {
                     key,
                     range: new vscode.Range(

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { SecretsFileLocator, SecretsFileParser, addSecretToFile } from '../utils';
-import { MARKER_SEQUENCES, PATTERNS } from '../constants';
+import { SecretsFileLocator, SecretsFileParser, addSecretToFile, formatMarker, extractMarkerContent } from '../utils';
+import { MARKERS, PATTERNS } from '../constants';
 
 /**
  * Commands for working with secrets and interpolation
@@ -41,7 +41,7 @@ export class SecretCommands {
         }
 
         await this.insertSecretReference(editor, selection, selectedSecretName);
-        vscode.window.showInformationMessage(`Inserted: ${MARKER_SEQUENCES.INTERPOLATION_OPEN}${selectedSecretName}}`);
+        vscode.window.showInformationMessage(`Inserted: ${formatMarker(MARKERS.INTERPOLATION, selectedSecretName)}`);
     }
 
     async goToSecretDefinition(): Promise<void> {
@@ -127,7 +127,7 @@ export class SecretCommands {
         selection: vscode.Selection,
         secretName: string
     ): Promise<void> {
-        const interpolatedText = `${MARKER_SEQUENCES.INTERPOLATION_OPEN}${secretName}}`;
+        const interpolatedText = formatMarker(MARKERS.INTERPOLATION, secretName);
 
         await editor.edit(editBuilder => {
             if (selection.isEmpty) {
@@ -143,14 +143,17 @@ export class SecretCommands {
         const line = editor.document.lineAt(position.line);
         const text = line.text;
 
+        // Fresh regex per call — the shared PATTERNS constant is /g and stateful,
+        // and we may return early from the loop, leaving lastIndex polluted.
+        const regex = new RegExp(PATTERNS.ANY_INTERPOLATION_MARKER.source, 'gu');
         let match;
 
-        while ((match = PATTERNS.ANY_INTERPOLATION_MARKER.exec(text))) {
+        while ((match = regex.exec(text))) {
             const start = match.index;
             const end = match.index + match[0].length;
 
             if (position.character >= start && position.character <= end) {
-                return match[1];
+                return extractMarkerContent(match);
             }
         }
 

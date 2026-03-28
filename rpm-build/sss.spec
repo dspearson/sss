@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.2.1
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -75,6 +75,13 @@ fi
 %{_bindir}/sss-askpass-gui
 
 %changelog
+* Wed Apr 22 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.0-1
+- Marker syntax: auto-selected delimiter pairs for values containing unbalanced `}`
+- Marker syntax: backslash escapes (\{, \}, \\) honoured inside the default `{}` pair
+- Round-trip safe: seal/open/render preserve values with `}` byte-for-byte
+- FUSE test harness fix: pass --no-allow-root so the ignored FUSE tests run
+- VS Code extension: delimiter-aware emission and scanning across all supported pairs
+
 * Wed Apr 22 2026 Dominic Pearson <dsp@technoanimal.net> - 1.2.1-1
 - FUSE: AllowRoot by default so `sudo` commands access mounts owned by a non-root user
 - FUSE: passthrough security.selinux and other xattrs via fgetxattr/flistxattr on the backing source

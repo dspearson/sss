@@ -105,9 +105,6 @@ struct FileHandle {
 trait FileOperations: Send + Sync {
     /// Should this file be hidden from directory listings?
     fn should_hide(&self, name: &str) -> bool;
-
-    /// Get file permissions — always mirrors the source file's original mode
-    fn get_permissions(&self, metadata: &fs::Metadata) -> u16;
 }
 
 /// SSS operations - renders ⊠{} to plaintext on read, seals to ⊠{} on write
@@ -120,11 +117,6 @@ impl FileOperations for SssOperations {
             ".git" | ".gitignore" | ".gitattributes" | ".gitmodules"
         )
     }
-
-    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
-        use std::os::unix::fs::PermissionsExt;
-        (metadata.permissions().mode() & 0o7777) as u16
-    }
 }
 
 /// Passthrough operations - raw read/write with no SSS processing
@@ -133,11 +125,6 @@ struct PassthroughOperations {}
 impl FileOperations for PassthroughOperations {
     fn should_hide(&self, _name: &str) -> bool {
         false  // Show everything including .git
-    }
-
-    fn get_permissions(&self, metadata: &fs::Metadata) -> u16 {
-        use std::os::unix::fs::PermissionsExt;
-        (metadata.permissions().mode() & 0o7777) as u16
     }
 }
 
@@ -183,10 +170,6 @@ pub struct SssFS {
     /// File descriptor to mount point directory (held open before mount for /proc access)
     /// Allows accessing the underlying directory via /proc/self/fd/<mount_fd> even after FUSE mount
     mount_fd: Option<std::os::unix::io::RawFd>,
-    /// UID of the process running FUSE (for synthetic directories)
-    uid: u32,
-    /// GID of the process running FUSE (for synthetic directories)
-    gid: u32,
     /// Processor for encryption/decryption operations
     processor: Processor,
     /// Secrets cache for finding and loading .secrets files
@@ -432,12 +415,6 @@ impl SssFS {
             },
         ];
 
-        // Get current process uid/gid for synthetic directories
-        // SAFETY: `getuid()` and `getgid()` are always safe to call — they have no
-        // preconditions, cannot fail, and do not dereference any pointers.
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
-
         // Create secrets cache from processor configuration
         let secrets_cache = processor.get_secrets_cache().clone();
 
@@ -509,8 +486,6 @@ impl SssFS {
             source_path,
             source_fd,
             mount_fd,
-            uid,
-            gid,
             processor,
             secrets_cache: RwLock::new(secrets_cache),
             inode_table: RwLock::new(inode_table),
@@ -759,30 +734,6 @@ impl SssFS {
     #[cfg(not(unix))]
     fn get_rdev(_metadata: &fs::Metadata) -> u32 {
         0
-    }
-
-    /// Check if a file has encrypted markers (should be processed)
-    // Note: has_encrypted_markers() and has_any_markers() moved to filesystem_common module
-
-    /// Check if a file at the given path contains encrypted markers
-    fn file_has_secrets(&self, rel_path: &Path) -> bool {
-        // Use fd-based access to avoid infinite loop when mounted in-place
-        match self.metadata_via_fd(rel_path) {
-            Ok(metadata) if metadata.is_file() => {
-                // Try to read the file and check for encrypted markers
-                match self.read_file_via_fd(rel_path) {
-                    Ok(content) => {
-                        if let Ok(s) = String::from_utf8(content) {
-                            has_encrypted_markers(&s)
-                        } else {
-                            false  // Not UTF-8, can't have text markers
-                        }
-                    }
-                    Err(_) => false,  // Can't read, assume no secrets
-                }
-            }
-            _ => false,  // Not a file or doesn't exist
-        }
     }
 
     /// Get the processor for a given relative path by walking up to find

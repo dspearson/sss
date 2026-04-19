@@ -43,6 +43,12 @@ sss-master/
 /debian/
 /dist/
 
+# GSD workflow metadata (local planning artefacts, not for distribution)
+/.planning/
+
+# Local build-host vendored headers (FUSE, etc.) — not for distribution
+/usr/
+
 # Examples and demos
 /examples/
 

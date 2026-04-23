@@ -13,8 +13,8 @@ pub mod suite;
 
 pub use classic::{
     decrypt, decrypt_from_base64, encrypt, encrypt_to_base64,
-    encrypt_to_base64_deterministic, open_repository_key, seal_repository_key, Key, KeyPair,
-    PublicKey, RepositoryKey, SecretKey,
+    encrypt_to_base64_deterministic, open_repository_key, seal_repository_key, ClassicSuite, Key,
+    KeyPair, PublicKey, RepositoryKey, SecretKey,
 };
 pub use suite::{CryptoSuite, Suite};
 

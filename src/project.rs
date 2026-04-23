@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey};
+use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey, Suite};
 use crate::{error_helpers, toml_helpers};
 
 /// A user's configuration in the project
@@ -72,6 +72,27 @@ fn default_version() -> String {
 
 fn default_created() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Resolve a `.sss.toml` `version` string to a `Suite`, with an
+/// actionable error for versions this binary does not support.
+///
+/// v2.0 gets special handling (this binary is v1; hybrid isn't wired
+/// until Phase 2) — we surface the upgrade prompt directly here so
+/// every load path emits the same single-line message (SUITE-04).
+/// Phase 2 will collapse this into `Suite::from_version` directly
+/// once `HybridSuite` is implemented.
+fn resolve_suite_from_version(version: &str) -> Result<Suite> {
+    match version {
+        "1.0" => Ok(Suite::Classic),
+        "2.0" => Err(anyhow!(
+            "this project requires sss v2.0 or newer (.sss.toml version = \"2.0\"); upgrade sss or run with a newer binary"
+        )),
+        other => Err(anyhow!(
+            "unknown .sss.toml version {:?}: expected \"1.0\" or \"2.0\"",
+            other
+        )),
+    }
 }
 
 impl Default for ProjectConfig {
@@ -167,7 +188,14 @@ impl ProjectConfig {
             )
         })?;
 
-        toml_helpers::parse_toml(&content, "project")
+        let config: Self = toml_helpers::parse_toml(&content, "project")?;
+
+        // Version gate — run BEFORE returning the parsed config so callers
+        // never operate on a file they don't understand. Emits the SUITE-04
+        // actionable error for `version = "2.0"` against this v1 binary.
+        resolve_suite_from_version(&config.version)?;
+
+        Ok(config)
     }
 
     /// Save project configuration to file
@@ -181,6 +209,19 @@ impl ProjectConfig {
                 e
             )
         })
+    }
+
+    /// Resolve the crypto `Suite` for this project from the `version` field.
+    ///
+    /// Maps `version = "1.0"` → `Suite::Classic`. Any other value —
+    /// including `"2.0"` against this v1 binary, or future/malformed
+    /// versions — produces an actionable error telling the user to
+    /// upgrade `sss`.
+    ///
+    /// v1 binaries encountering `version = "2.0"` will see exactly:
+    /// `this project requires sss v2.0 or newer (.sss.toml version = "2.0"); upgrade sss or run with a newer binary`
+    pub fn suite(&self) -> Result<Suite> {
+        resolve_suite_from_version(&self.version)
     }
 
     /// Add a user to the project

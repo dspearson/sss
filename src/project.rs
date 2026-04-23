@@ -676,4 +676,113 @@ mod tests {
         assert!(usernames.contains(&"alice"));
         assert!(usernames.contains(&"bob"));
     }
+
+    // --- SUITE-02 / SUITE-04: .sss.toml version gate ---
+
+    #[test]
+    fn test_load_from_file_rejects_v2_with_actionable_error() {
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            r#"version = "2.0"
+created = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let err = ProjectConfig::load_from_file(tmp.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("this project requires sss v2.0 or newer"),
+            "expected SUITE-04 actionable message, got: {err}"
+        );
+        assert!(
+            err.contains("2.0"),
+            "error must quote the offending version: {err}"
+        );
+        assert!(
+            err.contains("upgrade sss"),
+            "error must tell user to upgrade: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_from_file_accepts_v1() {
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        assert!(ProjectConfig::load_from_file(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn test_load_from_file_defaults_missing_version_to_v1() {
+        // No `version` field → serde default → "1.0" → loads successfully.
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            r#"created = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let cfg = ProjectConfig::load_from_file(tmp.path()).unwrap();
+        assert_eq!(cfg.version, "1.0");
+    }
+
+    #[test]
+    fn test_load_from_file_rejects_unknown_version() {
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            r#"version = "99.99"
+created = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let err = ProjectConfig::load_from_file(tmp.path())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown .sss.toml version"), "got: {err}");
+        assert!(err.contains("99.99"), "got: {err}");
+    }
+
+    #[test]
+    fn test_load_from_file_single_line_error_for_v2() {
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), r#"version = "2.0""#).unwrap();
+        let err = ProjectConfig::load_from_file(tmp.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !err.contains('\n'),
+            "SUITE-04 requires a single-line error; got multiline: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_project_config_suite_returns_classic_for_v1() {
+        let mut cfg = ProjectConfig::default();
+        cfg.version = "1.0".to_string();
+        assert_eq!(cfg.suite().unwrap(), Suite::Classic);
+    }
+
+    #[test]
+    fn test_project_config_suite_returns_error_for_v2() {
+        let mut cfg = ProjectConfig::default();
+        cfg.version = "2.0".to_string();
+        let err = cfg.suite().unwrap_err().to_string();
+        assert!(err.contains("this project requires sss v2.0 or newer"));
+    }
+
+    #[test]
+    fn test_project_config_suite_returns_error_for_unknown() {
+        let mut cfg = ProjectConfig::default();
+        cfg.version = "3.14".to_string();
+        let err = cfg.suite().unwrap_err().to_string();
+        assert!(err.contains("unknown .sss.toml version"));
+    }
 }

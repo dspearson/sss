@@ -35,7 +35,7 @@ fn validate_and_decode_base64(
     expected_len: usize,
     key_type: &str,
 ) -> Result<Vec<u8>> {
-    
+
 
     if encoded.len() > crate::constants::MAX_BASE64_KEY_LENGTH {
         return Err(anyhow!(
@@ -78,7 +78,7 @@ impl Default for RepositoryKey {
 }
 
 impl RepositoryKey {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         ensure_sodium_init();
         let mut key = [0u8; SYMMETRIC_KEY_SIZE];
@@ -111,7 +111,7 @@ impl RepositoryKey {
         Ok(Self(key_bytes))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
@@ -119,7 +119,7 @@ impl RepositoryKey {
 
     /// Generate a new repository key for rotation
     /// Returns a tuple of (`old_key`, `new_key`) where `old_key` is a copy of self
-    #[must_use] 
+    #[must_use]
     pub fn rotate(&self) -> (RepositoryKey, RepositoryKey) {
         let old_key = RepositoryKey(self.0);
         let new_key = RepositoryKey::new();
@@ -139,7 +139,7 @@ impl PublicKey {
         Ok(Self(key_bytes))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
@@ -171,7 +171,7 @@ impl SecretKey {
         Ok(Self(key_bytes))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)

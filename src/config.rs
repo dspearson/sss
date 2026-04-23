@@ -431,4 +431,22 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
+
+    #[test]
+    fn test_detect_config_format_surfaces_v2_version_error() {
+        // SUITE-04: the actionable v2→v1 error must surface through the
+        // detect_config_format chokepoint (and therefore load_project_config_internal)
+        // without being wrapped or hidden.
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".sss.toml");
+        std::fs::write(&config_path, r#"version = "2.0""#).unwrap();
+
+        let err = detect_config_format(&config_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("this project requires sss v2.0 or newer"),
+            "SUITE-04 error must surface through detect_config_format; got: {err}"
+        );
+    }
 }

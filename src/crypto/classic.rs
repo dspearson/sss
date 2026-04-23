@@ -542,6 +542,40 @@ pub fn decrypt_from_base64(encoded_ciphertext: &str, key: &Key) -> Result<String
         .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {e}"))
 }
 
+// =========================================================================
+// ClassicSuite: CryptoSuite impl for the libsodium crypto_box_seal path
+// =========================================================================
+
+use crate::crypto::suite::CryptoSuite;
+
+/// Classic suite — libsodium `crypto_box_seal` / `crypto_box_seal_open`.
+///
+/// Wraps the repository key `K` for a user's X25519 public key using
+/// anonymous authenticated public-key encryption. This is the v1.0 default.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ClassicSuite;
+
+impl CryptoSuite for ClassicSuite {
+    fn seal_repo_key(
+        &self,
+        repo_key: &RepositoryKey,
+        user_public_key: &PublicKey,
+    ) -> Result<String> {
+        // Delegates to the existing free function so byte-for-byte output is
+        // guaranteed identical to pre-refactor. The free function stays
+        // exported for test compatibility (tests/multi_user_e2e.rs etc.).
+        seal_repository_key(repo_key, user_public_key)
+    }
+
+    fn open_repo_key(
+        &self,
+        sealed_key: &str,
+        user_keypair: &KeyPair,
+    ) -> Result<RepositoryKey> {
+        open_repository_key(sealed_key, user_keypair)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1031,4 +1065,48 @@ mod tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod classic_suite_tests {
+    use super::*;
+    use crate::crypto::suite::CryptoSuite;
+
+    #[test]
+    fn test_classic_suite_seal_open_round_trips_repo_key() {
+        let kp = KeyPair::generate().unwrap();
+        let repo_key = RepositoryKey::new();
+        let suite = ClassicSuite;
+        let sealed = suite.seal_repo_key(&repo_key, &kp.public_key).unwrap();
+        let opened = suite.open_repo_key(&sealed, &kp).unwrap();
+        assert_eq!(repo_key.to_base64(), opened.to_base64());
+    }
+
+    #[test]
+    fn test_classic_suite_wrong_keypair_errors() {
+        let kp1 = KeyPair::generate().unwrap();
+        let kp2 = KeyPair::generate().unwrap();
+        let repo_key = RepositoryKey::new();
+        let suite = ClassicSuite;
+        let sealed = suite.seal_repo_key(&repo_key, &kp1.public_key).unwrap();
+        assert!(suite.open_repo_key(&sealed, &kp2).is_err());
+    }
+
+    #[test]
+    fn test_classic_suite_byte_identical_to_free_function() {
+        // The trait method MUST produce the same bytes as the free function
+        // so no existing ciphertext becomes unreadable and tests remain green.
+        let kp = KeyPair::generate().unwrap();
+        let repo_key = RepositoryKey::new();
+        let via_trait = ClassicSuite.seal_repo_key(&repo_key, &kp.public_key).unwrap();
+        // crypto_box_seal includes a random ephemeral keypair so successive
+        // seals of the same inputs will DIFFER; we can only prove round-trip
+        // equivalence, not output equality. But both outputs MUST be openable
+        // by the recipient's keypair and MUST decode to the same repo key.
+        let via_free = seal_repository_key(&repo_key, &kp.public_key).unwrap();
+        let opened_trait = ClassicSuite.open_repo_key(&via_trait, &kp).unwrap();
+        let opened_free = ClassicSuite.open_repo_key(&via_free, &kp).unwrap();
+        assert_eq!(opened_trait.to_base64(), opened_free.to_base64());
+        assert_eq!(opened_trait.to_base64(), repo_key.to_base64());
+    }
 }

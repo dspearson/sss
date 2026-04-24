@@ -423,13 +423,97 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         let keypair = KeyPair::generate().unwrap();
 
         // Should succeed for new file
-        init_project_config(&config_path, "alice", &keypair.public_key).unwrap();
+        init_project_config(
+            &config_path,
+            "alice",
+            &keypair.public_key,
+            crate::crypto::Suite::Classic,
+        )
+        .unwrap();
         assert!(config_path.exists());
 
         // Should fail if file already exists
-        let result = init_project_config(&config_path, "alice", &keypair.public_key);
+        let result = init_project_config(
+            &config_path,
+            "alice",
+            &keypair.public_key,
+            crate::crypto::Suite::Classic,
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn test_init_project_config_classic_writes_v1_version() {
+        // SUITE-03: passing Suite::Classic must stamp version = "1.0"
+        // into the generated .sss.toml (byte-identical to pre-Phase-1 output).
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".sss.toml");
+        let keypair = KeyPair::generate().unwrap();
+
+        init_project_config(
+            &config_path,
+            "alice",
+            &keypair.public_key,
+            crate::crypto::Suite::Classic,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains(r#"version = "1.0""#),
+            "classic init must stamp version = \"1.0\"; got: {content}"
+        );
+    }
+
+    #[test]
+    fn test_init_project_config_hybrid_writes_v2_version() {
+        // SUITE-03: passing Suite::Hybrid must stamp version = "2.0"
+        // into the generated .sss.toml so a v2-capable binary can dispatch
+        // to the hybrid suite on subsequent operations.
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".sss.toml");
+        let keypair = KeyPair::generate().unwrap();
+
+        init_project_config(
+            &config_path,
+            "alice",
+            &keypair.public_key,
+            crate::crypto::Suite::Hybrid,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            content.contains(r#"version = "2.0""#),
+            "hybrid init must stamp version = \"2.0\"; got: {content}"
+        );
+    }
+
+    #[test]
+    fn test_init_project_config_hybrid_round_trips_to_suite04_error() {
+        // End-to-end: --crypto hybrid writes v2, and re-opening the file with
+        // this v1 binary surfaces the Plan 02 actionable error. Ties SUITE-03
+        // (init flag) and SUITE-04 (load-time gate) together in one check.
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".sss.toml");
+        let keypair = KeyPair::generate().unwrap();
+
+        init_project_config(
+            &config_path,
+            "alice",
+            &keypair.public_key,
+            crate::crypto::Suite::Hybrid,
+        )
+        .unwrap();
+
+        let err = ProjectConfig::load_from_file(&config_path)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("this project requires sss v2.0 or newer"),
+            "hybrid init must make subsequent load surface the SUITE-04 message; got: {err}"
+        );
     }
 
     #[test]

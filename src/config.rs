@@ -325,13 +325,19 @@ fn load_project_config_internal<P: AsRef<Path>>(
                         eprintln!(
                             "Agent unsealing failed: {e}, falling back to local keystore"
                         );
-                        // Use the already-loaded keypair
-                        crate::crypto::open_repository_key(&sealed_key, &user_keypair)?
+                        // SUITE-01 migration: dispatch through ClassicSuite instead of
+                        // the free function. The loaded config has already passed the
+                        // version check in ProjectConfig::load_from_file — any v2 file
+                        // would have been rejected before reaching here. Phase 2 will
+                        // switch this to `config.suite()?` + dyn dispatch.
+                        use crate::crypto::{ClassicSuite, CryptoSuite};
+                        ClassicSuite.open_repo_key(&sealed_key, &user_keypair)?
                     }
                 }
             } else {
-                // Use the already-loaded keypair
-                crate::crypto::open_repository_key(&sealed_key, &user_keypair)?
+                // Use the already-loaded keypair (via ClassicSuite — see note above).
+                use crate::crypto::{ClassicSuite, CryptoSuite};
+                ClassicSuite.open_repo_key(&sealed_key, &user_keypair)?
             };
 
             Ok((config, repository_key, project_root))
@@ -554,5 +560,27 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             err.contains("this project requires sss v2.0 or newer"),
             "SUITE-04 error must surface through detect_config_format; got: {err}"
         );
+    }
+
+    // --- SUITE-01 Plan 01-04: wire-format compatibility anchor ---
+
+    #[test]
+    fn test_load_via_classic_suite_reads_legacy_free_function_output() {
+        // Wire-format compatibility check: a sealed-key produced by the now
+        // #[deprecated] free `seal_repository_key` function MUST be readable
+        // by ClassicSuite::open_repo_key. This is the core invariant the
+        // migration preserves — existing .sss.toml files created before this
+        // phase continue to open unchanged.
+        use crate::crypto::{ClassicSuite, CryptoSuite, KeyPair, RepositoryKey};
+
+        let keypair = KeyPair::generate().unwrap();
+        let repo_key = RepositoryKey::new();
+
+        #[allow(deprecated)]
+        let sealed_via_free =
+            crate::crypto::seal_repository_key(&repo_key, &keypair.public_key).unwrap();
+
+        let opened_via_trait = ClassicSuite.open_repo_key(&sealed_via_free, &keypair).unwrap();
+        assert_eq!(repo_key.to_base64(), opened_via_trait.to_base64());
     }
 }

@@ -12,7 +12,7 @@ use sss::agent_policy::{PolicyDecision, PolicyManager, UserDecision};
 use sss::agent_protocol::{AgentRequest, AgentResponse, RequestType, ResponseStatus};
 use sss::askpass::{prompt_user, AskpassConfig};
 use sss::audit_log::{AuditEvent, AuditLogger, RateLimiter};
-use sss::crypto::{open_repository_key, KeyPair};
+use sss::crypto::{ClassicSuite, CryptoSuite, KeyPair};
 use sss::keystore::{get_passphrase_or_prompt, Keystore};
 
 /// SSS Agent - Key Management Daemon
@@ -221,7 +221,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
                 UserDecision::DenyAll => AgentResponse::locked(),
                 UserDecision::AllowOnce | UserDecision::AllowAlways => {
                     // Unseal the repository key
-                    match open_repository_key(&sealed_key, &state.keypair) {
+                    match ClassicSuite.open_repo_key(&sealed_key, &state.keypair) {
                         Ok(repo_key) => {
                             state
                                 .audit_logger

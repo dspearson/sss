@@ -9,7 +9,7 @@ use crate::{
     commands::utils::{create_keystore, get_password_if_protected, get_system_username},
     config::get_project_config_path,
     constants::{DEFAULT_USERNAME_FALLBACK, ERR_NO_PROJECT_CONFIG},
-    crypto::{open_repository_key, PublicKey},
+    crypto::{ClassicSuite, CryptoSuite, PublicKey},
     project::ProjectConfig,
 };
 
@@ -99,7 +99,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
         get_system_username().unwrap_or_else(|_| DEFAULT_USERNAME_FALLBACK.to_string());
 
     let sealed_key = config.get_sealed_key_for_user(&current_user)?;
-    let repository_key = open_repository_key(&sealed_key, &our_keypair)?;
+    let repository_key = ClassicSuite.open_repo_key(&sealed_key, &our_keypair)?;
 
     // Add the new user
     config.add_user(username, &public_key, &repository_key)?;
@@ -162,7 +162,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     let original_config = ProjectConfig::load_from_file(&config_path)?;
     let sealed_key = original_config.get_sealed_key_for_user(&current_user)?;
     let current_repository_key =
-        crate::crypto::open_repository_key(&sealed_key, &our_keypair)?;
+        ClassicSuite.open_repo_key(&sealed_key, &our_keypair)?;
 
     // Now perform the key rotation
     use crate::rotation::{RotationManager, RotationOptions};

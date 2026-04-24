@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::{
-    crypto::{seal_repository_key, PublicKey, RepositoryKey},
+    crypto::{ClassicSuite, CryptoSuite, PublicKey, RepositoryKey},
     processor::Processor,
     project::{ProjectConfig, UserConfig},
     scanner::{FileScanner, ScanResult},
@@ -363,7 +363,7 @@ impl RotationManager {
 
         for (username, user_config) in &config.users {
             let public_key = PublicKey::from_base64(&user_config.public)?;
-            let sealed_key = seal_repository_key(new_key, &public_key)?;
+            let sealed_key = ClassicSuite.seal_repo_key(new_key, &public_key)?;
 
             let updated_user_config = UserConfig {
                 public: user_config.public.clone(),

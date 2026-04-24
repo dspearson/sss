@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::crypto::{seal_repository_key, PublicKey, RepositoryKey, Suite};
+use crate::crypto::{ClassicSuite, CryptoSuite, PublicKey, RepositoryKey, Suite};
 use crate::{error_helpers, toml_helpers};
 
 /// A user's configuration in the project
@@ -153,8 +153,10 @@ impl ProjectConfig {
         // Generate a new repository key
         let repository_key = RepositoryKey::new();
 
-        // Seal the repository key for this user
-        let sealed_key = seal_repository_key(&repository_key, user_public_key)?;
+        // Seal the repository key for this user via the CryptoSuite trait
+        // (ClassicSuite is the only concrete suite in Phase 1; Phase 2 will
+        // route this through `config.suite()?` once HybridSuite lands).
+        let sealed_key = ClassicSuite.seal_repo_key(&repository_key, user_public_key)?;
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
@@ -236,8 +238,8 @@ impl ProjectConfig {
             return Err(anyhow!("User '{username}' already exists in project"));
         }
 
-        // Seal the repository key for this new user
-        let sealed_key = seal_repository_key(repository_key, user_public_key)?;
+        // Seal the repository key for this new user via the CryptoSuite trait.
+        let sealed_key = ClassicSuite.seal_repo_key(repository_key, user_public_key)?;
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),
@@ -825,5 +827,25 @@ created = "2026-01-01T00:00:00Z"
         cfg.version = "3.14".to_string();
         let err = cfg.suite().unwrap_err().to_string();
         assert!(err.contains("unknown .sss.toml version"));
+    }
+
+    // --- SUITE-01 Plan 01-04: ClassicSuite round-trip via production path ---
+
+    #[test]
+    fn test_project_new_seals_via_classic_suite_round_trip() {
+        // ProjectConfig::new now seals via ClassicSuite (the CryptoSuite trait);
+        // this test proves the trait-based open path reads what the trait-based
+        // seal path writes, on the wire-format stored in .sss.toml.
+        use crate::crypto::CryptoSuite;
+        let keypair = KeyPair::generate().unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let sealed = config.get_sealed_key_for_user("alice").unwrap();
+
+        let suite = ClassicSuite;
+        let opened = suite.open_repo_key(&sealed, &keypair).unwrap();
+        // Round-trip check: re-seal with the same key, must be openable.
+        let resealed = suite.seal_repo_key(&opened, &keypair.public_key).unwrap();
+        let reopened = suite.open_repo_key(&resealed, &keypair).unwrap();
+        assert_eq!(opened.to_base64(), reopened.to_base64());
     }
 }

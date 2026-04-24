@@ -247,6 +247,10 @@ const NONCE_SIZE: usize = SYMMETRIC_NONCE_SIZE;
 pub type Key = RepositoryKey;
 
 /// Seal a repository key for a user (using `crypto_box_seal`)
+#[deprecated(
+    since = "2.0.0",
+    note = "use `ClassicSuite.seal_repo_key(...)` via the `CryptoSuite` trait. This free function is retained for existing integration tests that assert wire-format compatibility; new code must go through the trait so Phase 2's hybrid suite can plug in without source edits."
+)]
 pub fn seal_repository_key(
     repo_key: &RepositoryKey,
     user_public_key: &PublicKey,
@@ -273,6 +277,10 @@ pub fn seal_repository_key(
 }
 
 /// Open a sealed repository key (using `crypto_box_seal_open`)
+#[deprecated(
+    since = "2.0.0",
+    note = "use `ClassicSuite.open_repo_key(...)` via the `CryptoSuite` trait. This free function is retained for existing integration tests that assert wire-format compatibility; new code must go through the trait so Phase 2's hybrid suite can plug in without source edits."
+)]
 pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<RepositoryKey> {
     ensure_sodium_init();
     use base64::prelude::*;
@@ -556,6 +564,12 @@ use crate::crypto::suite::CryptoSuite;
 pub struct ClassicSuite;
 
 impl CryptoSuite for ClassicSuite {
+    // Delegates to the free function by design; the free function is the
+    // canonical byte-for-byte reference for wire compatibility with
+    // pre-v2 .sss.toml files. The free function carries `#[deprecated]`
+    // to nudge new callers to the trait — but this delegation is the
+    // reason that deprecation note exists, so we silence the lint here.
+    #[allow(deprecated)]
     fn seal_repo_key(
         &self,
         repo_key: &RepositoryKey,
@@ -567,6 +581,7 @@ impl CryptoSuite for ClassicSuite {
         seal_repository_key(repo_key, user_public_key)
     }
 
+    #[allow(deprecated)]
     fn open_repo_key(
         &self,
         sealed_key: &str,
@@ -578,6 +593,9 @@ impl CryptoSuite for ClassicSuite {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)] // Tests deliberately exercise the deprecated free
+                          // seal/open functions to lock in wire-format
+                          // compatibility — this is the byte-for-byte anchor.
     use super::*;
 
     #[test]
@@ -1069,6 +1087,9 @@ mod tests {
 
 #[cfg(test)]
 mod classic_suite_tests {
+    #![allow(deprecated)] // test_classic_suite_byte_identical_to_free_function
+                          // deliberately invokes the deprecated free function
+                          // to prove the trait impl matches it byte-for-byte.
     use super::*;
     use crate::crypto::suite::CryptoSuite;
 

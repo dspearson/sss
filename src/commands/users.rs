@@ -113,7 +113,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let username = sub_matches.get_one::<String>("username").unwrap();
 
-    // Load project config
+    // Load project config once.
     let config_path = get_project_config_path()?;
     let mut config = ProjectConfig::load_from_file(&config_path)?;
 
@@ -129,7 +129,17 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
         ));
     }
 
-    // Remove user from config first
+    // Capture the current user's sealed repository key BEFORE any in-memory
+    // mutation — otherwise removing the target user from the map first would
+    // be brittle (today's rotation path reloads from disk, but that is an
+    // implementation detail we should not rely on here).
+    let current_user =
+        get_system_username().unwrap_or_else(|_| DEFAULT_USERNAME_FALLBACK.to_string());
+    let sealed_key = config.get_sealed_key_for_user(&current_user)?;
+
+    // Now it is safe to remove the user from the in-memory copy. `rotation`
+    // rewrites the user map wholesale from disk, but keeping the local state
+    // honest makes future refactors safer.
     config.remove_user(username)?;
 
     println!("Removing user '{username}' from project...");
@@ -153,14 +163,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     )?;
     let our_keypair = keystore.get_current_keypair(password_str.as_deref())?;
 
-    // Get our sealed repository key and decrypt it
-    let current_user =
-        get_system_username().unwrap_or_else(|_| DEFAULT_USERNAME_FALLBACK.to_string());
-
-    // We need to get the current repository key before removing the user
-    // So we need to reload the original config
-    let original_config = ProjectConfig::load_from_file(&config_path)?;
-    let sealed_key = original_config.get_sealed_key_for_user(&current_user)?;
+    // Decrypt the sealed repository key captured above.
     let current_repository_key =
         ClassicSuite.open_repo_key(&sealed_key, &our_keypair)?;
 

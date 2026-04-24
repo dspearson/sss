@@ -37,8 +37,8 @@ fn test_store_and_retrieve_password_protected_keypair() -> Result<()> {
     let retrieved = keystore.load_keypair(&key_id, Some(password))?;
 
     // Keys should match
-    assert_eq!(keypair.public_key.to_base64(), retrieved.public_key.to_base64());
-    assert_eq!(keypair.secret_key.to_base64(), retrieved.secret_key.to_base64());
+    assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
+    assert_eq!(keypair.secret_key().unwrap().to_base64(), retrieved.secret_key().unwrap().to_base64());
 
     Ok(())
 }
@@ -55,8 +55,8 @@ fn test_store_and_retrieve_passwordless_keypair() -> Result<()> {
     let retrieved = keystore.load_keypair(&key_id, None)?;
 
     // Keys should match
-    assert_eq!(keypair.public_key.to_base64(), retrieved.public_key.to_base64());
-    assert_eq!(keypair.secret_key.to_base64(), retrieved.secret_key.to_base64());
+    assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
+    assert_eq!(keypair.secret_key().unwrap().to_base64(), retrieved.secret_key().unwrap().to_base64());
 
     Ok(())
 }
@@ -108,7 +108,7 @@ fn test_change_passphrase() -> Result<()> {
 
     // New password should work
     let retrieved = keystore.load_keypair(&key_id, Some(new_password))?;
-    assert_eq!(keypair.public_key.to_base64(), retrieved.public_key.to_base64());
+    assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
 }
@@ -128,7 +128,7 @@ fn test_add_passphrase_to_passwordless_key() -> Result<()> {
     // Should now require password
     assert!(keystore.load_keypair(&key_id, None).is_err());
     let retrieved = keystore.load_keypair(&key_id, Some(new_password))?;
-    assert_eq!(keypair.public_key.to_base64(), retrieved.public_key.to_base64());
+    assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
 }
@@ -146,7 +146,7 @@ fn test_remove_passphrase() -> Result<()> {
 
     // Should now work without password
     let retrieved = keystore.load_keypair(&key_id, None)?;
-    assert_eq!(keypair.public_key.to_base64(), retrieved.public_key.to_base64());
+    assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
 }
@@ -207,12 +207,12 @@ fn test_current_key_management() -> Result<()> {
 
     // Most recent should be current (key_id2)
     let current = keystore.get_current_keypair(Some("pass2"))?;
-    assert_eq!(current.public_key.to_base64(), keypair2.public_key.to_base64());
+    assert_eq!(current.public_key().to_base64(), keypair2.public_key().to_base64());
 
     // Switch to key_id1
     keystore.set_current_key(&key_id1)?;
     let current = keystore.get_current_keypair(Some("pass1"))?;
-    assert_eq!(current.public_key.to_base64(), keypair1.public_key.to_base64());
+    assert_eq!(current.public_key().to_base64(), keypair1.public_key().to_base64());
 
     Ok(())
 }
@@ -246,7 +246,7 @@ fn test_keypair_metadata_preserved() -> Result<()> {
 
     // Verify key exists and can be loaded
     let loaded = keystore.load_keypair(&key_id, Some("password"))?;
-    assert_eq!(loaded.public_key.to_base64(), keypair.public_key.to_base64());
+    assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
 
     // Verify key ID is in the list
     let all_keys = keystore.list_key_ids()?;

@@ -35,10 +35,10 @@ fn create_test_project_with_files(
     // Create project config with a user
     let keypair = KeyPair::generate()?;
     let repository_key = RepositoryKey::new();
-    let mut config = ProjectConfig::new("testuser", &keypair.public_key)?;
+    let mut config = ProjectConfig::new("testuser", &keypair.public_key())?;
 
     // Seal repository key for the user
-    let sealed_key = sss::crypto::seal_repository_key(&repository_key, &keypair.public_key)?;
+    let sealed_key = sss::crypto::seal_repository_key(&repository_key, &keypair.public_key())?;
     if let Some(user) = config.users.get_mut("testuser") {
         user.sealed_key = sealed_key;
     }
@@ -282,9 +282,9 @@ fn test_empty_repository_rotation() -> Result<()> {
     // Create project config without any encrypted files
     let keypair = KeyPair::generate()?;
     let repository_key = RepositoryKey::new();
-    let mut config = ProjectConfig::new("testuser", &keypair.public_key)?;
+    let mut config = ProjectConfig::new("testuser", &keypair.public_key())?;
 
-    let sealed_key = sss::crypto::seal_repository_key(&repository_key, &keypair.public_key)?;
+    let sealed_key = sss::crypto::seal_repository_key(&repository_key, &keypair.public_key())?;
     if let Some(user) = config.users.get_mut("testuser") {
         user.sealed_key = sealed_key;
     }
@@ -330,9 +330,9 @@ fn test_rotation_updates_all_user_sealed_keys() -> Result<()> {
     let keypair3 = KeyPair::generate()?;
     let repository_key = RepositoryKey::new();
 
-    let mut config = ProjectConfig::new("user1", &keypair1.public_key)?;
-    config.add_user("user2", &keypair2.public_key, &repository_key)?;
-    config.add_user("user3", &keypair3.public_key, &repository_key)?;
+    let mut config = ProjectConfig::new("user1", &keypair1.public_key())?;
+    config.add_user("user2", &keypair2.public_key(), &repository_key)?;
+    config.add_user("user3", &keypair3.public_key(), &repository_key)?;
 
     config.save_to_file(&config_path)?;
 

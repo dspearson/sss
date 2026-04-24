@@ -14,7 +14,7 @@ use sss::project::ProjectConfig;
 /// Helper to create a test ProjectConfig
 fn create_test_config() -> Result<ProjectConfig> {
     let keypair = KeyPair::generate()?;
-    ProjectConfig::new("testuser", &keypair.public_key)
+    ProjectConfig::new("testuser", &keypair.public_key())
 }
 
 /// Test that load_project_config() finds config in current directory

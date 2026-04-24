@@ -15,7 +15,7 @@ fn test_project_config_secrets_filename_precedence() -> anyhow::Result<()> {
 
     // Create project config with custom secrets_filename
     let keypair = KeyPair::generate()?;
-    let mut project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let mut project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     project_config.secrets_filename = Some("my_secrets".to_string());
 
     let config_path = temp_dir.path().join(".sss.toml");
@@ -45,7 +45,7 @@ fn test_user_settings_secrets_filename_fallback() -> anyhow::Result<()> {
 
     // Create project config without custom secrets_filename
     let keypair = KeyPair::generate()?;
-    let project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     let config_path = temp_dir.path().join(".sss.toml");
     project_config.save_to_file(&config_path)?;
 
@@ -73,7 +73,7 @@ fn test_default_secrets_filename() -> anyhow::Result<()> {
 
     // Create project config without custom secrets_filename
     let keypair = KeyPair::generate()?;
-    let project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     let config_path = temp_dir.path().join(".sss.toml");
     project_config.save_to_file(&config_path)?;
 
@@ -96,7 +96,7 @@ fn test_project_config_secrets_suffix_precedence() -> anyhow::Result<()> {
 
     // Create project config with custom secrets_suffix
     let keypair = KeyPair::generate()?;
-    let mut project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let mut project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     project_config.secrets_suffix = Some(".sealed".to_string());
 
     let config_path = temp_dir.path().join(".sss.toml");
@@ -126,7 +126,7 @@ fn test_user_settings_secrets_suffix_fallback() -> anyhow::Result<()> {
 
     // Create project config without custom secrets_suffix
     let keypair = KeyPair::generate()?;
-    let project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     let config_path = temp_dir.path().join(".sss.toml");
     project_config.save_to_file(&config_path)?;
 
@@ -154,7 +154,7 @@ fn test_default_secrets_suffix() -> anyhow::Result<()> {
 
     // Create project config without custom secrets_suffix
     let keypair = KeyPair::generate()?;
-    let project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     let config_path = temp_dir.path().join(".sss.toml");
     project_config.save_to_file(&config_path)?;
 
@@ -258,7 +258,7 @@ fn test_both_config_options_together() -> anyhow::Result<()> {
 
     // Create project config with both custom settings
     let keypair = KeyPair::generate()?;
-    let mut project_config = ProjectConfig::new("alice", &keypair.public_key)?;
+    let mut project_config = ProjectConfig::new("alice", &keypair.public_key())?;
     project_config.secrets_filename = Some("passwords".to_string());
     project_config.secrets_suffix = Some(".sealed".to_string());
 

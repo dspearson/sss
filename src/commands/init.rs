@@ -63,11 +63,11 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     };
 
     // Initialize project
-    init_project_config(config_path, &username, &keypair.public_key, crypto)?;
+    init_project_config(config_path, &username, &keypair.public_key(), crypto)?;
 
     println!("Project initialized successfully!");
     println!("Username: {username}");
-    println!("Public key: {}...", &keypair.public_key.to_base64()[..32]);
+    println!("Public key: {}...", &keypair.public_key().to_base64()[..32]);
 
     Ok(())
 }

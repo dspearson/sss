@@ -40,7 +40,7 @@ fn init_project_with_alice(
     let alice_keypair = KeyPair::generate()?;
 
     // ProjectConfig::new generates a RepositoryKey and seals it for Alice.
-    let config = ProjectConfig::new("alice", &alice_keypair.public_key)?;
+    let config = ProjectConfig::new("alice", &alice_keypair.public_key())?;
     let config_path = project_root.join(".sss.toml");
     config.save_to_file(&config_path)?;
 
@@ -92,7 +92,7 @@ fn test_complete_multi_user_lifecycle() -> Result<()> {
 
     {
         let mut config = ProjectConfig::load_from_file(&config_path)?;
-        config.add_user("bob", &bob_keypair.public_key, &repository_key)?;
+        config.add_user("bob", &bob_keypair.public_key(), &repository_key)?;
         config.save_to_file(&config_path)?;
     }
 
@@ -323,7 +323,7 @@ fn test_user_membership_lifecycle() -> Result<()> {
     let bob_keypair = KeyPair::generate()?;
     {
         let mut config = ProjectConfig::load_from_file(&config_path)?;
-        config.add_user("bob", &bob_keypair.public_key, &repository_key)?;
+        config.add_user("bob", &bob_keypair.public_key(), &repository_key)?;
         config.save_to_file(&config_path)?;
     }
 
@@ -331,7 +331,7 @@ fn test_user_membership_lifecycle() -> Result<()> {
     let charlie_keypair = KeyPair::generate()?;
     {
         let mut config = ProjectConfig::load_from_file(&config_path)?;
-        config.add_user("charlie", &charlie_keypair.public_key, &repository_key)?;
+        config.add_user("charlie", &charlie_keypair.public_key(), &repository_key)?;
         config.save_to_file(&config_path)?;
     }
 
@@ -445,8 +445,8 @@ fn test_sealed_keys_unique_per_user() -> Result<()> {
     let alice_keypair = KeyPair::generate()?;
     let bob_keypair = KeyPair::generate()?;
 
-    let alice_sealed = seal_repository_key(&repo_key, &alice_keypair.public_key)?;
-    let bob_sealed = seal_repository_key(&repo_key, &bob_keypair.public_key)?;
+    let alice_sealed = seal_repository_key(&repo_key, &alice_keypair.public_key())?;
+    let bob_sealed = seal_repository_key(&repo_key, &bob_keypair.public_key())?;
 
     assert_ne!(
         alice_sealed, bob_sealed,

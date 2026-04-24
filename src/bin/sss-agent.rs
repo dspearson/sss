@@ -66,7 +66,7 @@ fn main() -> Result<()> {
 
     audit_logger.log(
         AuditEvent::KeyLoaded,
-        &format!("Loaded key: {}", keypair.public_key.to_base64()),
+        &format!("Loaded key: {}", keypair.public_key().to_base64()),
     )?;
 
     // Create agent state

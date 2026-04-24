@@ -16,26 +16,26 @@ fn test_find_user_by_public_key_matching() -> anyhow::Result<()> {
     let bob_keypair = KeyPair::generate()?;
 
     // Create project with both users
-    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key)?;
+    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key())?;
     let alice_sealed = config.get_sealed_key_for_user("alice")?;
     let repository_key = sss::crypto::open_repository_key(&alice_sealed, &alice_keypair)?;
 
-    config.add_user("bob", &bob_keypair.public_key, &repository_key)?;
+    config.add_user("bob", &bob_keypair.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Reload config
     let loaded_config = ProjectConfig::load_from_file(&config_path)?;
 
     // Test that we can find users by their public keys
-    let alice_found = loaded_config.find_user_by_public_key(&alice_keypair.public_key);
-    let bob_found = loaded_config.find_user_by_public_key(&bob_keypair.public_key);
+    let alice_found = loaded_config.find_user_by_public_key(&alice_keypair.public_key());
+    let bob_found = loaded_config.find_user_by_public_key(&bob_keypair.public_key());
 
     assert_eq!(alice_found, Some("alice".to_string()));
     assert_eq!(bob_found, Some("bob".to_string()));
 
     // Test with a keypair that's not in the project
     let unknown_keypair = KeyPair::generate()?;
-    let unknown_found = loaded_config.find_user_by_public_key(&unknown_keypair.public_key);
+    let unknown_found = loaded_config.find_user_by_public_key(&unknown_keypair.public_key());
     assert_eq!(unknown_found, None);
 
     Ok(())
@@ -66,9 +66,9 @@ fn test_keystore_multiple_keypairs() -> anyhow::Result<()> {
     let loaded2 = keystore.load_keypair(&key_id2, None)?;
     let loaded3 = keystore.load_keypair(&key_id3, None)?;
 
-    assert_eq!(loaded1.public_key.to_base64(), keypair1.public_key.to_base64());
-    assert_eq!(loaded2.public_key.to_base64(), keypair2.public_key.to_base64());
-    assert_eq!(loaded3.public_key.to_base64(), keypair3.public_key.to_base64());
+    assert_eq!(loaded1.public_key().to_base64(), keypair1.public_key().to_base64());
+    assert_eq!(loaded2.public_key().to_base64(), keypair2.public_key().to_base64());
+    assert_eq!(loaded3.public_key().to_base64(), keypair3.public_key().to_base64());
 
     Ok(())
 }
@@ -97,12 +97,12 @@ fn test_keystore_get_all_keypairs() -> anyhow::Result<()> {
     // Verify all public keys match
     let public_keys: Vec<String> = all_keypairs
         .iter()
-        .map(|kp| kp.public_key.to_base64())
+        .map(|kp| kp.public_key().to_base64())
         .collect();
 
-    assert!(public_keys.contains(&keypair1.public_key.to_base64()));
-    assert!(public_keys.contains(&keypair2.public_key.to_base64()));
-    assert!(public_keys.contains(&keypair3.public_key.to_base64()));
+    assert!(public_keys.contains(&keypair1.public_key().to_base64()));
+    assert!(public_keys.contains(&keypair2.public_key().to_base64()));
+    assert!(public_keys.contains(&keypair3.public_key().to_base64()));
 
     Ok(())
 }
@@ -119,12 +119,12 @@ fn test_unseal_with_different_authorized_keys() -> anyhow::Result<()> {
     let charlie_keypair = KeyPair::generate()?;
 
     // Create project with all three users
-    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key)?;
+    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key())?;
     let alice_sealed = config.get_sealed_key_for_user("alice")?;
     let repository_key = sss::crypto::open_repository_key(&alice_sealed, &alice_keypair)?;
 
-    config.add_user("bob", &bob_keypair.public_key, &repository_key)?;
-    config.add_user("charlie", &charlie_keypair.public_key, &repository_key)?;
+    config.add_user("bob", &bob_keypair.public_key(), &repository_key)?;
+    config.add_user("charlie", &charlie_keypair.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Each user should be able to unseal their sealed key and get the same repository key
@@ -166,7 +166,7 @@ fn test_multi_key_scenario_simulation() -> anyhow::Result<()> {
     let bob_keypair = KeyPair::generate()?;
 
     // Current project has Bob as a user
-    let config = ProjectConfig::new("bob", &bob_keypair.public_key)?;
+    let config = ProjectConfig::new("bob", &bob_keypair.public_key())?;
     config.save_to_file(&config_path)?;
 
     // Simulate having multiple keys available
@@ -178,7 +178,7 @@ fn test_multi_key_scenario_simulation() -> anyhow::Result<()> {
     let mut matched_keypair = None;
 
     for keypair in &available_keys {
-        if let Some(username) = loaded_config.find_user_by_public_key(&keypair.public_key) {
+        if let Some(username) = loaded_config.find_user_by_public_key(&keypair.public_key()) {
             matched_user = Some(username);
             matched_keypair = Some(keypair.clone());
             break;
@@ -190,7 +190,7 @@ fn test_multi_key_scenario_simulation() -> anyhow::Result<()> {
     assert!(matched_keypair.is_some());
 
     let matched = matched_keypair.unwrap();
-    assert_eq!(matched.public_key.to_base64(), bob_keypair.public_key.to_base64());
+    assert_eq!(matched.public_key().to_base64(), bob_keypair.public_key().to_base64());
 
     Ok(())
 }

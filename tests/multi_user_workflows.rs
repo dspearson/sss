@@ -40,7 +40,7 @@ impl MultiUserProject {
         keystore.store_keypair(&keypair, None)?;
 
         // Create project config with first user
-        let mut config = ProjectConfig::new(first_username, &keypair.public_key)?;
+        let mut config = ProjectConfig::new(first_username, &keypair.public_key())?;
 
         let config_path = project_root.join(".sss.toml");
         config.save_to_file(&config_path)?;
@@ -63,7 +63,7 @@ impl MultiUserProject {
             let keypair = KeyPair::generate()?;
             keystore.store_keypair(&keypair, None)?;
 
-            config.add_user(username, &keypair.public_key, &repository_key)?;
+            config.add_user(username, &keypair.public_key(), &repository_key)?;
 
             users.push(UserContext {
                 username: username.to_string(),
@@ -180,7 +180,7 @@ fn test_add_user_to_existing_project() -> anyhow::Result<()> {
 
     config.add_user(
         "charlie",
-        &charlie_keypair.public_key,
+        &charlie_keypair.public_key(),
         &project.repository_key,
     )?;
     config.save_to_file(&project.config_path)?;
@@ -254,7 +254,7 @@ fn test_encrypted_content_persists_across_user_changes() -> anyhow::Result<()> {
     let charlie_keypair = KeyPair::generate()?;
     config.add_user(
         "charlie",
-        &charlie_keypair.public_key,
+        &charlie_keypair.public_key(),
         &project.repository_key,
     )?;
     config.save_to_file(&project.config_path)?;
@@ -344,8 +344,8 @@ fn test_user_public_key_storage() -> anyhow::Result<()> {
     let alice_config = config.users.get("alice").unwrap();
     let bob_config = config.users.get("bob").unwrap();
 
-    assert_eq!(alice_config.public, alice.keypair.public_key.to_base64());
-    assert_eq!(bob_config.public, bob.keypair.public_key.to_base64());
+    assert_eq!(alice_config.public, alice.keypair.public_key().to_base64());
+    assert_eq!(bob_config.public, bob.keypair.public_key().to_base64());
 
     Ok(())
 }
@@ -358,7 +358,7 @@ fn test_sequential_user_operations() -> anyhow::Result<()> {
 
     // Start with one user
     let alice_keypair = KeyPair::generate()?;
-    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key)?;
+    let mut config = ProjectConfig::new("alice", &alice_keypair.public_key())?;
     config.save_to_file(&config_path)?;
 
     // Get repository key
@@ -367,12 +367,12 @@ fn test_sequential_user_operations() -> anyhow::Result<()> {
 
     // Add second user
     let bob_keypair = KeyPair::generate()?;
-    config.add_user("bob", &bob_keypair.public_key, &repository_key)?;
+    config.add_user("bob", &bob_keypair.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Add third user
     let charlie_keypair = KeyPair::generate()?;
-    config.add_user("charlie", &charlie_keypair.public_key, &repository_key)?;
+    config.add_user("charlie", &charlie_keypair.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Verify all three users exist

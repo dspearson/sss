@@ -169,8 +169,8 @@ fn test_keypair_generation_randomness() {
 
     for _ in 0..100 {
         let keypair = KeyPair::generate().unwrap();
-        let pub_key = keypair.public_key.to_base64();
-        let sec_key = keypair.secret_key.to_base64();
+        let pub_key = keypair.public_key().to_base64();
+        let sec_key = keypair.secret_key().unwrap().to_base64();
 
         assert!(public_keys.insert(pub_key), "Duplicate public key generated");
         assert!(secret_keys.insert(sec_key), "Duplicate secret key generated");

@@ -21,7 +21,7 @@ fn setup_test_project() -> (TempDir, String, RepositoryKey) {
     // Create project config using Default
     let mut config = ProjectConfig::default();
     config
-        .add_user(&username, &keypair.public_key, &repository_key)
+        .add_user(&username, &keypair.public_key(), &repository_key)
         .expect("Failed to add user");
 
     // Save config to temp directory

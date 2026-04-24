@@ -1087,9 +1087,13 @@ mod tests {
 
 #[cfg(test)]
 mod classic_suite_tests {
-    #![allow(deprecated)] // test_classic_suite_byte_identical_to_free_function
+    #![allow(deprecated)] // test_classic_suite_seal_free_outputs_round_trip_equivalently
                           // deliberately invokes the deprecated free function
-                          // to prove the trait impl matches it byte-for-byte.
+                          // to prove the trait impl round-trips to the same
+                          // repo key (byte-identity is impossible because
+                          // crypto_box_seal randomises the ephemeral keypair;
+                          // the wire-format anchor lives in
+                          // config.rs::test_load_via_classic_suite_reads_legacy_free_function_output).
     use super::*;
     use crate::crypto::suite::CryptoSuite;
 
@@ -1114,16 +1118,20 @@ mod classic_suite_tests {
     }
 
     #[test]
-    fn test_classic_suite_byte_identical_to_free_function() {
-        // The trait method MUST produce the same bytes as the free function
-        // so no existing ciphertext becomes unreadable and tests remain green.
+    fn test_classic_suite_seal_free_outputs_round_trip_equivalently() {
+        // Byte-identity is impossible: `crypto_box_seal` randomises the
+        // ephemeral keypair on every call, so successive seals of the same
+        // inputs will DIFFER. We prove open-equivalence instead: both the
+        // trait and the free function produce ciphertexts that open to the
+        // same repo key under the recipient's keypair.
+        //
+        // The true wire-format anchor — that a *prior-format* ciphertext
+        // produced by the deprecated free function opens under the trait —
+        // lives in
+        // config.rs::test_load_via_classic_suite_reads_legacy_free_function_output.
         let kp = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
         let via_trait = ClassicSuite.seal_repo_key(&repo_key, &kp.public_key).unwrap();
-        // crypto_box_seal includes a random ephemeral keypair so successive
-        // seals of the same inputs will DIFFER; we can only prove round-trip
-        // equivalence, not output equality. But both outputs MUST be openable
-        // by the recipient's keypair and MUST decode to the same repo key.
         let via_free = seal_repository_key(&repo_key, &kp.public_key).unwrap();
         let opened_trait = ClassicSuite.open_repo_key(&via_trait, &kp).unwrap();
         let opened_free = ClassicSuite.open_repo_key(&via_free, &kp).unwrap();

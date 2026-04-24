@@ -22,7 +22,7 @@ const SEALED_BOX_OVERHEAD: usize = sodium::crypto_box_SEALBYTES as usize;
 const BLAKE2B_PERSONALBYTES: usize = sodium::crypto_generichash_blake2b_PERSONALBYTES as usize;
 
 // Ensure libsodium is initialised
-fn ensure_sodium_init() {
+pub(crate) fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
@@ -104,6 +104,15 @@ impl RepositoryKey {
         Ok(Self(key))
     }
 
+    /// Direct-copy 32-byte array accessor. Used by the hybrid suite's AEAD
+    /// seal path (which wants the raw key bytes as the plaintext) without
+    /// going through the `to_base64` allocation.
+    #[cfg(feature = "hybrid")]
+    #[must_use]
+    pub(crate) fn to_bytes(&self) -> [u8; SYMMETRIC_KEY_SIZE] {
+        self.0
+    }
+
     pub fn from_base64(encoded: &str) -> Result<Self> {
         let decoded = validate_and_decode_base64(encoded, SYMMETRIC_KEY_SIZE, "key")?;
         let mut key_bytes = [0u8; SYMMETRIC_KEY_SIZE];
@@ -172,9 +181,9 @@ impl PublicKey {
                 let bytes = BASE64_STANDARD.decode(encoded).map_err(|e| {
                     anyhow!("Failed to decode base64 hybrid public key: {e}")
                 })?;
-                // Length validation against HYBRID_PUBLIC_KEY_SIZE is added
-                // in 02-03; 02-02 accepts any non-32-length payload so a
-                // v2.0 config does not silently fall back to Classic.
+                // Downgrade-attempt guard: a classic-length payload inside a
+                // v2.0 config is rejected with an actionable error before
+                // the length-checking constructor runs.
                 if bytes.len() == PUBLIC_KEY_SIZE {
                     return Err(anyhow!(
                         "hybrid public key decoded to classic length ({} bytes) — \
@@ -184,7 +193,7 @@ impl PublicKey {
                     ));
                 }
                 Ok(Self::Hybrid(
-                    crate::crypto::hybrid::HybridPublicKey::from_bytes_unchecked(bytes),
+                    crate::crypto::hybrid::HybridPublicKey::from_bytes(&bytes)?,
                 ))
             }
             #[cfg(not(feature = "hybrid"))]
@@ -1377,9 +1386,12 @@ mod classic_suite_tests {
     #[cfg(feature = "hybrid")]
     #[test]
     fn test_classic_suite_rejects_hybrid_public_key() {
+        use crate::constants::HYBRID_PUBLIC_KEY_SIZE;
         use crate::crypto::hybrid::HybridPublicKey;
         let repo_key = RepositoryKey::new();
-        let hybrid_pk = PublicKey::Hybrid(HybridPublicKey::from_bytes_unchecked(vec![0u8; 64]));
+        let hybrid_pk = PublicKey::Hybrid(
+            HybridPublicKey::from_bytes_unchecked(vec![0u8; HYBRID_PUBLIC_KEY_SIZE]),
+        );
         let err = ClassicSuite.seal_repo_key(&repo_key, &hybrid_pk).unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1391,10 +1403,12 @@ mod classic_suite_tests {
     #[cfg(feature = "hybrid")]
     #[test]
     fn test_classic_suite_rejects_hybrid_keypair() {
+        use crate::constants::{HYBRID_PUBLIC_KEY_SIZE, HYBRID_SECRET_KEY_SIZE};
         use crate::crypto::hybrid::HybridKeyPair;
+        use zeroize::Zeroizing;
         let kp = KeyPair::Hybrid(HybridKeyPair {
-            public_bytes: vec![0u8; 64],
-            secret_bytes: vec![0u8; 64],
+            public_bytes: [0u8; HYBRID_PUBLIC_KEY_SIZE],
+            secret_bytes: Zeroizing::new([0u8; HYBRID_SECRET_KEY_SIZE]),
         });
         let err = ClassicSuite.open_repo_key("AAAAAAAAAAAAAA==", &kp).unwrap_err();
         let msg = err.to_string();

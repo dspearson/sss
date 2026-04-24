@@ -9,14 +9,19 @@
 //! The `CryptoSuite` trait and `Suite` dispatch enum are the integration
 //! points Phase 2's hybrid implementation will plug into.
 pub mod classic;
+#[cfg(feature = "hybrid")]
+pub mod hybrid;
 pub mod suite;
 
 pub use classic::{
     decrypt, decrypt_from_base64, encrypt, encrypt_to_base64,
-    encrypt_to_base64_deterministic, open_repository_key, seal_repository_key, ClassicSuite, Key,
-    KeyPair, PublicKey, RepositoryKey, SecretKey,
+    encrypt_to_base64_deterministic, open_repository_key, seal_repository_key, ClassicKeyPair,
+    ClassicSuite, Key, KeyPair, PublicKey, RepositoryKey, SecretKey,
 };
 pub use suite::{CryptoSuite, Suite};
+
+#[cfg(feature = "hybrid")]
+pub use hybrid::{HybridKeyPair, HybridPublicKey};
 
 // Keep the internal `encrypt_internal` reachable from keystore etc. exactly
 // as before — it was `pub(crate)` in the old flat module and must remain so.

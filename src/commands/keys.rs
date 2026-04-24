@@ -54,7 +54,7 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
     let key_id = keystore.store_keypair(&keypair, password_option.as_deref())?;
 
     println!("Generated new keypair: {key_id}");
-    println!("Public key: {}", keypair.public_key.to_base64());
+    println!("Public key: {}", keypair.public_key().to_base64());
 
     if no_password {
         println!("Warning: Keypair stored without password protection. Consider using a passphrase for better security.");
@@ -172,7 +172,7 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
         // Show own public key from keystore
         let password_opt = get_password_if_protected(&keystore, "Enter passphrase: ")?;
         let keypair = keystore.get_current_keypair(password_opt.as_deref())?;
-        keypair.public_key.to_base64()
+        keypair.public_key().to_base64()
     };
 
     if show_fingerprint {
@@ -251,7 +251,7 @@ fn handle_keys_current(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
                 println!("Current key ID: {current_id}");
                 match keystore.get_current_keypair(None) {
                     Ok(keypair) => {
-                        println!("Public key: {}", keypair.public_key.to_base64());
+                        println!("Public key: {}", keypair.public_key().to_base64());
                     }
                     Err(_) => {
                         println!("(Key is password protected)");

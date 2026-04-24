@@ -128,7 +128,7 @@ impl TestEnv {
 
     fn init_project(&self, username: &str, keypair: &KeyPair) -> anyhow::Result<PathBuf> {
         let config_path = self.project_dir.join(".sss.toml");
-        let config = ProjectConfig::new(username, &keypair.public_key)?;
+        let config = ProjectConfig::new(username, &keypair.public_key())?;
         config.save_to_file(&config_path)?;
         Ok(config_path)
     }
@@ -184,7 +184,7 @@ fn test_users_add_respects_configured_username() -> anyhow::Result<()> {
 
     // Add second user
     let mut config = config;
-    config.add_user(second_user, &second_keypair.public_key, &repository_key)?;
+    config.add_user(second_user, &second_keypair.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Verify second user was added
@@ -369,7 +369,7 @@ fn test_users_remove_respects_configured_username() -> anyhow::Result<()> {
     let mut config = ProjectConfig::load_from_file(&config_path)?;
     let sealed_key = config.get_sealed_key_for_user(user1)?;
     let repository_key = sss::crypto::open_repository_key(&sealed_key, &keypair1)?;
-    config.add_user(user2, &keypair2.public_key, &repository_key)?;
+    config.add_user(user2, &keypair2.public_key(), &repository_key)?;
     config.save_to_file(&config_path)?;
 
     // Verify both users exist

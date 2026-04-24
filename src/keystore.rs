@@ -13,7 +13,7 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::crypto::{KeyPair, PublicKey, SecretKey};
+use crate::crypto::{ClassicKeyPair, KeyPair, PublicKey, SecretKey};
 use crate::kdf::{DerivedKey, KdfParams, Salt};
 use crate::keyring_support;
 
@@ -118,7 +118,7 @@ impl Keystore {
             let salt = Salt::new();
             let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)?;
 
-            let secret_key_str = keypair.secret_key.to_base64();
+            let secret_key_str = keypair.secret_key()?.to_base64();
             let encrypted_secret_key =
                 crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
             (encrypted_secret_key, Some(salt.to_base64()), true)
@@ -142,13 +142,13 @@ impl Keystore {
             eprintln!("   - Password protection (recommended)");
             eprintln!("   - System keyring (SSS_USE_KEYRING=true)");
             eprintln!();
-            (keypair.secret_key.to_base64(), None, false)
+            (keypair.secret_key()?.to_base64(), None, false)
         };
 
         // Handle keyring storage if enabled and no password provided
         let (final_encrypted_key, in_keyring) = if self.use_keyring && password.is_none() {
             // Store in system keyring instead of file
-            let secret_key_b64 = keypair.secret_key.to_base64();
+            let secret_key_b64 = keypair.secret_key()?.to_base64();
             keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)?;
             eprintln!("✓ Private key stored in system keyring");
             // Store placeholder in file
@@ -159,7 +159,7 @@ impl Keystore {
 
         let stored_keypair = StoredKeyPair {
             uuid: key_id.clone(),
-            public_key: keypair.public_key.to_base64(),
+            public_key: keypair.public_key().to_base64(),
             encrypted_secret_key: final_encrypted_key,
             salt,
             created_at: Utc::now(),
@@ -261,7 +261,7 @@ impl Keystore {
         }
 
         // Sort by creation time (most recent first)
-        keypairs.sort_by(|a, b| b.public_key.to_base64().cmp(&a.public_key.to_base64()));
+        keypairs.sort_by(|a, b| b.public_key().to_base64().cmp(&a.public_key().to_base64()));
 
         Ok(keypairs)
     }
@@ -332,7 +332,7 @@ impl Keystore {
         // Encrypt with new password
         let salt = Salt::new();
         let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)?;
-        let secret_key_str = keypair.secret_key.to_base64();
+        let secret_key_str = keypair.secret_key()?.to_base64();
         let encrypted_secret_key =
             crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
 
@@ -376,7 +376,7 @@ impl Keystore {
         let mut stored: StoredKeyPair = toml::from_str(&content)?;
 
         // Store secret key as plaintext (base64 encoded)
-        stored.encrypted_secret_key = keypair.secret_key.to_base64();
+        stored.encrypted_secret_key = keypair.secret_key()?.to_base64();
         stored.salt = None;
         stored.is_password_protected = false;
 
@@ -508,10 +508,10 @@ impl Keystore {
             SecretKey::from_base64(&stored.encrypted_secret_key)?
         };
 
-        Ok(KeyPair {
+        Ok(KeyPair::Classic(ClassicKeyPair {
             public_key,
             secret_key,
-        })
+        }))
     }
 }
 
@@ -596,12 +596,12 @@ mod tests {
         // Retrieve
         let retrieved = keystore.get_current_keypair(None)?;
         assert_eq!(
-            keypair.public_key.to_base64(),
-            retrieved.public_key.to_base64()
+            keypair.public_key().to_base64(),
+            retrieved.public_key().to_base64()
         );
         assert_eq!(
-            keypair.secret_key.to_base64(),
-            retrieved.secret_key.to_base64()
+            keypair.secret_key()?.to_base64(),
+            retrieved.secret_key()?.to_base64()
         );
 
         Ok(())
@@ -623,12 +623,12 @@ mod tests {
         // Should work with correct password
         let retrieved = keystore.get_current_keypair(Some(password))?;
         assert_eq!(
-            keypair.public_key.to_base64(),
-            retrieved.public_key.to_base64()
+            keypair.public_key().to_base64(),
+            retrieved.public_key().to_base64()
         );
         assert_eq!(
-            keypair.secret_key.to_base64(),
-            retrieved.secret_key.to_base64()
+            keypair.secret_key()?.to_base64(),
+            retrieved.secret_key()?.to_base64()
         );
 
         // Should fail with wrong password
@@ -657,8 +657,8 @@ mod tests {
         // Current should be keypair3 (latest stored)
         let current = keystore.get_current_keypair(None)?;
         assert_eq!(
-            keypair3.public_key.to_base64(),
-            current.public_key.to_base64()
+            keypair3.public_key().to_base64(),
+            current.public_key().to_base64()
         );
 
         // All should include all three keypairs

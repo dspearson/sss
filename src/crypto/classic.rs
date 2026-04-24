@@ -127,22 +127,92 @@ impl RepositoryKey {
     }
 }
 
-/// User's public key (for sealing repository keys)
+/// User's public key (for sealing repository keys).
+///
+/// Phase 2 widens this from a flat 32-byte newtype to a suite-aware enum.
+/// The `Classic` variant is always compiled and carries the legacy 32-byte
+/// X25519 payload. The `Hybrid` variant is gated behind the `hybrid` feature
+/// and carries the concatenated X448 + sntrup761 wire bytes.
 #[derive(Debug, Clone)]
-pub struct PublicKey([u8; PUBLIC_KEY_SIZE]);
+pub enum PublicKey {
+    Classic([u8; PUBLIC_KEY_SIZE]),
+    #[cfg(feature = "hybrid")]
+    Hybrid(crate::crypto::hybrid::HybridPublicKey),
+}
 
 impl PublicKey {
+    /// Decode a base64 public key. Classic-only path (32-byte payload) —
+    /// preserves the pre-Phase-2 API used by external integration tests
+    /// and keystore (classic keystore entries are always 32 bytes).
+    ///
+    /// For suite-aware decoding (that may produce `PublicKey::Hybrid`),
+    /// use [`PublicKey::decode_base64_for_suite`] instead.
     pub fn from_base64(encoded: &str) -> Result<Self> {
         let decoded = validate_and_decode_base64(encoded, PUBLIC_KEY_SIZE, "public key")?;
         let mut key_bytes = [0u8; PUBLIC_KEY_SIZE];
         key_bytes.copy_from_slice(&decoded);
-        Ok(Self(key_bytes))
+        Ok(Self::Classic(key_bytes))
     }
 
+    /// Suite-aware decoder — classic length -> `Classic`, hybrid length -> `Hybrid`.
+    ///
+    /// The repository `version` field drives this dispatch; see
+    /// `ProjectConfig::get_user_public_key` for the production caller. A
+    /// `version = "2.0"` config with a 32-byte payload is treated as a
+    /// possible downgrade attempt and rejected with an actionable error.
+    pub fn decode_base64_for_suite(
+        encoded: &str,
+        suite: crate::crypto::Suite,
+    ) -> Result<Self> {
+        match suite {
+            crate::crypto::Suite::Classic => Self::from_base64(encoded),
+            #[cfg(feature = "hybrid")]
+            crate::crypto::Suite::Hybrid => {
+                use base64::prelude::*;
+                let bytes = BASE64_STANDARD.decode(encoded).map_err(|e| {
+                    anyhow!("Failed to decode base64 hybrid public key: {e}")
+                })?;
+                // Length validation against HYBRID_PUBLIC_KEY_SIZE is added
+                // in 02-03; 02-02 accepts any non-32-length payload so a
+                // v2.0 config does not silently fall back to Classic.
+                if bytes.len() == PUBLIC_KEY_SIZE {
+                    return Err(anyhow!(
+                        "hybrid public key decoded to classic length ({} bytes) — \
+                         .sss.toml claims version = \"2.0\" but this user entry \
+                         looks classic; possible downgrade attempt?",
+                        bytes.len()
+                    ));
+                }
+                Ok(Self::Hybrid(
+                    crate::crypto::hybrid::HybridPublicKey::from_bytes_unchecked(bytes),
+                ))
+            }
+            #[cfg(not(feature = "hybrid"))]
+            crate::crypto::Suite::Hybrid => Err(anyhow!(
+                "hybrid suite requires the `hybrid` feature — rebuild with --features hybrid"
+            )),
+        }
+    }
+
+    /// Base64-encode the wire bytes for this public key. Classic variant
+    /// returns exactly the pre-Phase-2 32-byte base64; hybrid variant
+    /// returns the concatenated X448||sntrup761 base64.
     #[must_use]
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
-        BASE64_STANDARD.encode(self.0)
+        match self {
+            PublicKey::Classic(bytes) => BASE64_STANDARD.encode(bytes),
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(h) => BASE64_STANDARD.encode(h.as_bytes()),
+        }
+    }
+}
+
+/// Ergonomic construction — preserves tests that already build a `PublicKey`
+/// from a raw 32-byte array.
+impl From<[u8; PUBLIC_KEY_SIZE]> for PublicKey {
+    fn from(bytes: [u8; PUBLIC_KEY_SIZE]) -> Self {
+        PublicKey::Classic(bytes)
     }
 }
 
@@ -178,14 +248,20 @@ impl SecretKey {
     }
 }
 
-/// User's keypair (public + secret)
+/// Classic X25519 keypair material.
+///
+/// Renamed from the former `KeyPair` struct body. The field `public_key`
+/// refers to the widened `PublicKey` enum; for classic-variant instances
+/// it always holds `PublicKey::Classic(..)`. This preserves field-style
+/// access (`cpair.public_key`, `cpair.secret_key`) at every internal site
+/// that operates on a known-classic keypair.
 #[derive(Debug, Clone)]
-pub struct KeyPair {
+pub struct ClassicKeyPair {
     pub public_key: PublicKey,
     pub secret_key: SecretKey,
 }
 
-impl KeyPair {
+impl ClassicKeyPair {
     pub fn generate() -> Result<Self> {
         ensure_sodium_init();
 
@@ -200,7 +276,7 @@ impl KeyPair {
         }
 
         Ok(Self {
-            public_key: PublicKey(public_key),
+            public_key: PublicKey::Classic(public_key),
             secret_key: SecretKey(secret_key),
         })
     }
@@ -231,9 +307,72 @@ impl KeyPair {
         }
 
         Ok(Self {
-            public_key: PublicKey(public_key),
+            public_key: PublicKey::Classic(public_key),
             secret_key: SecretKey(secret_key),
         })
+    }
+}
+
+/// User's keypair (public + secret) — Phase 2 suite-aware enum.
+///
+/// The `Classic` variant wraps `ClassicKeyPair` (the legacy X25519 material).
+/// The `Hybrid` variant is gated behind the `hybrid` feature and wraps a
+/// `HybridKeyPair` (X448 + sntrup761 secret material, `ZeroizeOnDrop`).
+///
+/// The `KeyPair::generate()` constructor remains API-compatible and always
+/// returns `KeyPair::Classic(..)`; hybrid keypair construction lands in
+/// Phase 3 as part of the keystore dual-suite work.
+#[derive(Debug, Clone)]
+pub enum KeyPair {
+    Classic(ClassicKeyPair),
+    #[cfg(feature = "hybrid")]
+    Hybrid(crate::crypto::hybrid::HybridKeyPair),
+}
+
+impl KeyPair {
+    /// Generate a classic X25519 keypair. Alias for
+    /// `ClassicKeyPair::generate()` wrapped in `KeyPair::Classic(..)`.
+    /// Preserves the pre-Phase-2 `KeyPair::generate()?` API so every
+    /// existing call site keeps compiling.
+    pub fn generate() -> Result<Self> {
+        Ok(Self::Classic(ClassicKeyPair::generate()?))
+    }
+
+    /// Generate from a seed (classic only; hybrid equivalent ships in Phase 3).
+    pub fn from_seed(seed: &[u8]) -> Result<Self> {
+        Ok(Self::Classic(ClassicKeyPair::from_seed(seed)?))
+    }
+
+    /// Borrow the contained public key. For classic variants, returns a
+    /// reference to the inner `PublicKey::Classic(..)`; for hybrid, the
+    /// accessor constructs a fresh `PublicKey::Hybrid(..)` since the
+    /// hybrid keypair stores raw bytes rather than a ready `PublicKey`.
+    ///
+    /// Call sites migrate from field access `kp.public_key` to method
+    /// access `kp.public_key()` — field access on an enum is not legal.
+    #[must_use]
+    pub fn public_key(&self) -> PublicKey {
+        match self {
+            KeyPair::Classic(cp) => cp.public_key.clone(),
+            #[cfg(feature = "hybrid")]
+            KeyPair::Hybrid(hp) => PublicKey::Hybrid(hp.public_key()),
+        }
+    }
+
+    /// Borrow the contained classic secret key. Returns an actionable error
+    /// for hybrid variants — the keystore serialisation path in this plan
+    /// only handles classic secret material (dual-suite keystore is Phase 3).
+    ///
+    /// Call sites migrate from field access `kp.secret_key` to method
+    /// access `kp.secret_key()`.
+    pub fn secret_key(&self) -> Result<&SecretKey> {
+        match self {
+            KeyPair::Classic(cp) => Ok(&cp.secret_key),
+            #[cfg(feature = "hybrid")]
+            KeyPair::Hybrid(_) => Err(anyhow!(
+                "hybrid keypair has no classic SecretKey — dual-suite keystore support is Phase 3"
+            )),
+        }
     }
 }
 
@@ -246,7 +385,11 @@ const NONCE_SIZE: usize = SYMMETRIC_NONCE_SIZE;
 
 pub type Key = RepositoryKey;
 
-/// Seal a repository key for a user (using `crypto_box_seal`)
+/// Seal a repository key for a user (using `crypto_box_seal`).
+///
+/// Classic-only path: accepts only `PublicKey::Classic(..)` and returns an
+/// actionable error for hybrid variants. Wire format is bit-for-bit
+/// identical to pre-Phase-2 output for classic inputs.
 #[deprecated(
     since = "2.0.0",
     note = "use `ClassicSuite.seal_repo_key(...)` via the `CryptoSuite` trait. This free function is retained for existing integration tests that assert wire-format compatibility; new code must go through the trait so Phase 2's hybrid suite can plug in without source edits."
@@ -255,6 +398,16 @@ pub fn seal_repository_key(
     repo_key: &RepositoryKey,
     user_public_key: &PublicKey,
 ) -> Result<String> {
+    let pk_bytes = match user_public_key {
+        PublicKey::Classic(b) => b,
+        #[cfg(feature = "hybrid")]
+        PublicKey::Hybrid(_) => {
+            return Err(anyhow!(
+                "classic free function cannot seal for a hybrid public key — use CryptoSuite trait dispatch (ClassicSuite or HybridCryptoSuite) so version routing handles both suites"
+            ));
+        }
+    };
+
     ensure_sodium_init();
     use base64::prelude::*;
 
@@ -266,7 +419,7 @@ pub fn seal_repository_key(
             sealed.as_mut_ptr(),
             repo_key_bytes.as_ptr(),
             repo_key_bytes.len() as u64,
-            user_public_key.0.as_ptr(),
+            pk_bytes.as_ptr(),
         );
         if ret != 0 {
             return Err(anyhow!("Failed to seal repository key"));
@@ -276,12 +429,34 @@ pub fn seal_repository_key(
     Ok(BASE64_STANDARD.encode(sealed))
 }
 
-/// Open a sealed repository key (using `crypto_box_seal_open`)
+/// Open a sealed repository key (using `crypto_box_seal_open`).
+///
+/// Classic-only path: accepts only `KeyPair::Classic(..)` and returns an
+/// actionable error for hybrid variants.
 #[deprecated(
     since = "2.0.0",
     note = "use `ClassicSuite.open_repo_key(...)` via the `CryptoSuite` trait. This free function is retained for existing integration tests that assert wire-format compatibility; new code must go through the trait so Phase 2's hybrid suite can plug in without source edits."
 )]
 pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<RepositoryKey> {
+    let classic = match user_keypair {
+        KeyPair::Classic(cp) => cp,
+        #[cfg(feature = "hybrid")]
+        KeyPair::Hybrid(_) => {
+            return Err(anyhow!(
+                "classic free function cannot open with a hybrid keypair — use CryptoSuite trait dispatch so version routing handles both suites"
+            ));
+        }
+    };
+    let pk_bytes = match &classic.public_key {
+        PublicKey::Classic(b) => b,
+        #[cfg(feature = "hybrid")]
+        PublicKey::Hybrid(_) => {
+            return Err(anyhow!(
+                "classic free function cannot open: ClassicKeyPair held an unexpected PublicKey::Hybrid variant (should be unreachable — report as bug)"
+            ));
+        }
+    };
+
     ensure_sodium_init();
     use base64::prelude::*;
 
@@ -300,8 +475,8 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
             opened.as_mut_ptr(),
             sealed_bytes.as_ptr(),
             sealed_bytes.len() as u64,
-            user_keypair.public_key.0.as_ptr(),
-            user_keypair.secret_key.0.as_ptr(),
+            pk_bytes.as_ptr(),
+            classic.secret_key.0.as_ptr(),
         );
         if ret != 0 {
             return Err(anyhow!("Failed to open sealed repository key"));
@@ -569,25 +744,42 @@ impl CryptoSuite for ClassicSuite {
     // pre-v2 .sss.toml files. The free function carries `#[deprecated]`
     // to nudge new callers to the trait — but this delegation is the
     // reason that deprecation note exists, so we silence the lint here.
-    #[allow(deprecated)]
     fn seal_repo_key(
         &self,
         repo_key: &RepositoryKey,
         user_public_key: &PublicKey,
     ) -> Result<String> {
-        // Delegates to the existing free function so byte-for-byte output is
-        // guaranteed identical to pre-refactor. The free function stays
-        // exported for test compatibility (tests/multi_user_e2e.rs etc.).
-        seal_repository_key(repo_key, user_public_key)
+        match user_public_key {
+            PublicKey::Classic(_) => {
+                // Delegates to the existing free function so byte-for-byte
+                // output is guaranteed identical to pre-refactor. The free
+                // function stays exported for test compatibility
+                // (tests/multi_user_e2e.rs etc.).
+                #[allow(deprecated)]
+                seal_repository_key(repo_key, user_public_key)
+            }
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => Err(anyhow!(
+                "classic suite cannot seal for a hybrid public key — version mismatch (.sss.toml version = \"2.0\" requires HybridCryptoSuite dispatch; rebuild with --features hybrid and route via suite_for(Suite::Hybrid))"
+            )),
+        }
     }
 
-    #[allow(deprecated)]
     fn open_repo_key(
         &self,
         sealed_key: &str,
         user_keypair: &KeyPair,
     ) -> Result<RepositoryKey> {
-        open_repository_key(sealed_key, user_keypair)
+        match user_keypair {
+            KeyPair::Classic(_) => {
+                #[allow(deprecated)]
+                open_repository_key(sealed_key, user_keypair)
+            }
+            #[cfg(feature = "hybrid")]
+            KeyPair::Hybrid(_) => Err(anyhow!(
+                "classic suite cannot open a hybrid-sealed key — version mismatch (.sss.toml version = \"2.0\" requires HybridCryptoSuite; rebuild with --features hybrid)"
+            )),
+        }
     }
 }
 
@@ -979,7 +1171,7 @@ mod tests {
         let repo_key = Key::new();
 
         // Seal the repository key for user B (using B's public key)
-        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
+        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key()).unwrap();
 
         // User B opens the sealed repository key with their keypair
         let opened_by_b = open_repository_key(&sealed_for_b, &keypair_b).unwrap();
@@ -1010,7 +1202,7 @@ mod tests {
         let repo_key = Key::new();
 
         // Seal the repository key for user B
-        let sealed_repo_key = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
+        let sealed_repo_key = seal_repository_key(&repo_key, &keypair_b.public_key()).unwrap();
 
         // User A creates content using the shared repo key
         let processor_a = Processor::new_with_context(
@@ -1058,9 +1250,9 @@ mod tests {
         let repo_key = Key::new();
 
         // Seal the repo key once for each user
-        let sealed_for_a = seal_repository_key(&repo_key, &keypair_a.public_key).unwrap();
-        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key).unwrap();
-        let sealed_for_c = seal_repository_key(&repo_key, &keypair_c.public_key).unwrap();
+        let sealed_for_a = seal_repository_key(&repo_key, &keypair_a.public_key()).unwrap();
+        let sealed_for_b = seal_repository_key(&repo_key, &keypair_b.public_key()).unwrap();
+        let sealed_for_c = seal_repository_key(&repo_key, &keypair_c.public_key()).unwrap();
 
         // Each user independently recovers the repository key
         let key_a = open_repository_key(&sealed_for_a, &keypair_a).unwrap();
@@ -1102,7 +1294,7 @@ mod classic_suite_tests {
         let kp = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
         let suite = ClassicSuite;
-        let sealed = suite.seal_repo_key(&repo_key, &kp.public_key).unwrap();
+        let sealed = suite.seal_repo_key(&repo_key, &kp.public_key()).unwrap();
         let opened = suite.open_repo_key(&sealed, &kp).unwrap();
         assert_eq!(repo_key.to_base64(), opened.to_base64());
     }
@@ -1113,7 +1305,7 @@ mod classic_suite_tests {
         let kp2 = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
         let suite = ClassicSuite;
-        let sealed = suite.seal_repo_key(&repo_key, &kp1.public_key).unwrap();
+        let sealed = suite.seal_repo_key(&repo_key, &kp1.public_key()).unwrap();
         assert!(suite.open_repo_key(&sealed, &kp2).is_err());
     }
 
@@ -1131,11 +1323,109 @@ mod classic_suite_tests {
         // config.rs::test_load_via_classic_suite_reads_legacy_free_function_output.
         let kp = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
-        let via_trait = ClassicSuite.seal_repo_key(&repo_key, &kp.public_key).unwrap();
-        let via_free = seal_repository_key(&repo_key, &kp.public_key).unwrap();
+        let via_trait = ClassicSuite.seal_repo_key(&repo_key, &kp.public_key()).unwrap();
+        let via_free = seal_repository_key(&repo_key, &kp.public_key()).unwrap();
         let opened_trait = ClassicSuite.open_repo_key(&via_trait, &kp).unwrap();
         let opened_free = ClassicSuite.open_repo_key(&via_free, &kp).unwrap();
         assert_eq!(opened_trait.to_base64(), opened_free.to_base64());
         assert_eq!(opened_trait.to_base64(), repo_key.to_base64());
+    }
+
+    // =========================================================================
+    // Phase 2 Plan 02-02: enum-widening tests
+    // =========================================================================
+
+    #[test]
+    fn test_public_key_classic_from_base64_returns_classic_variant() {
+        let kp = KeyPair::generate().unwrap();
+        let pk = kp.public_key();
+        let b64 = pk.to_base64();
+        let decoded = PublicKey::from_base64(&b64).unwrap();
+        match decoded {
+            PublicKey::Classic(_) => (),
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => {
+                panic!("from_base64 must return Classic for a 32-byte payload");
+            }
+        }
+    }
+
+    #[test]
+    fn test_keypair_public_key_accessor_returns_classic_variant() {
+        let kp = KeyPair::generate().unwrap();
+        let pk = kp.public_key();
+        match pk {
+            PublicKey::Classic(_) => (),
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => {
+                panic!("KeyPair::generate must produce Classic public key");
+            }
+        }
+    }
+
+    #[test]
+    fn test_from_bytes_for_public_key_yields_classic() {
+        let bytes = [0u8; PUBLIC_KEY_SIZE];
+        let pk: PublicKey = bytes.into();
+        match pk {
+            PublicKey::Classic(_) => (),
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => panic!("From<[u8; 32]> must yield Classic"),
+        }
+    }
+
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_classic_suite_rejects_hybrid_public_key() {
+        use crate::crypto::hybrid::HybridPublicKey;
+        let repo_key = RepositoryKey::new();
+        let hybrid_pk = PublicKey::Hybrid(HybridPublicKey::from_bytes_unchecked(vec![0u8; 64]));
+        let err = ClassicSuite.seal_repo_key(&repo_key, &hybrid_pk).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("classic suite cannot seal for a hybrid"),
+            "expected actionable error, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_classic_suite_rejects_hybrid_keypair() {
+        use crate::crypto::hybrid::HybridKeyPair;
+        let kp = KeyPair::Hybrid(HybridKeyPair {
+            public_bytes: vec![0u8; 64],
+            secret_bytes: vec![0u8; 64],
+        });
+        let err = ClassicSuite.open_repo_key("AAAAAAAAAAAAAA==", &kp).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("classic suite cannot open a hybrid"),
+            "expected actionable error, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_decode_base64_for_suite_hybrid_rejects_classic_length() {
+        use crate::crypto::Suite;
+        use base64::prelude::*;
+        // 32-byte payload encoded base64
+        let b64 = BASE64_STANDARD.encode([0u8; 32]);
+        let err = PublicKey::decode_base64_for_suite(&b64, Suite::Hybrid).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("hybrid public key decoded to classic length"),
+            "expected downgrade-attempt error, got: {msg}"
+        );
+    }
+
+    #[cfg(not(feature = "hybrid"))]
+    #[test]
+    fn test_decode_base64_for_suite_hybrid_requires_feature() {
+        use crate::crypto::Suite;
+        use base64::prelude::*;
+        let b64 = BASE64_STANDARD.encode([0u8; 32]);
+        let err = PublicKey::decode_base64_for_suite(&b64, Suite::Hybrid).unwrap_err();
+        assert!(err.to_string().contains("hybrid suite requires the `hybrid` feature"));
     }
 }

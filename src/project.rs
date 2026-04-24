@@ -278,7 +278,10 @@ impl ProjectConfig {
             .get(username)
             .ok_or_else(|| error_helpers::user_not_found_error(username))?;
 
-        PublicKey::from_base64(&user_config.public)
+        // Phase 2 Plan 02-02: decode via the repo's declared suite so a v2
+        // config with hybrid-length `public` bytes lands as `PublicKey::Hybrid`
+        // (only reachable with the `hybrid` feature compiled in).
+        PublicKey::decode_base64_for_suite(&user_config.public, self.suite()?)
     }
 
     /// List all users in the project
@@ -324,12 +327,18 @@ impl ProjectConfig {
         !self.users.is_empty()
     }
 
-    /// Get all public keys in the project
+    /// Get all public keys in the project.
+    ///
+    /// Phase 2 Plan 02-02: decodes via `self.suite()?` so v2 configs produce
+    /// `PublicKey::Hybrid` variants (feature-gated). Decoding once per call
+    /// caches the suite lookup so a malformed `version` field is reported
+    /// exactly once at the top of the iteration.
     pub fn get_all_public_keys(&self) -> Result<Vec<(String, PublicKey)>> {
+        let suite = self.suite()?;
         let mut keys = Vec::new();
 
         for (username, user_config) in &self.users {
-            let public_key = PublicKey::from_base64(&user_config.public)?;
+            let public_key = PublicKey::decode_base64_for_suite(&user_config.public, suite)?;
             keys.push((username.clone(), public_key));
         }
 
@@ -603,7 +612,7 @@ mod tests {
     #[test]
     fn test_project_config_creation() {
         let keypair = KeyPair::generate().unwrap();
-        let config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
 
         assert_eq!(config.users.len(), 1);
         assert!(config.users.contains_key("alice"));
@@ -615,7 +624,7 @@ mod tests {
         let keypair1 = KeyPair::generate().unwrap();
         let keypair2 = KeyPair::generate().unwrap();
 
-        let mut config = ProjectConfig::new("alice", &keypair1.public_key).unwrap();
+        let mut config = ProjectConfig::new("alice", &keypair1.public_key()).unwrap();
 
         // We need a repository key to add users - let's get it from the sealed key for alice
         // For testing, we'll create a dummy repository key
@@ -623,13 +632,13 @@ mod tests {
 
         // Add second user
         config
-            .add_user("bob", &keypair2.public_key, &repository_key)
+            .add_user("bob", &keypair2.public_key(), &repository_key)
             .unwrap();
         assert_eq!(config.users.len(), 2);
         assert!(config.users.contains_key("bob"));
 
         // Cannot add duplicate user
-        let result = config.add_user("alice", &keypair1.public_key, &repository_key);
+        let result = config.add_user("alice", &keypair1.public_key(), &repository_key);
         assert!(result.is_err());
 
         // Remove user
@@ -645,7 +654,7 @@ mod tests {
     #[test]
     fn test_config_file_roundtrip() {
         let keypair = KeyPair::generate().unwrap();
-        let config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
 
         let temp_file = NamedTempFile::new().unwrap();
         config.save_to_file(temp_file.path()).unwrap();
@@ -672,7 +681,7 @@ mod tests {
     #[test]
     fn test_config_validation() {
         let keypair = KeyPair::generate().unwrap();
-        let config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
 
         // Valid config should pass
         assert!(config.validate().is_ok());
@@ -683,11 +692,11 @@ mod tests {
         let keypair1 = KeyPair::generate().unwrap();
         let keypair2 = KeyPair::generate().unwrap();
 
-        let mut config = ProjectConfig::new("alice", &keypair1.public_key).unwrap();
+        let mut config = ProjectConfig::new("alice", &keypair1.public_key()).unwrap();
 
         let repository_key = RepositoryKey::new();
         config
-            .add_user("bob", &keypair2.public_key, &repository_key)
+            .add_user("bob", &keypair2.public_key(), &repository_key)
             .unwrap();
 
         let toml_output = toml::to_string_pretty(&config).unwrap();
@@ -705,11 +714,11 @@ mod tests {
         let keypair1 = KeyPair::generate().unwrap();
         let keypair2 = KeyPair::generate().unwrap();
 
-        let mut config = ProjectConfig::new("alice", &keypair1.public_key).unwrap();
+        let mut config = ProjectConfig::new("alice", &keypair1.public_key()).unwrap();
 
         let repository_key = RepositoryKey::new();
         config
-            .add_user("bob", &keypair2.public_key, &repository_key)
+            .add_user("bob", &keypair2.public_key(), &repository_key)
             .unwrap();
 
         let keys = config.get_all_public_keys().unwrap();
@@ -838,14 +847,58 @@ created = "2026-01-01T00:00:00Z"
         // seal path writes, on the wire-format stored in .sss.toml.
         use crate::crypto::CryptoSuite;
         let keypair = KeyPair::generate().unwrap();
-        let config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
         let sealed = config.get_sealed_key_for_user("alice").unwrap();
 
         let suite = ClassicSuite;
         let opened = suite.open_repo_key(&sealed, &keypair).unwrap();
         // Round-trip check: re-seal with the same key, must be openable.
-        let resealed = suite.seal_repo_key(&opened, &keypair.public_key).unwrap();
+        let resealed = suite.seal_repo_key(&opened, &keypair.public_key()).unwrap();
         let reopened = suite.open_repo_key(&resealed, &keypair).unwrap();
         assert_eq!(opened.to_base64(), reopened.to_base64());
+    }
+
+    // --- Phase 2 Plan 02-02: suite-aware public-key decode path ---
+
+    #[test]
+    fn test_get_user_public_key_decodes_via_suite_to_classic_variant_for_v1_config() {
+        use crate::crypto::PublicKey;
+        let keypair = KeyPair::generate().unwrap();
+        let config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
+        // Default ProjectConfig::new stamps version = "1.0" so the decoder
+        // routes through Suite::Classic and yields PublicKey::Classic(..)
+        let pk = config.get_user_public_key("alice").unwrap();
+        match pk {
+            PublicKey::Classic(_) => (),
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => {
+                panic!("v1.0 config must decode to PublicKey::Classic");
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_all_public_keys_routes_through_suite() {
+        use crate::crypto::PublicKey;
+        let keypair1 = KeyPair::generate().unwrap();
+        let keypair2 = KeyPair::generate().unwrap();
+
+        let mut config = ProjectConfig::new("alice", &keypair1.public_key()).unwrap();
+        let repository_key = RepositoryKey::new();
+        config
+            .add_user("bob", &keypair2.public_key(), &repository_key)
+            .unwrap();
+
+        let keys = config.get_all_public_keys().unwrap();
+        assert_eq!(keys.len(), 2);
+        for (_, pk) in keys {
+            match pk {
+                PublicKey::Classic(_) => (),
+                #[cfg(feature = "hybrid")]
+                PublicKey::Hybrid(_) => {
+                    panic!("v1.0 config must decode every public key to PublicKey::Classic");
+                }
+            }
+        }
     }
 }

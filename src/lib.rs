@@ -58,7 +58,7 @@ mod tests {
 
         // Test Config can be created with user and key
         let keypair = KeyPair::generate().unwrap();
-        let config = Config::new("testuser", &keypair.public_key).unwrap();
+        let config = Config::new("testuser", &keypair.public_key()).unwrap();
         assert!(config.users.contains_key("testuser"));
 
         // Test RepositoryKey can be created and converted
@@ -92,7 +92,7 @@ mod tests {
 
         // These imports should compile if modules are properly exported
         let keypair = crypto::KeyPair::generate().unwrap();
-        let _config_module = config::Config::new("testuser", &keypair.public_key).unwrap();
+        let _config_module = config::Config::new("testuser", &keypair.public_key()).unwrap();
         let _crypto_key = crypto::RepositoryKey::new();
         let _keyring = keyring_manager::KeyringManager::new();
         let key = crypto::RepositoryKey::new();
@@ -103,7 +103,7 @@ mod tests {
     fn test_re_exports_accessibility() {
         // Test that re-exported items can be used without module qualifiers
         let keypair = KeyPair::generate().unwrap();
-        let config = Config::new("testuser", &keypair.public_key).unwrap();
+        let config = Config::new("testuser", &keypair.public_key()).unwrap();
         let key = RepositoryKey::new();
         let keyring_manager = KeyringManager::new();
         let processor = Processor::new_with_context(key, std::path::PathBuf::from("."), "2025-01-01T00:00:00Z".to_string()).unwrap();

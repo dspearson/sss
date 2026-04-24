@@ -209,7 +209,7 @@ fn test_sealed_key_security() -> Result<()> {
     let user2_keypair = KeyPair::generate()?;
 
     // Seal for user1
-    let sealed_for_user1 = seal_repository_key(&repo_key, &user1_keypair.public_key)?;
+    let sealed_for_user1 = seal_repository_key(&repo_key, &user1_keypair.public_key())?;
 
     // User1 should be able to open it
     let unsealed_by_user1 = open_repository_key(&sealed_for_user1, &user1_keypair)?;
@@ -237,8 +237,8 @@ fn test_sealed_key_uniqueness() -> Result<()> {
     let user_keypair = KeyPair::generate()?;
 
     // Seal same key multiple times
-    let sealed1 = seal_repository_key(&repo_key, &user_keypair.public_key)?;
-    let sealed2 = seal_repository_key(&repo_key, &user_keypair.public_key)?;
+    let sealed1 = seal_repository_key(&repo_key, &user_keypair.public_key())?;
+    let sealed2 = seal_repository_key(&repo_key, &user_keypair.public_key())?;
 
     // Should produce different sealed keys (due to random ephemeral key)
     assert_ne!(

@@ -33,9 +33,9 @@ fn create_single_user_project(
     repo_key: &RepositoryKey,
 ) -> Result<PathBuf> {
     let config_path = root.join(".sss.toml");
-    let mut config = ProjectConfig::new(username, &keypair.public_key)?;
+    let mut config = ProjectConfig::new(username, &keypair.public_key())?;
 
-    let sealed = seal_repository_key(repo_key, &keypair.public_key)?;
+    let sealed = seal_repository_key(repo_key, &keypair.public_key())?;
     if let Some(user) = config.users.get_mut(username) {
         user.sealed_key = sealed;
     }
@@ -152,11 +152,11 @@ fn test_multi_user_rotation_both_users_can_decrypt() -> Result<()> {
 
     // Create project with two users
     let config_path = root.join(".sss.toml");
-    let mut config = ProjectConfig::new("alice", &kp_alice.public_key)?;
-    config.add_user("bob", &kp_bob.public_key, &old_key)?;
+    let mut config = ProjectConfig::new("alice", &kp_alice.public_key())?;
+    config.add_user("bob", &kp_bob.public_key(), &old_key)?;
 
     // Seal old key for alice
-    let sealed_alice = seal_repository_key(&old_key, &kp_alice.public_key)?;
+    let sealed_alice = seal_repository_key(&old_key, &kp_alice.public_key())?;
     if let Some(u) = config.users.get_mut("alice") {
         u.sealed_key = sealed_alice;
     }

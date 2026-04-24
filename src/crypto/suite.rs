@@ -92,4 +92,17 @@ mod tests {
         // can pick a suite at runtime (Box<dyn CryptoSuite>).
         fn _assert_object_safe(_s: &dyn CryptoSuite) {}
     }
+
+    #[test]
+    fn test_trait_object_safety_enum_args_after_widening() {
+        // Phase 2 Plan 02-02: after PublicKey and KeyPair widened to enums,
+        // confirm the trait methods (which take &PublicKey / &KeyPair by
+        // reference) keep the trait object-safe. Enums behind a reference
+        // are still `Sized`, so `Box<dyn CryptoSuite>` remains a valid type
+        // — this test is a compile-time anchor that locks that invariant
+        // in ahead of the concrete `impl CryptoSuite for HybridCryptoSuite`
+        // that lands in Plan 02-03.
+        fn _assert_object_safe(_s: &dyn CryptoSuite) {}
+        fn _assert_boxable(_s: Box<dyn CryptoSuite>) {}
+    }
 }

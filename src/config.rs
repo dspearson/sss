@@ -263,7 +263,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
 
             // Try current keypair first
             let user_keypair = load_keypair_with_password_retry()?;
-            let mut username_opt = config.find_user_by_public_key(&user_keypair.public_key);
+            let mut username_opt = config.find_user_by_public_key(&user_keypair.public_key());
             let mut matched_keypair = user_keypair.clone();
 
             // If current keypair doesn't match, try all available keypairs
@@ -283,7 +283,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
                 // Try all keypairs
                 if let Ok(all_keypairs) = keystore.get_all_keypairs(password_opt) {
                     for keypair in all_keypairs {
-                        if let Some(username) = config.find_user_by_public_key(&keypair.public_key) {
+                        if let Some(username) = config.find_user_by_public_key(&keypair.public_key()) {
                             eprintln!("✓ Found matching key for user: {username}");
                             username_opt = Some(username);
                             matched_keypair = keypair;
@@ -302,7 +302,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
                   1. Ask a project admin to add your key: sss user add <username> <your-pubkey>\n\
                   2. Or switch to a different keypair: sss keys current <key-id>",
                 config.list_users().join(", "),
-                user_keypair.public_key.to_base64()
+                user_keypair.public_key().to_base64()
             ))?;
 
             // Get the sealed repository key for this user
@@ -427,7 +427,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
 
         // Modern format with users
         let keypair = KeyPair::generate().unwrap();
-        let modern_config = ProjectConfig::new("alice", &keypair.public_key).unwrap();
+        let modern_config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
         modern_config.save_to_file(&config_path).unwrap();
         assert_eq!(
             detect_config_format(&config_path).unwrap(),
@@ -454,7 +454,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         init_project_config(
             &config_path,
             "alice",
-            &keypair.public_key,
+            &keypair.public_key(),
             crate::crypto::Suite::Classic,
         )
         .unwrap();
@@ -464,7 +464,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         let result = init_project_config(
             &config_path,
             "alice",
-            &keypair.public_key,
+            &keypair.public_key(),
             crate::crypto::Suite::Classic,
         );
         assert!(result.is_err());
@@ -482,7 +482,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         init_project_config(
             &config_path,
             "alice",
-            &keypair.public_key,
+            &keypair.public_key(),
             crate::crypto::Suite::Classic,
         )
         .unwrap();
@@ -506,7 +506,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         init_project_config(
             &config_path,
             "alice",
-            &keypair.public_key,
+            &keypair.public_key(),
             crate::crypto::Suite::Hybrid,
         )
         .unwrap();
@@ -530,7 +530,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         init_project_config(
             &config_path,
             "alice",
-            &keypair.public_key,
+            &keypair.public_key(),
             crate::crypto::Suite::Hybrid,
         )
         .unwrap();
@@ -578,7 +578,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
 
         #[allow(deprecated)]
         let sealed_via_free =
-            crate::crypto::seal_repository_key(&repo_key, &keypair.public_key).unwrap();
+            crate::crypto::seal_repository_key(&repo_key, &keypair.public_key()).unwrap();
 
         let opened_via_trait = ClassicSuite.open_repo_key(&sealed_via_free, &keypair).unwrap();
         assert_eq!(repo_key.to_base64(), opened_via_trait.to_base64());

@@ -181,7 +181,7 @@ fn test_concurrent_key_retrieval() -> Result<()> {
     // Verify all reads succeeded
     for handle in handles {
         let loaded = handle.join().unwrap()?;
-        assert_eq!(loaded.public_key.to_base64(), keypair.public_key.to_base64());
+        assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
     }
 
     Ok(())
@@ -276,7 +276,7 @@ fn test_missing_salt_field() -> Result<()> {
 
     // Should still load (salt is optional for passwordless keys)
     let loaded = keystore.load_keypair(&key_id, None)?;
-    assert_eq!(loaded.public_key.to_base64(), keypair.public_key.to_base64());
+    assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
 
     Ok(())
 }
@@ -306,7 +306,7 @@ fn test_excessive_keys_handling() -> Result<()> {
     // Should be able to access individual keys with correct password
     let (key_id, password) = &key_ids[10];
     let loaded = keystore.load_keypair(key_id, Some(password))?;
-    assert!(!loaded.public_key.to_base64().is_empty());
+    assert!(!loaded.public_key().to_base64().is_empty());
 
     Ok(())
 }
@@ -488,8 +488,8 @@ fn test_repeated_save_load_consistency() -> Result<()> {
         let loaded = keystore.load_keypair(&key_id, Some(password))?;
 
         // Verify keys match
-        assert_eq!(loaded.public_key.to_base64(), keypair.public_key.to_base64());
-        assert_eq!(loaded.secret_key.to_base64(), keypair.secret_key.to_base64());
+        assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
+        assert_eq!(loaded.secret_key().unwrap().to_base64(), keypair.secret_key().unwrap().to_base64());
     }
 
     Ok(())

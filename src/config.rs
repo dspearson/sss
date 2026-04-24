@@ -151,11 +151,19 @@ pub enum ConfigFormat {
     Empty,  // New format but no users yet
 }
 
-/// Initialize a new project configuration
+/// Initialize a new project configuration.
+///
+/// Stamps the `.sss.toml` `version` field based on `crypto`:
+/// - `Suite::Classic` → `version = "1.0"` (current default, byte-identical
+///   output to pre-Phase-1 binaries).
+/// - `Suite::Hybrid` → `version = "2.0"` (Phase 2 wires the hybrid seal
+///   path; this v1 binary will error at subsequent load with the
+///   SUITE-04 actionable message).
 pub fn init_project_config<P: AsRef<Path>>(
     config_path: P,
     username: &str,
     public_key: &PublicKey,
+    crypto: crate::crypto::Suite,
 ) -> Result<()> {
     if config_path.as_ref().exists() {
         return Err(anyhow!(
@@ -164,11 +172,25 @@ pub fn init_project_config<P: AsRef<Path>>(
         ));
     }
 
-    let config = ProjectConfig::new(username, public_key)?;
+    let mut config = ProjectConfig::new(username, public_key)?;
+    // Stamp the version field so the generated .sss.toml dispatches to
+    // the chosen suite on subsequent loads.
+    config.version = match crypto {
+        crate::crypto::Suite::Classic => "1.0".to_string(),
+        crate::crypto::Suite::Hybrid => "2.0".to_string(),
+    };
     config.save_to_file(&config_path)?;
 
     println!("Created {}", config_path.as_ref().display());
     println!("Added user '{username}' to project");
+    println!(
+        "Crypto suite: {}",
+        match crypto {
+            crate::crypto::Suite::Classic => "classic (libsodium)",
+            crate::crypto::Suite::Hybrid =>
+                "hybrid (v2.0; requires v2-capable sss binary for subsequent operations)",
+        }
+    );
 
     Ok(())
 }

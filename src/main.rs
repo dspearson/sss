@@ -229,11 +229,21 @@ fn create_cli_app() -> Command {
                 .global(true),
         )
         .subcommand(
-            Command::new("init").about("Initialize a new project").arg(
-                Arg::new("username")
-                    .help("Username for the project")
-                    .required(false),
-            ),
+            Command::new("init")
+                .about("Initialize a new project")
+                .arg(
+                    Arg::new("username")
+                        .help("Username for the project")
+                        .required(false),
+                )
+                .arg(
+                    Arg::new("crypto")
+                        .long("crypto")
+                        .value_name("SUITE")
+                        .help("Crypto suite for key wrap: classic (default, libsodium) or hybrid (v2.0 post-quantum; requires a hybrid-capable sss binary for subsequent operations)")
+                        .value_parser(["classic", "hybrid"])
+                        .default_value("classic"),
+                ),
         )
         .subcommand(
             Command::new("keygen")

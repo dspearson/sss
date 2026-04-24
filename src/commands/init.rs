@@ -44,8 +44,26 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         }
     };
 
+    // Map the --crypto arg (defaulted to "classic" by clap) into a Suite.
+    // clap's value_parser restricts this to classic|hybrid, so the default
+    // arm is defensive only — it surfaces any future misconfig as an
+    // actionable error rather than a panic.
+    let crypto = match matches
+        .get_one::<String>("crypto")
+        .map(String::as_str)
+        .unwrap_or("classic")
+    {
+        "classic" => crate::crypto::Suite::Classic,
+        "hybrid" => crate::crypto::Suite::Hybrid,
+        other => {
+            return Err(anyhow!(
+                "internal error: unexpected --crypto value {other:?} (expected classic|hybrid)"
+            ));
+        }
+    };
+
     // Initialize project
-    init_project_config(config_path, &username, &keypair.public_key)?;
+    init_project_config(config_path, &username, &keypair.public_key, crypto)?;
 
     println!("Project initialized successfully!");
     println!("Username: {username}");

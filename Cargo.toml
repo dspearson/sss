@@ -10,6 +10,7 @@ default = []
 fuse = ["dep:fuser", "dep:parking_lot"]
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
 ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
+hybrid = ["dep:trelis-hybrid", "dep:trelis-primitives", "dep:blake3"]
 
 [[bin]]
 name = "sss"
@@ -66,6 +67,16 @@ tokio = { version = "1", features = ["full"], optional = true }
 tokio-stream = { version = "0.1", features = ["fs"], optional = true }
 async-trait = { version = "0.1", optional = true }
 nix = { version = "0.26", optional = true }
+
+# ----------------------------------------------------------------------
+# Hybrid post-quantum KEM deps (feature = "hybrid", default OFF).
+# trelis is experimental / unaudited upstream — pin by SHA, never branch.
+# Pinned commit: 5374dff482ba94a94695794b5e4554f908eb0d4d (2026-04-24).
+# See .planning/phases/02-hybrid-suite/02-CONTEXT.md for rationale.
+# ----------------------------------------------------------------------
+trelis-hybrid = { git = "https://github.com/dspearson/trelis", rev = "5374dff482ba94a94695794b5e4554f908eb0d4d", optional = true }
+trelis-primitives = { git = "https://github.com/dspearson/trelis", rev = "5374dff482ba94a94695794b5e4554f908eb0d4d", optional = true }
+blake3 = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.21.0"

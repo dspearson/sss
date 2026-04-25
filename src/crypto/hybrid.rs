@@ -431,4 +431,263 @@ mod tests {
         let tampered = BASE64_STANDARD.encode(&decoded);
         assert!(HybridCryptoSuite.open_repo_key(&tampered, &keypair).is_err());
     }
+
+    // =========================================================================
+    // Plan 02-04: PQCRYPTO-03 byte-identical-ciphertext invariant tests
+    // =========================================================================
+
+    #[test]
+    fn test_in_file_aead_byte_identical_across_suites() {
+        // PQCRYPTO-03 — ROADMAP Phase 2 success criterion #3.
+        // "For a fixed K, path, timestamp and plaintext, encrypt(...) produces
+        //  byte-identical output whether K was wrapped classically or hybridly —
+        //  the AEAD layer never observes which wrap was used."
+        //
+        // Concrete (fixed) inputs; the >=1000-case property sweep is Phase 5 TEST-01.
+        use crate::crypto::encrypt_to_base64_deterministic;
+
+        // Fixed 32-byte repository key — the same K is used via both suites.
+        let fixed_k_bytes: [u8; 32] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+        ];
+        let k_for_classic = RepositoryKey::from_bytes(&fixed_k_bytes).unwrap();
+        let k_for_hybrid  = RepositoryKey::from_bytes(&fixed_k_bytes).unwrap();
+        let path      = "secrets/api.env";
+        let timestamp = "2026-04-24T00:00:00Z";
+        let plaintext = "API_KEY=xyz\nDB_PASS=abc\n";
+
+        // Both paths feed the SAME K to encrypt_to_base64_deterministic.
+        // The suite-specific wrap machinery is not exercised here; what
+        // matters is that the AEAD layer receives byte-identical K.
+        let ct_classic = encrypt_to_base64_deterministic(
+            plaintext, &k_for_classic, timestamp, path
+        ).expect("classic-path encrypt failed");
+
+        let ct_hybrid = encrypt_to_base64_deterministic(
+            plaintext, &k_for_hybrid, timestamp, path
+        ).expect("hybrid-path encrypt failed");
+
+        assert_eq!(
+            ct_classic, ct_hybrid,
+            "PQCRYPTO-03 violated: in-file AEAD output differs across suites for \
+             the same K+path+timestamp+plaintext. Either encrypt_to_base64_deterministic \
+             is leaking suite state, the nonce derivation is non-deterministic, or \
+             the AEAD key derivation depends on something other than K. This invariant \
+             is load-bearing for Phase 4 (sss migrate) — every sealed file in the repo \
+             must remain openable after K has been re-wrapped hybridly."
+        );
+    }
+
+    #[test]
+    fn test_in_file_aead_byte_identical_after_seal_open_round_trip() {
+        // Stronger form: run K through the full classic seal->open and hybrid
+        // seal->open, then compare encrypt outputs on the recovered K values.
+        // This catches any regression where the wrap/unwrap cycle corrupts K
+        // without the round-trip equality test in 02-03 catching it.
+        use crate::crypto::{encrypt_to_base64_deterministic, ClassicSuite};
+        use crate::crypto::suite::CryptoSuite;
+
+        let repo_key = RepositoryKey::new();
+        let path      = "secrets/prod.env";
+        let timestamp = "2026-04-24T12:00:00Z";
+        let plaintext = "some content\n";
+
+        // Classic path: generate classic keypair -> seal K -> open K -> encrypt plaintext under recovered K.
+        let classic_kp = KeyPair::generate().unwrap();
+        let classic = ClassicSuite;
+        let sealed_classic = classic.seal_repo_key(&repo_key, &classic_kp.public_key()).unwrap();
+        let recovered_classic = classic.open_repo_key(&sealed_classic, &classic_kp).unwrap();
+        let ct_via_classic = encrypt_to_base64_deterministic(
+            plaintext, &recovered_classic, timestamp, path
+        ).unwrap();
+
+        // Hybrid path: generate hybrid keypair -> seal same K -> open K -> encrypt plaintext.
+        let hybrid_kp_inner = HybridKeyPair::generate().unwrap();
+        let hybrid_pub = PublicKey::Hybrid(hybrid_kp_inner.public_key());
+        let hybrid_kp = KeyPair::Hybrid(hybrid_kp_inner);
+        let hybrid = HybridCryptoSuite;
+        let sealed_hybrid = hybrid.seal_repo_key(&repo_key, &hybrid_pub).unwrap();
+        let recovered_hybrid = hybrid.open_repo_key(&sealed_hybrid, &hybrid_kp).unwrap();
+        let ct_via_hybrid = encrypt_to_base64_deterministic(
+            plaintext, &recovered_hybrid, timestamp, path
+        ).unwrap();
+
+        // The recovered K is identical across suites; the AEAD output must be too.
+        assert_eq!(
+            recovered_classic.to_bytes(), recovered_hybrid.to_bytes(),
+            "recovered K bytes differ across suites — wrap/unwrap corrupted K"
+        );
+        assert_eq!(
+            ct_via_classic, ct_via_hybrid,
+            "PQCRYPTO-03 end-to-end violation: AEAD output differs after full seal/open \
+             cycle through each suite. The K that comes back out must be byte-identical \
+             regardless of which wrap path was used — that is the whole point of the \
+             shared-K-shared-AEAD invariant."
+        );
+    }
+
+    // =========================================================================
+    // Plan 02-04: PQCRYPTO-04 zeroise-on-drop poison-pattern tests
+    // =========================================================================
+
+    #[test]
+    fn test_hybrid_keypair_secret_bytes_zeroise_on_drop() {
+        // PQCRYPTO-04 — poison-pattern test for HybridKeyPair::secret_bytes.
+        // Allocate via ManuallyDrop, fill with marker, run drop in place, re-read
+        // via raw pointer, assert zero.
+        //
+        // Pattern: hold the keypair in a stack-local ManuallyDrop<..> so the
+        // storage persists through the post-drop observation; capture a raw
+        // pointer to the first byte of secret_bytes BEFORE dropping; run
+        // ManuallyDrop::drop which invokes the HybridKeyPair drop chain
+        // (including Zeroizing on secret_bytes); re-read the same address.
+        // The Zeroizing<..> wrapper MUST have overwritten the 0xA5 marker
+        // with zeroes.
+        //
+        // ManuallyDrop is preferred over Box+drop here because a Box drop
+        // returns the storage to the allocator, and the small-object pool
+        // may reuse it before the post-drop read runs (observed on glibc
+        // with the 32-byte AEAD-key variant of this test). ManuallyDrop
+        // keeps the storage alive so the zeroise effect is the only reason
+        // the observed bytes could differ from the pre-drop marker.
+        use std::mem::ManuallyDrop;
+        use std::ptr;
+
+        let secret_bytes = Zeroizing::new([0xA5u8; HYBRID_SECRET_KEY_SIZE]);
+        let mut kp: ManuallyDrop<HybridKeyPair> = ManuallyDrop::new(HybridKeyPair {
+            public_bytes: [0u8; HYBRID_PUBLIC_KEY_SIZE],
+            secret_bytes,
+        });
+
+        // Capture a raw pointer to the first byte of secret_bytes BEFORE drop.
+        // Going through .secret_bytes_for_test gives us a &Zeroizing<[u8; N]>
+        // which derefs to &[u8; N]; from there we take .as_ptr().
+        let raw_ptr: *const u8 = kp.secret_bytes_for_test().as_ptr();
+
+        // Sanity: the marker is in place pre-drop.
+        // SAFETY: raw_ptr points into the stack-held ManuallyDrop<HybridKeyPair>;
+        // the storage is live and owned by us for the duration of this test.
+        let pre_drop = unsafe { ptr::read_volatile(raw_ptr) };
+        assert_eq!(pre_drop, 0xA5, "marker pattern not in place pre-drop — test setup bug");
+
+        // Run HybridKeyPair's drop chain in place without releasing the
+        // backing storage. The chain includes the Zeroizing<..> drop on
+        // secret_bytes, which MUST overwrite the 0xA5 marker with zeroes.
+        // SAFETY: `kp` has not been dropped and we do not access its inner
+        // value again after this call; the inner value is a valid
+        // HybridKeyPair. We only read the now-zeroed bytes through raw_ptr.
+        unsafe { ManuallyDrop::drop(&mut kp) };
+
+        // SAFETY: the ManuallyDrop<..> still owns the storage (no dealloc);
+        // we are reading the bytes Zeroizing just overwrote.
+        let post_drop = unsafe { ptr::read_volatile(raw_ptr) };
+        assert_eq!(
+            post_drop, 0x00,
+            "PQCRYPTO-04 violated: HybridKeyPair::secret_bytes not zeroised on drop. \
+             This means X448+sntrup761 secret material lingers in memory after the \
+             keypair is dropped."
+        );
+    }
+
+    #[test]
+    fn test_zeroizing_hybrid_secret_bytes_wrapper_zeroises_on_drop() {
+        // PQCRYPTO-04 — confirm the Zeroizing<..> wrapper itself zeroises,
+        // independent of HybridKeyPair. If this passes and the HybridKeyPair
+        // test fails, the problem is in HybridKeyPair's construction
+        // (missing wrapper, wrong derive). If this fails, the zeroize crate
+        // itself is broken or wrongly configured.
+        //
+        // Uses ManuallyDrop<..> so the storage persists after the inner
+        // Zeroizing drop runs — avoids any allocator-reuse race between the
+        // dealloc and the post-drop observation (the 32-byte AEAD-key variant
+        // of this test flaked under Box-drop on glibc's small-object pool).
+        use std::mem::ManuallyDrop;
+        use std::ptr;
+
+        let mut wrapped: ManuallyDrop<Zeroizing<[u8; HYBRID_SECRET_KEY_SIZE]>> =
+            ManuallyDrop::new(Zeroizing::new([0xA5u8; HYBRID_SECRET_KEY_SIZE]));
+        let raw_ptr: *const u8 = wrapped.as_ptr();
+
+        // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
+        // allocation is live and owned by us for the duration of this test.
+        let pre_drop = unsafe { ptr::read_volatile(raw_ptr) };
+        assert_eq!(pre_drop, 0xA5);
+
+        // Run Zeroizing's drop in place without releasing the backing storage.
+        // SAFETY: `wrapped` has not been dropped and we do not touch its inner
+        // value again after this call (we only read the zeroed bytes through
+        // raw_ptr); the inner value is a valid Zeroizing<[u8; N]>.
+        unsafe { ManuallyDrop::drop(&mut wrapped) };
+
+        // SAFETY: the storage is still live (ManuallyDrop did not release it);
+        // we are reading the bytes Zeroizing just overwrote.
+        let post_drop = unsafe { ptr::read_volatile(raw_ptr) };
+        assert_eq!(
+            post_drop, 0x00,
+            "Zeroizing<[u8; HYBRID_SECRET_KEY_SIZE]> wrapper failed to zeroise on drop. \
+             The zeroize crate is not behaving as expected — re-verify the dep version."
+        );
+    }
+
+    #[test]
+    fn test_hybrid_aead_key_zeroises_on_drop() {
+        // PQCRYPTO-04 — the transient AEAD key derived from the KEM shared
+        // secret via blake3::derive_key is wrapped in Zeroizing<[u8; 32]>
+        // inside HybridCryptoSuite::seal_repo_key / open_repo_key. Prove that
+        // wrapper zeroises too, so the derived key does not linger in memory
+        // after the seal/open call returns.
+        //
+        // IMPORTANT: For a 32-byte allocation, Box-then-drop would return the
+        // slot to the allocator's small-object pool, where subsequent test
+        // machinery (panic path, assertion formatting) would re-allocate over
+        // the zeroed bytes before the post-drop observation could run. To
+        // observe the zeroise without that race, we hold the storage via
+        // ManuallyDrop<..> (no allocator dealloc) and invoke only the inner
+        // Zeroizing<..> drop explicitly. This isolates the zeroise effect
+        // from any allocator reuse.
+        use std::mem::ManuallyDrop;
+        use std::ptr;
+
+        // Stand-in shared secret bytes (what trelis encapsulate would hand us).
+        let shared_secret_bytes = [0x42u8; 32];
+        let mut wrapped: ManuallyDrop<Zeroizing<[u8; 32]>> = ManuallyDrop::new(
+            Zeroizing::new(blake3::derive_key(HYBRID_KEM_CONTEXT, &shared_secret_bytes)),
+        );
+        let raw_ptr: *const u8 = wrapped.as_ptr();
+
+        // The pre-drop value is some BLAKE3 output (not our choice), but it
+        // is NOT zero — confirm that before dropping.
+        // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
+        // allocation is live and we are only reading bytes we own.
+        let pre_drop_nonzero = (0..32).any(|i| {
+            let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
+            byte != 0
+        });
+        assert!(pre_drop_nonzero, "BLAKE3 output was all-zero pre-drop — test setup bug");
+
+        // Manually drop the inner Zeroizing<..> in place. This runs the
+        // zeroise step but does NOT release the backing storage — the
+        // ManuallyDrop<..> still owns it on the stack, so the bytes we are
+        // about to inspect are guaranteed to be the ones Zeroizing overwrote.
+        // SAFETY: `wrapped` has not been dropped and we do not touch it again
+        // after this call; the inner value is a valid Zeroizing<[u8; 32]>.
+        unsafe { ManuallyDrop::drop(&mut wrapped) };
+
+        // Every byte of the derived key must be zero after Zeroizing's drop.
+        // SAFETY: raw_ptr still points into live stack storage owned by
+        // `wrapped` (ManuallyDrop leaves the storage intact); reading those
+        // bytes is well-defined.
+        let all_zero_post_drop = (0..32).all(|i| {
+            let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
+            byte == 0
+        });
+        assert!(
+            all_zero_post_drop,
+            "PQCRYPTO-04 violated: derived AEAD key did not zeroise on drop. \
+             Every seal/open call would leak 32 bytes of key material into the heap."
+        );
+    }
 }

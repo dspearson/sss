@@ -162,29 +162,12 @@ export class SSSFileSystemProvider implements vscode.FileSystemProvider {
 
                 this.outputChannel.appendLine(`[FileSystemProvider] Authentication ready, sealing...`);
 
-                // Write plaintext content to a temporary location first
-                const tempPath = actualPath + '.tmp';
-                await fs.promises.writeFile(tempPath, textContent, 'utf8');
-
-                try {
-                    // Seal the temporary file
-                    await this.sssWrapper.seal(tempPath);
-
-                    // Read the sealed content
-                    const sealedContent = await fs.promises.readFile(tempPath, 'utf8');
-
-                    // Write sealed content to actual file
-                    await fs.promises.writeFile(actualPath, sealedContent, 'utf8');
-
-                    // Clean up temp file
-                    await fs.promises.unlink(tempPath);
-                } catch (error) {
-                    // Clean up temp file on error
-                    try {
-                        await fs.promises.unlink(tempPath);
-                    } catch {}
-                    throw error;
-                }
+                // Seal must operate on the real path: sss decides between whole-file
+                // and marker-only sealing by inspecting the filename (`secrets` or
+                // `*.secrets`). A `.tmp` suffix would silently fall through to
+                // marker-only mode and leave a rendered secrets file as plaintext.
+                await fs.promises.writeFile(actualPath, textContent, 'utf8');
+                await this.sssWrapper.seal(actualPath);
             } else {
                 // No plaintext markers and doesn't match secrets pattern, write directly
                 this.outputChannel.appendLine(`[FileSystemProvider] No sealing needed, writing directly`);

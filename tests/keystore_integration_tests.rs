@@ -328,14 +328,15 @@ fn test_dual_suite_roundtrip() -> Result<()> {
 
     let classic = ClassicKeyPair::generate()?;
     let hybrid = HybridKeyPair::generate()?;
-    let hybrid_pub_bytes = hybrid.public_key().bytes;
+    // Capture public key bytes via the public as_bytes() accessor
+    let hybrid_pub_bytes: Vec<u8> = hybrid.public_key().as_bytes().to_vec();
 
     let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("test_pass"))?;
     assert!(!key_id.is_empty(), "key_id must be non-empty");
 
     let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("test_pass"))?;
     assert_eq!(
-        loaded_hybrid.public_key().bytes, hybrid_pub_bytes,
+        loaded_hybrid.public_key().as_bytes(), hybrid_pub_bytes.as_slice(),
         "loaded hybrid public key must match original"
     );
 

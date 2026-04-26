@@ -24,8 +24,8 @@ RUN mkdir -p .cargo && cat > .cargo/config.toml <<EOF
 linker = "gcc"
 EOF
 
-# Build for native musl target (Alpine's default)
-RUN cargo build --release --features fuse
+# Build for native musl target (Alpine's default) with hybrid PQC support
+RUN cargo build --release --features fuse,hybrid
 
 # Create minimal runtime image
 FROM alpine:latest

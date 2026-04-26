@@ -406,6 +406,20 @@ fn create_cli_app() -> Command {
                                 .help("Username to show info for")
                                 .required(true),
                         ),
+                )
+                .subcommand(
+                    Command::new("add-hybrid-key")
+                        .about("Register a user's hybrid public key in the project config")
+                        .arg(
+                            Arg::new("username")
+                                .help("Username to update")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("hybrid-pubkey")
+                                .help("Hybrid public key (base64, 1214 decoded bytes). Obtain from: sss keys show")
+                                .required(true),
+                        ),
                 ),
         )
         .subcommand(

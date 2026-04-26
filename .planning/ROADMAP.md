@@ -100,7 +100,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   4. `cargo build --features hybrid --release` exits 0 on the current host (local smoke test); rpm-build --features status documented in plan summary.
 **Plans**: 3 plans
   - [ ] 06-01-PLAN.md — Wave 1: extend docs/CRYPTOGRAPHY.md and docs/security-model.md with hybrid suite spec, wire format, byte-identical invariant, and trelis experimental disclaimers (DOCS-01)
-  - [ ] 06-02-PLAN.md — Wave 1: update README.md, man/sss.1, and CHANGELOG.md with v2.0 user-facing docs covering classic/hybrid choice, migration workflow, and new commands (DOCS-02, DOCS-03)
+  - [x] 06-02-PLAN.md — Wave 1: update README.md, man/sss.1, and CHANGELOG.md with v2.0 user-facing docs covering classic/hybrid choice, migration workflow, and new commands (DOCS-02, DOCS-03) — **Complete 2026-04-26**
   - [ ] 06-03-PLAN.md — Wave 2: add hybrid+classic benchmarks to benches/project_ops.rs; run release-build smoke test (DOCS-03, TEST-05)
 
 ## Progress
@@ -115,4 +115,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
 | 4. Migration Command | 2/2 | Complete   | 2026-04-26 |
 | 5. End-to-End Validation | 3/3 | Complete   | 2026-04-26 |
-| 6. Documentation & Release | 0/3 | Not started | - |
+| 6. Documentation & Release | 2/3 | In progress | - |

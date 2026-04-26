@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 05 complete — TEST-01..04 all verified; 4/4 must-haves passed
-last_updated: "2026-04-26T12:00:00.000Z"
+stopped_at: Phase 06 Plan 02 complete — README, man/sss.1, and CHANGELOG updated for v2.0 hybrid suite (DOCS-02, DOCS-03)
+last_updated: "2026-04-26T12:30:00.000Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 15
-  completed_plans: 15
-  percent: 83
+  completed_plans: 16
+  percent: 87
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-04-23)
 
 ## Current Position
 
-Phase: 03 (Keystore Dual-Suite Support) — IN PROGRESS
-Plan: 2 of 2 complete (03-01 done; 03-02 done)
-Status: Phase complete — ready for verification
+Phase: 06 (Documentation & Release) — IN PROGRESS
+Plan: 2 of 3 complete (06-01 done; 06-02 done)
+Status: Executing — 06-03 (benchmarks + release smoke test) remaining
 Last activity: 2026-04-26
 
-Progress: [███████░░░] 38%
+Progress: [█████████░] 87%
 
 ## Performance Metrics
 
@@ -76,6 +76,7 @@ Full decision log: PROJECT.md Key Decisions table. Summary:
 - [Phase ?]: Password hoisted to single Option<String> in load_project_config_internal; load_keypair_with_password_retry removed
 - [Phase ?]: handle_users_add_hybrid_key: 1214-byte base64 length check (T-04-01-01) before any disk write; feature-absent stub for non-hybrid builds
 - [Phase ?]: migrate_project_config is a pure function extracted from handle_migrate for unit-testability; HybridPublicKey::from_bytes takes &[u8]->Result<Self>; ProjectConfig lacks Clone so dry-run calls core fn directly with dry_run=true — Pure core fn allows MIGRATE-01..04 invariants to be tested without a keystore. from_bytes API is strictly better (fallible). dry_run=true is contractually non-mutating per test coverage.
+- [Phase 06 Plan 02]: hybrid section placed after Multi-User Collaboration in README to group discovery near the collaboration context; HYBRID SUITE documented as .SH top-level section in man page before SECURITY; CHANGELOG [2.0.0] Security subsection carries "EXPERIMENTAL — trelis is unaudited" caveat per threat model T-06-02-01
 
 ### Phase 1 Artefacts
 
@@ -124,7 +125,7 @@ Pre-existing flake: `commands::utils::tests::test_get_system_username_with_user_
 
 ## Session Continuity
 
-Last session: 2026-04-26T11:07:38.949Z
-Stopped at: Phase 04 Plan 02 complete — sss migrate command implemented; MIGRATE-01..04 requirements satisfied
+Last session: 2026-04-26T12:30:00.000Z
+Stopped at: Phase 06 Plan 02 complete — README, man/sss.1, CHANGELOG updated for v2.0 hybrid suite (DOCS-02, DOCS-03)
 Resume file: None
-Next step: Plan Phase 4 (Migration Command) — sss migrate re-wraps K per user to hybrid, bumps .sss.toml version
+Next step: Execute 06-03-PLAN.md — benchmarks (hybrid vs classic keygen/wrap/unwrap) and release-build smoke test (TEST-05)

@@ -909,10 +909,12 @@ fn generate_randomart(fingerprint: &[u8], key_type: &str) {
     let start_x = RANDOMART_WIDTH / 2;
     let start_y = RANDOMART_HEIGHT / 2;
 
-    // Print header
+    // Print header — use saturating arithmetic so long key_type strings
+    // (e.g. "SSS KEY (Classic)" which produces a 19-char header) never
+    // overflow the fixed RANDOMART_WIDTH border.
     let header = format!("[{key_type}]");
     let padding = RANDOMART_WIDTH.saturating_sub(header.len()) / 2;
-    let right_padding = RANDOMART_WIDTH - padding - header.len();
+    let right_padding = RANDOMART_WIDTH.saturating_sub(padding).saturating_sub(header.len());
     println!(
         "+{}[{}]{}+",
         "-".repeat(padding),

@@ -25,18 +25,15 @@ use crate::constants::{
     HYBRID_ENCAPSULATION_SIZE, HYBRID_KEM_CONTEXT, HYBRID_PUBLIC_KEY_SIZE,
     HYBRID_SEALED_KEY_NONCE_SIZE, HYBRID_SEALED_KEY_TAG_SIZE, HYBRID_SECRET_KEY_SIZE,
 };
-use crate::crypto::classic::{ensure_sodium_init, KeyPair, PublicKey, RepositoryKey};
+use crate::crypto::classic::{ensure_sodium_init, KeyPair, PublicKey, RepositoryKey, SYMMETRIC_KEY_SIZE};
 use crate::crypto::suite::CryptoSuite;
 
 // trelis-hybrid KEM types. Resolved against the pinned commit
 // 5374dff482ba94a94695794b5e4554f908eb0d4d (see Cargo.toml banner).
 use trelis_hybrid::kem::{HybridEncapsulation, HybridKemKeypair, HybridKemPublicKey};
 
-/// Symmetric key size (32 bytes) — the plaintext wrapped by the hybrid AEAD.
-/// Matches `sodium::crypto_secretbox_xchacha20poly1305_KEYBYTES`. We hard-code
-/// it here because the classic module's const is private; keeping the literal
-/// local avoids a cross-module visibility change.
-const HYBRID_REPO_KEY_PLAINTEXT_SIZE: usize = 32;
+/// Plaintext repo-key size — mirrors `classic::SYMMETRIC_KEY_SIZE`.
+const HYBRID_REPO_KEY_PLAINTEXT_SIZE: usize = SYMMETRIC_KEY_SIZE;
 
 /// Hybrid public key: concatenated X448 public scalar || sntrup761 public key.
 /// Total length fixed at compile time by `HYBRID_PUBLIC_KEY_SIZE`.
@@ -69,6 +66,7 @@ impl HybridPublicKey {
     /// `HybridPublicKey` from an arbitrary-length buffer continues to
     /// compile. New code SHOULD use [`HybridPublicKey::from_bytes`] for the
     /// length-checked path.
+    #[cfg(test)]
     #[must_use]
     pub fn from_bytes_unchecked(bytes: Vec<u8>) -> Self {
         let mut arr = [0u8; HYBRID_PUBLIC_KEY_SIZE];

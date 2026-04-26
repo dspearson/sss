@@ -1941,3 +1941,141 @@ api_key: \u{2295}{abc-123}
         "user: admin\npassword: p@ss}w0rd\napi_key: abc-123\n"
     );
 }
+
+// ===========================================================================
+// Cross-version interop tests (TEST-02, TEST-03)
+// ===========================================================================
+
+/// TEST-02: the v2 binary must open a v1-format .sss.toml repo, seal and render
+/// without requiring migration.
+///
+/// A v1 repo has `version = "1.0"` in .sss.toml; the v2 binary (this binary)
+/// must dispatch to ClassicSuite automatically and perform the full
+/// seal -> open -> render round-trip with byte-identical plaintext recovery.
+#[test]
+fn e2e_v2_binary_reads_v1_repo_without_migration() {
+    let env = SssTestEnv::new();
+    env.setup(); // generates classic keys + inits project (default version = "1.0")
+
+    // Confirm the project is v1
+    let config_content = env.read_file(".sss.toml");
+    assert!(
+        config_content.contains("version = \"1.0\""),
+        "setup must produce a v1.0 config; got: {}",
+        config_content
+    );
+
+    // Seal a file
+    env.write_file("secret.txt", "db_pass=\u{2295}{hunter2}");
+    env.run_ok(&["seal", "-x", "secret.txt"]);
+    let sealed = env.read_file("secret.txt");
+    assert!(sealed.contains("\u{22A0}{"), "must produce sealed marker");
+    assert!(!sealed.contains("hunter2"), "plaintext must not leak after seal");
+
+    // Open the sealed file — v2 binary + v1 repo must work without migration
+    env.run_ok(&["open", "-x", "secret.txt"]);
+    let opened = env.read_file("secret.txt");
+    assert!(
+        opened.contains("\u{2295}{hunter2}"),
+        "v2 binary must open v1 repo file byte-identically; got: {}",
+        opened
+    );
+
+    // Render — the full seal->render round-trip must work
+    env.run_ok(&["seal", "-x", "secret.txt"]);
+    env.run_ok(&["render", "-x", "secret.txt"]);
+    let rendered = env.read_file("secret.txt");
+    assert_eq!(
+        rendered, "db_pass=hunter2",
+        "v2 binary must render v1 repo file to exact plaintext"
+    );
+}
+
+/// TEST-03 (non-hybrid build): this binary is the "v1 binary" — it must exit
+/// non-zero when pointed at a v2-format .sss.toml, with an error containing
+/// "hybrid feature", no panic, and no corrupting writes.
+///
+/// Only compiled and run when the `hybrid` feature is OFF (non-hybrid = v1-equivalent build).
+#[test]
+#[cfg(not(feature = "hybrid"))]
+fn e2e_v1_binary_rejects_v2_config_with_documented_error() {
+    let env = SssTestEnv::new();
+    env.generate_keys(); // generate classic keys only
+
+    // Manually craft a v2 .sss.toml in the project dir (no valid sealed_key needed;
+    // the suite gate fires before any unseal attempt).
+    let v2_config = r#"version = "2.0"
+
+[testuser]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+added = "2026-01-01T00:00:00Z"
+"#;
+    env.write_file(".sss.toml", v2_config);
+
+    // Any command that loads the project config and dispatches suite_for must
+    // fail with the documented error.  `sss seal` triggers
+    // load_project_config_with_repository_key -> suite_for(Suite::Hybrid).
+    env.write_file("canary.txt", "x=\u{2295}{val}");
+    let out = env.cmd().args(["seal", "canary.txt"]).output().expect("run sss seal");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "non-hybrid binary must exit non-zero for v2 config; stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("hybrid feature") || stderr.contains("hybrid suite"),
+        "error must reference the hybrid feature; got stderr: {}",
+        stderr
+    );
+    assert_eq!(
+        stdout, "",
+        "no output on stdout for a v2-config error; got: {}",
+        stdout
+    );
+
+    // The .sss.toml must be byte-identical to what we wrote — no corrupting write.
+    let config_after = env.read_file(".sss.toml");
+    assert_eq!(
+        config_after, v2_config,
+        ".sss.toml must be untouched after the error"
+    );
+}
+
+/// TEST-03 (hybrid build): the hybrid binary CAN open a v2 config — this verifies
+/// the complement: the documented "hybrid feature" error does NOT fire for a v2
+/// config on a hybrid build.
+/// The command will fail (user lacks a real sealed key) but NOT with a version error.
+#[test]
+#[cfg(feature = "hybrid")]
+fn e2e_hybrid_binary_opens_v2_config_no_version_error() {
+    let env = SssTestEnv::new();
+    // Do NOT call env.setup() — we want to check the suite gate only.
+    // Write a syntactically valid v2 .sss.toml with a placeholder sealed_key.
+    // The test just verifies the error is NOT about the hybrid feature.
+    let v2_config = r#"version = "2.0"
+
+[testuser]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+added = "2026-01-01T00:00:00Z"
+"#;
+    env.write_file(".sss.toml", v2_config);
+
+    // `sss project show` loads ProjectConfig::load_from_file which calls
+    // resolve_suite_from_version — must NOT emit the hybrid-feature error.
+    let out = env.cmd().args(["project", "show"]).output().expect("run sss project show");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !stderr.contains("hybrid feature") && !stderr.contains("hybrid suite"),
+        "hybrid binary must NOT emit the hybrid-feature error for a v2 config; stderr: {}",
+        stderr
+    );
+    // The .sss.toml must be untouched.
+    let config_after = env.read_file(".sss.toml");
+    assert_eq!(config_after, v2_config, ".sss.toml must be untouched");
+}

@@ -12,7 +12,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
 
 - [x] **Phase 1: Suite Abstraction** - Introduce the `CryptoSuite` trait, route `.sss.toml` version dispatch through it, keep classic behaviour byte-identical — **Complete 2026-04-24**
 - [x] **Phase 2: Hybrid Crypto Suite** - Vendor trelis, implement `HybridCryptoSuite` for repo-key wrap, lock in the byte-identical-ciphertexts invariant — **Complete 2026-04-26**
-- [ ] **Phase 3: Keystore Dual-Suite Support** - Extend on-disk keystore to carry classic + hybrid keypairs under one user identity; grow `sss keygen`
+- [x] **Phase 3: Keystore Dual-Suite Support** - Extend on-disk keystore to carry classic + hybrid keypairs under one user identity; grow `sss keygen` (completed 2026-04-26)
 - [ ] **Phase 4: Migration Command** - `sss migrate` re-wraps `K` per user to hybrid, bumps version, never touches file content
 - [ ] **Phase 5: End-to-End Validation** - Property test and full-repo tests that lock in the cross-suite invariants and v1/v2 interop
 - [ ] **Phase 6: Documentation & Release** - Security/crypto docs, README/man pages, benchmarks, CHANGELOG, release-matrix cross-check
@@ -60,7 +60,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   4. A user who only holds a classic keypair gets a clear error when the repo is `version = "2.0"` and they have no hybrid public key on file — not silent failure, not auto-generation.
 **Plans**: 2 plans
   - [x] 03-01-PLAN.md — Wave 1: extend StoredKeyPair with optional hybrid fields + Keystore::store_dual_keypair / load_hybrid_keypair / get_current_stored_raw (KEYSTORE-01, KEYSTORE-03, KEYSTORE-04) — **Complete 2026-04-26**
-  - [ ] 03-02-PLAN.md — Wave 2: sss keys generate --suite CLI flag + handle_keys_generate_command dispatch + sss keys show subcommand (KEYSTORE-02, KEYSTORE-03)
+  - [x] 03-02-PLAN.md — Wave 2: sss keys generate --suite CLI flag + handle_keys_generate_command dispatch + sss keys show subcommand (KEYSTORE-02, KEYSTORE-03)
 
 ### Phase 4: Migration Command
 **Goal**: `sss migrate` re-wraps the existing repo key `K` for every user under the hybrid suite, bumps `.sss.toml` from `"1.0"` to `"2.0"`, and never rewrites any file content on disk.
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Suite Abstraction | 4/4 | Complete | 2026-04-24 |
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
-| 3. Keystore Dual-Suite Support | 1/2 | In progress | - |
+| 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
 | 4. Migration Command | 0/TBD | Not started | - |
 | 5. End-to-End Validation | 0/TBD | Not started | - |
 | 6. Documentation & Release | 0/TBD | Not started | - |

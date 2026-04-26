@@ -5,6 +5,13 @@ All notable changes to sss (Secret String Substitution) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-04-26
+
+### Fixed
+- `sss users add` now dispatches on decoded key byte length (32 → classic X25519; 1214 → hybrid X448+sntrup761) so v2 repos require only a single `add` call with the hybrid public key — the separate `add-hybrid-key` subcommand is retained for pre-migration use only
+- `sss users add` and `sss users remove` used a hardcoded `ClassicSuite` when opening the sealed repository key; they now use the project-declared suite, fixing both commands for v2 repos
+- Hybrid key for a freshly-added v2 user is stored in the `public` field (not `hybrid_public`), consistent with the `sss init --crypto hybrid` schema
+
 ## [2.0.0] - 2026-04-26
 
 ### Added

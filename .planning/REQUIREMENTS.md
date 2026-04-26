@@ -55,10 +55,10 @@ Surface the security tradeoffs to users and keep release artefacts consistent.
 
 Test suite locks in the invariants this milestone depends on.
 
-- [ ] **TEST-01**: Property test — for a random `K`, path, timestamp and plaintext, classic-wrap and hybrid-wrap of `K` both produce identical in-file AEAD ciphertexts
-- [ ] **TEST-02**: End-to-end — v2 binary transparently reads a v1.0 repo without migration
-- [ ] **TEST-03**: End-to-end — v1 binary produces the documented error (not a panic, not a data-destroying parse) when pointed at a v2.0 repo
-- [ ] **TEST-04**: End-to-end — `sss migrate` on a representative multi-user v1 repo yields a v2 repo that every user can open, with byte-identical file content
+- [x] **TEST-01**: Property test — for a random `K`, path, timestamp and plaintext, classic-wrap and hybrid-wrap of `K` both produce identical in-file AEAD ciphertexts  _(Plan 05-02, 2026-04-26)_
+- [x] **TEST-02**: End-to-end — v2 binary transparently reads a v1.0 repo without migration  _(Plan 05-01, 2026-04-26)_
+- [x] **TEST-03**: End-to-end — v1 binary produces the documented error (not a panic, not a data-destroying parse) when pointed at a v2.0 repo  _(Plan 05-01, 2026-04-26)_
+- [x] **TEST-04**: End-to-end — `sss migrate` on a representative multi-user v1 repo yields a v2 repo that every user can open, with byte-identical file content  _(Plan 05-03, 2026-04-26)_
 - [ ] **TEST-05**: Benchmarks — hybrid keygen, hybrid wrap, hybrid unwrap vs classic; `.sss.toml` size delta reported per user entry
 
 ## Future Requirements

@@ -35,12 +35,18 @@ Remove a user from the project. This triggers automatic key rotation to ensure t
 Display detailed information about a specific project user, including their public key and fingerprint.
 .SS Key Management
 .TP
-.B sss keys generate \fR[\fB--force\fR] [\fB--no-password\fR]
-Generate a new Ed25519 keypair. The private key is encrypted with a passphrase (unless
+.B sss keys generate \fR[\fB--suite\fR \fIclassic|hybrid|both\fR] [\fB--force\fR] [\fB--no-password\fR]
+Generate a new keypair. The private key is encrypted with a passphrase (unless
 .B --no-password
 is specified) and stored in the local keystore. Use
 .B --force
 to overwrite an existing keypair with the same name.
+.B --suite classic
+generates an X25519 (classic) keypair only.
+.B --suite hybrid
+generates an X448 + sntrup761 (trelis) hybrid keypair only.
+.B --suite both
+generates both classic and hybrid keypairs atomically, using the same Argon2id passphrase-wrap for each private key.
 .TP
 .B sss keys list
 List all keypairs stored in the local keystore, showing their names, IDs, and creation dates.
@@ -66,6 +72,47 @@ to preview changes without applying them.
 .B sss keygen \fR[\fB--force\fR] [\fB--no-password\fR]
 .I (Deprecated: use "sss keys generate" instead)
 Generate a new Ed25519 keypair.
+.SS Migration (v2.0)
+.TP
+.B sss migrate \fR[\fB--dry-run\fR]
+Upgrade a v1.0 classic project to v2.0 hybrid by re-wrapping the repository key
+.I K
+for every authorised user under the hybrid KEM (trelis X448 + sntrup761 \(-> BLAKE3 \(-> XChaCha20-Poly1305).
+Rewrites the
+.B sealed_key
+entries in
+.I .sss.toml
+and bumps
+.B version
+from
+.B "1.0"
+to
+.B "2.0"\fR.
+No sealed file content is touched.
+If any user in
+.I .sss.toml
+lacks a recorded hybrid public key,
+.B sss migrate
+exits non-zero with the list of affected users and instructs them to run
+.B sss keys generate --suite hybrid
+followed by
+.BR sss\ users\ add-hybrid-key\fR.
+.TP
+.B sss migrate --dry-run
+Print the full migration plan (which users will be re-wrapped, the version bump) and exit without modifying any file.
+Running
+.B sss migrate --dry-run
+produces no changes detectable by
+.BR git-status (1)\fR.
+.TP
+.B sss users add-hybrid-key \fIusername\fR \fIpubkey\fR
+Record a user's hybrid public key in
+.I .sss.toml\fR.
+.I pubkey
+is the base64-encoded hybrid public key (1214 bytes raw: X448 public scalar || sntrup761 public key).
+This must be done for every user before
+.B sss migrate
+can re-wrap their entry.
 .SS User Settings
 .TP
 .B sss settings show
@@ -299,6 +346,22 @@ $ sss settings set --auto-render-projects true
 $ sss settings show
 .RE
 .fi
+.SS Hybrid Suite Migration
+Upgrade a project from classic to hybrid:
+.PP
+.nf
+.RS
+$ sss keys generate --suite hybrid
+Enter passphrase: ****
+$ sss keys pubkey --suite hybrid > alice-hybrid.pub
+$ sss users add-hybrid-key alice "$(cat alice-hybrid.pub)"
+$ sss migrate --dry-run
+Would re-wrap 3 users: alice, bob, carol
+Would bump version: 1.0 -> 2.0
+$ sss migrate
+Migrated 3 users. .sss.toml version is now 2.0.
+.RE
+.fi
 .SH FILES
 .TP
 .I .sss.toml
@@ -329,6 +392,42 @@ Fallback text editor if not configured via
 .TP
 .B VISUAL
 Secondary fallback for text editor selection.
+.SH HYBRID SUITE
+.PP
+sss v2.0 introduces an opt-in post-quantum cryptographic suite for per-user repository-key
+wrapping, alongside the classic libsodium suite.
+.PP
+.B WARNING:
+The hybrid suite depends on
+.B trelis
+(X448 + sntrup761), which is
+.B experimental and has not been formally audited\fR.
+The classic suite (libsodium, v1.0) remains the recommended default for all production
+deployments until a trelis audit is completed.
+.PP
+The suite in use is determined by the
+.B version
+field in
+.IR .sss.toml :
+.TP
+.B version = "1.0"
+Classic suite. Repo-key wrapping via libsodium
+.BR crypto_box_seal (3)
+(X25519 + XSalsa20-Poly1305).
+.TP
+.B version = "2.0"
+Hybrid suite. Repo-key wrapping via trelis KEM (X448 + sntrup761) \(->
+BLAKE3 key derivation \(->
+XChaCha20-Poly1305 AEAD.
+.PP
+.B The in-file ciphertexts are byte-identical regardless of which suite is in use.
+Only the per-user
+.B sealed_key
+entries in
+.I .sss.toml
+differ.
+.B sss migrate
+re-wraps those entries without touching any sealed file.
 .SH SECURITY
 sss uses XChaCha20-Poly1305 authenticated encryption with deterministic nonce generation for content encryption. Private keys are protected using Argon2id key derivation and stored encrypted in the local keystore.
 .PP

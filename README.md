@@ -8,6 +8,7 @@ Transparent encryption of secrets within files using XChaCha20-Poly1305, with mu
 - **Multi-user architecture** -- hybrid X25519 + XChaCha20-Poly1305 encryption; each user holds their own keypair
 - **Git integration** -- pre-commit, post-merge, and post-checkout hooks maintain sealed state automatically
 - **Key derivation** -- Argon2id with configurable security levels (sensitive / moderate / interactive)
+- **Post-quantum hybrid suite** -- opt-in hybrid KEM (X448 + sntrup761 via trelis); file ciphertexts are byte-identical across suites; trelis is experimental and unaudited
 - **Deterministic nonces** -- BLAKE2b-derived nonces produce clean git diffs
 - **Marker inference** -- intelligent marker preservation when editing rendered files
 - **Secrets files** -- interpolation from `.secrets` files with YAML-style multi-line values
@@ -160,7 +161,9 @@ All file commands accept `-` to read from stdin.
 ### Key Management
 
 ```bash
-sss keys generate                    # Generate new keypair (with passphrase prompt)
+sss keys generate                    # Generate new keypair (classic, default)
+sss keys generate --suite hybrid     # Generate hybrid (X448+sntrup761) keypair
+sss keys generate --suite both       # Generate both classic and hybrid keypairs atomically
 sss keys generate --no-password      # Generate keypair without passphrase
 sss keys list                        # List private keys
 sss keys pubkey                      # Show your public key
@@ -188,10 +191,19 @@ sss users remove <user>              # Remove user (triggers key rotation)
 sss users info <user>                # Show information about a user
 ```
 
+### Migration
+
+```bash
+sss migrate             # Migrate repo from classic (v1.0) to hybrid (v2.0)
+sss migrate --dry-run   # Preview migration plan without touching disk
+sss users add-hybrid-key <user> <pubkey>  # Record a user's hybrid public key before migration
+```
+
 ### Project Management
 
 ```bash
 sss init [username]                  # Initialise project
+sss init [username] --crypto hybrid  # Initialise a v2.0 hybrid project
 sss project show                     # Show settings for current project
 sss project list                     # List all configured projects
 sss project enable <feature>         # Enable render or open for project-wide ops
@@ -253,6 +265,61 @@ All users can then seal and open files independently using their own private key
 
 See [docs/usage-guide.md](docs/usage-guide.md#team-collaboration) for the full team collaboration workflow.
 
+## Hybrid / Post-Quantum Suite (v2.0)
+
+> **WARNING:** The hybrid suite depends on `trelis` (X448 + sntrup761), which is experimental
+> and **has not been audited**. The classic suite (libsodium, v1.0) remains the recommended
+> default for production use. Use hybrid only if you need post-quantum key-wrapping resistance
+> and accept the experimental status of trelis.
+
+sss v2.0 introduces an opt-in hybrid post-quantum KEM for repository-key wrapping. The
+in-file ciphertexts (`⊠{...}` markers) are byte-identical between classic and hybrid repos;
+only the per-user `sealed_key` entries in `.sss.toml` differ.
+
+**Suite selection is controlled by the `version` field in `.sss.toml`:**
+
+| version | Suite | Wrapping |
+|---------|-------|---------|
+| `"1.0"` | Classic (default) | libsodium `crypto_box_seal` (X25519) |
+| `"2.0"` | Hybrid (opt-in) | trelis KEM (X448 + sntrup761) → BLAKE3 → XChaCha20-Poly1305 |
+
+### Creating a new hybrid project
+
+```bash
+# Requires: sss built with --features hybrid
+sss keys generate --suite both    # generate classic + hybrid keypairs
+sss init --crypto hybrid alice    # create v2.0 project
+```
+
+### Migrating an existing project to hybrid
+
+```bash
+# Step 1: every user generates a hybrid keypair
+sss keys generate --suite hybrid
+
+# Step 2: every user exports their hybrid public key and shares it
+sss keys pubkey --suite hybrid > alice-hybrid.pub
+
+# Step 3: the project owner records each user's hybrid key
+sss users add-hybrid-key alice "$(cat alice-hybrid.pub)"
+
+# Step 4: preview the migration plan (no disk writes)
+sss migrate --dry-run
+
+# Step 5: perform the migration (rewrites .sss.toml only, never file content)
+sss migrate
+```
+
+After `sss migrate`, `.sss.toml` carries `version = "2.0"`. All sealed files are unchanged.
+
+### Building with hybrid support
+
+```bash
+cargo build --features hybrid --release
+```
+
+The default build does not include `trelis`. Binary packages that ship hybrid support will be labelled accordingly.
+
 ## Secrets Files
 
 Secrets files hold named values that can be interpolated into sealed files using the `⊲{name}` syntax:
@@ -301,6 +368,7 @@ Cryptographic primitives:
 | Authenticated encryption | XChaCha20-Poly1305 (via libsodium) |
 | Key derivation | Argon2id |
 | Key exchange | X25519 (crypto_box_seal) |
+| Key exchange (hybrid, opt-in) | X448 + sntrup761 KEM (trelis, experimental) |
 | Identity | Ed25519 |
 | Nonce derivation | BLAKE2b keyed hash |
 
@@ -313,6 +381,10 @@ Cryptographic primitives:
 **Rate limiting:** authentication attempts are rate-limited to mitigate brute-force attacks.
 
 See [docs/security-model.md](docs/security-model.md) for the full security model including Argon2id parameter levels, threat model, and key hierarchy. See [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for detailed cryptographic implementation notes.
+
+> **v2.0 note:** The hybrid suite adds post-quantum key-wrapping (opt-in). trelis is
+> experimental and unaudited. See [docs/security-model.md](docs/security-model.md) and
+> [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for full details.
 
 ## Emacs Integration
 
@@ -498,7 +570,7 @@ cargo clippy -- -D warnings                  # Linting
 |----------|-------------|
 | [docs/usage-guide.md](docs/usage-guide.md) | Common workflows: setup, seal/open/edit/render, key management, team collaboration, git hooks |
 | [docs/configuration.md](docs/configuration.md) | Configuration reference: .sss.toml, settings.toml, environment variables |
-| [docs/security-model.md](docs/security-model.md) | Security model: algorithms, key hierarchy, threat model |
+| [docs/security-model.md](docs/security-model.md) | Security model: algorithms, key hierarchy, threat model including v2.0 hybrid suite |
 | [docs/marker-format.md](docs/marker-format.md) | Marker syntax reference: BNF grammar, ciphertext payload format |
 | [docs/architecture.md](docs/architecture.md) | Technical architecture: processor pipeline, marker inference, FUSE, 9P |
 | [docs/sss-mode-guide.md](docs/sss-mode-guide.md) | Emacs sss-mode installation and usage |

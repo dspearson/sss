@@ -5,6 +5,34 @@ All notable changes to sss (Secret String Substitution) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-04-26
+
+### Added
+- **Hybrid Post-Quantum Suite (opt-in)**: opt-in KEM for per-user repository-key wrapping
+  - trelis (X448 + sntrup761) KEM → BLAKE3 KDF → XChaCha20-Poly1305 AEAD seals the repo key per user
+  - `sss init --crypto <classic|hybrid>` selects the cryptographic suite at project creation; `classic` is the default
+  - In-file AEAD ciphertexts (`⊠{...}` markers) are byte-identical regardless of suite — only `.sss.toml` per-user entries differ
+  - `hybrid` Cargo feature flag gates all trelis code; default build links only libsodium
+- **Keystore dual-suite support**: per-user keystore holds classic and hybrid keypairs side-by-side
+  - `sss keys generate --suite <classic|hybrid|both>` — `--suite` is required; no default
+  - Upgrading an existing keystore never destroys the classic keypair
+  - Argon2id passphrase-wrapping covers both suite's private keys via the same KDF path
+- **Migration command** (`sss migrate`): upgrades a v1.0 classic repo to v2.0 hybrid
+  - Re-wraps the repository key for every user under the hybrid KEM; bumps `.sss.toml` version
+  - Exits non-zero with a user list if any user lacks a hybrid public key, preventing partial writes
+  - `sss migrate --dry-run` prints the full plan without touching disk
+- **User hybrid-key registration** (`sss users add-hybrid-key <user> <pubkey>`): records a user's hybrid public key in `.sss.toml` as a prerequisite for migration
+- **Suite-aware type system**: `PublicKey`, `KeyPair` widened to suite-aware enums; cross-suite operation attempts fail loudly
+
+### Security
+- **EXPERIMENTAL — trelis is unaudited**: the hybrid KEM (trelis X448 + sntrup761) has not undergone a formal third-party security audit; hybrid is opt-in and disabled by default; classic (libsodium) remains the recommended default
+- Hybrid secret key material zeroised on drop via `ZeroizeOnDrop`; no plaintext K material persists in hybrid wrap/unwrap types after use
+- v1 binary emits a clear, actionable error when pointed at a v2.0 `.sss.toml` (no silent corruption, no panic)
+
+### Changed
+- `.sss.toml` `version` field now dispatches cryptographic suite: `"1.0"` → classic, `"2.0"` → hybrid
+- Per-user `sealed_key` entries in `.sss.toml` are approximately 1448 base64 characters larger in v2.0 (1167 bytes raw vs 80 bytes raw)
+
 ## [1.2.0] - 2025-03-15
 
 ### Added

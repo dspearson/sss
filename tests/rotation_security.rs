@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Security-critical integration tests for key rotation functionality
 //!
 //! This test module provides comprehensive coverage for the rotation module which

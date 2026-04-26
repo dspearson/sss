@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Rotation module coverage expansion tests (TEST-03)
 //!
 //! Targets the 93.6% uncovered paths in src/rotation.rs that are NOT covered
@@ -438,6 +439,93 @@ fn test_rotation_result_fields_accurate() -> Result<()> {
     assert!(
         !result.new_key_id.is_empty(),
         "new_key_id must be populated"
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// Bug-fix regression: .secrets file re-encryption and per-file nonce uniqueness
+// ============================================================================
+
+/// Regression: .secrets files must be re-encrypted (not written as plaintext)
+/// after key rotation via RotationManager.
+///
+/// Previously RotationManager::reencrypt_single_file passed "<content>" as the
+/// path to process_content, causing is_secrets_file to return false and the
+/// decrypted plaintext to be written back without re-encryption.
+#[test]
+fn test_rotation_secrets_file_stays_encrypted() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let root = temp_dir.path();
+
+    let keypair = KeyPair::generate()?;
+    let old_key = RepositoryKey::new();
+    let config_path = create_single_user_project(root, "alice", &keypair, &old_key)?;
+
+    let secrets_path = root.join("app.secrets");
+    let plaintext = "DB_PASSWORD=supersecret\nAPI_KEY=abc123\n";
+    write_sealed_file(&secrets_path, plaintext, &old_key)?;
+
+    // Verify sealed before rotation
+    let before = fs::read_to_string(&secrets_path)?;
+    assert!(before.trim().starts_with("⊠{"), "precondition: file must be sealed before rotation");
+
+    let manager = RotationManager::new(rotation_opts(true));
+    let result = manager.rotate_repository_key(&config_path, &old_key, RotationReason::ManualRotation)?;
+    assert_eq!(result.files_processed, 1);
+    assert_eq!(result.files_failed, 0);
+
+    // Must still be encrypted — not plaintext — after rotation
+    let after = fs::read_to_string(&secrets_path)?;
+    assert!(
+        after.trim().starts_with("⊠{"),
+        "Secrets file must remain encrypted after rotation; got: {after:?}"
+    );
+    assert!(!after.contains("supersecret"), "Secret must not appear in plaintext after rotation");
+    assert!(!after.contains("abc123"), "Secret must not appear in plaintext after rotation");
+
+    // New key must decrypt the rotated file back to the original plaintext
+    let updated_config = ProjectConfig::load_from_file(&config_path)?;
+    let sealed_key = updated_config.users.get("alice").unwrap().sealed_key.clone();
+    let new_repo_key = open_repository_key(&sealed_key, &keypair)?;
+    let inner = after.trim()
+        .strip_prefix("⊠{").unwrap()
+        .strip_suffix('}').unwrap();
+    let decrypted = decrypt_from_base64(inner, &new_repo_key)?;
+    assert_eq!(decrypted, plaintext, "New key must recover original plaintext from rotated secrets file");
+
+    Ok(())
+}
+
+/// Regression: after rotation, two different files containing the same secret
+/// value must receive different ciphertexts (per-file nonce uniqueness).
+///
+/// Previously RotationManager::reencrypt_single_file passed "<content>" as the
+/// path, so both files shared the same nonce derivation inputs and produced
+/// identical ciphertexts for identical plaintexts.
+#[test]
+fn test_rotation_per_file_nonce_uniqueness() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let root = temp_dir.path();
+
+    let keypair = KeyPair::generate()?;
+    let old_key = RepositoryKey::new();
+    let config_path = create_single_user_project(root, "bob", &keypair, &old_key)?;
+
+    let shared_secret = "shared_password_value";
+    write_sealed_file(&root.join("file_a.txt"), shared_secret, &old_key)?;
+    write_sealed_file(&root.join("file_b.txt"), shared_secret, &old_key)?;
+
+    let manager = RotationManager::new(rotation_opts(true));
+    let result = manager.rotate_repository_key(&config_path, &old_key, RotationReason::ManualRotation)?;
+    assert_eq!(result.files_processed, 2);
+
+    let ct_a = fs::read_to_string(root.join("file_a.txt"))?;
+    let ct_b = fs::read_to_string(root.join("file_b.txt"))?;
+    assert_ne!(
+        ct_a, ct_b,
+        "Different files with the same secret must have different ciphertexts after rotation"
     );
 
     Ok(())

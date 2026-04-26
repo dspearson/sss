@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /// End-to-end integration test for the complete multi-user SSS workflow.
 ///
 /// Exercises the full lifecycle in a single test:

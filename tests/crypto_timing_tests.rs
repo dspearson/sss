@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Cryptography security and timing tests
 //!
 //! This test module provides security testing for cryptographic operations,

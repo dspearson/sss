@@ -84,7 +84,10 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   2. End-to-end test: v2 binary opens a v1-format `.sss.toml` repo, renders all sealed files, and round-trips seal/render — no migration required.
   3. End-to-end test: v1 binary pointed at a v2-format `.sss.toml` repo exits with the documented error message (asserted literally), non-zero, no panic, no corrupting writes.
   4. End-to-end test: `sss migrate` on a representative multi-user repo (≥3 users) produces a v2 repo where each user can independently render the content with byte-identical plaintext to the pre-migration state.
-**Plans**: TBD
+**Plans**: 3 plans
+  - [ ] 05-01-PLAN.md — Wave 1: fix 62 failing e2e tests (--suite classic in helpers) + TEST-02 and TEST-03 interop tests (TEST-02, TEST-03)
+  - [ ] 05-02-PLAN.md — Wave 1: proptest property test for byte-identical AEAD ciphertext across classic/hybrid suites (TEST-01)
+  - [ ] 05-03-PLAN.md — Wave 2: multi-user migration e2e test driving sss migrate CLI on 3-user repo (TEST-04)
 
 ### Phase 6: Documentation & Release
 **Goal**: The security tradeoffs, migration flow and default selection are documented; benchmarks quantify hybrid cost vs classic; the release matrix still builds cleanly.
@@ -108,5 +111,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
 | 4. Migration Command | 2/2 | Complete   | 2026-04-26 |
-| 5. End-to-End Validation | 0/TBD | Not started | - |
+| 5. End-to-End Validation | 0/3 | Not started | - |
 | 6. Documentation & Release | 0/TBD | Not started | - |

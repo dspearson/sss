@@ -13,7 +13,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
 - [x] **Phase 1: Suite Abstraction** - Introduce the `CryptoSuite` trait, route `.sss.toml` version dispatch through it, keep classic behaviour byte-identical — **Complete 2026-04-24**
 - [x] **Phase 2: Hybrid Crypto Suite** - Vendor trelis, implement `HybridCryptoSuite` for repo-key wrap, lock in the byte-identical-ciphertexts invariant — **Complete 2026-04-26**
 - [x] **Phase 3: Keystore Dual-Suite Support** - Extend on-disk keystore to carry classic + hybrid keypairs under one user identity; grow `sss keygen` (completed 2026-04-26)
-- [ ] **Phase 4: Migration Command** - `sss migrate` re-wraps `K` per user to hybrid, bumps version, never touches file content
+- [x] **Phase 4: Migration Command** - `sss migrate` re-wraps `K` per user to hybrid, bumps version, never touches file content (completed 2026-04-26)
 - [ ] **Phase 5: End-to-End Validation** - Property test and full-repo tests that lock in the cross-suite invariants and v1/v2 interop
 - [ ] **Phase 6: Documentation & Release** - Security/crypto docs, README/man pages, benchmarks, CHANGELOG, release-matrix cross-check
 
@@ -73,7 +73,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   4. `sss migrate --dry-run` prints the full plan (which users get re-wrapped, the version bump) and exits without touching disk; running it produces no modifications detectable by `git status`.
 **Plans**: 2 plans
   - [x] 04-01-PLAN.md — Wave 1: add hybrid_public to UserConfig; fix resolve_suite_from_version for v2; add sss users add-hybrid-key; fix load_project_config_internal suite dispatch (MIGRATE-01, MIGRATE-03)
-  - [ ] 04-02-PLAN.md — Wave 2: implement sss migrate command with --dry-run, full migration logic, and unit tests (MIGRATE-01, MIGRATE-02, MIGRATE-03, MIGRATE-04)
+  - [x] 04-02-PLAN.md — Wave 2: implement sss migrate command with --dry-run, full migration logic, and unit tests (MIGRATE-01, MIGRATE-02, MIGRATE-03, MIGRATE-04)
 
 ### Phase 5: End-to-End Validation
 **Goal**: The invariants this milestone depends on are locked in by property and end-to-end tests — random-input property check on the shared-AEAD invariant, cross-version read tests, and a full multi-user migration test.
@@ -107,6 +107,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Suite Abstraction | 4/4 | Complete | 2026-04-24 |
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
-| 4. Migration Command | 1/2 | In Progress|  |
+| 4. Migration Command | 2/2 | Complete   | 2026-04-26 |
 | 5. End-to-End Validation | 0/TBD | Not started | - |
 | 6. Documentation & Release | 0/TBD | Not started | - |

@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.sss.toml` `version` field now dispatches cryptographic suite: `"1.0"` → classic, `"2.0"` → hybrid
 - Per-user `sealed_key` entries in `.sss.toml` are approximately 1448 base64 characters larger in v2.0 (1167 bytes raw vs 80 bytes raw)
 
+### Fixed
+- Key fingerprint display: box header labels shortened to `[CLASSIC]` and `[PQCRYPT]` — both 7 chars, giving symmetric 4-dash padding on each side; previously `[SSS KEY (Classic)]` overflowed the 17-char box interior by 2 chars
+- Redundant `Classic keypair:` / `Hybrid keypair:` prefix lines removed; the box label is self-describing
+
 ## [1.2.0] - 2025-03-15
 
 ### Added

@@ -4,6 +4,7 @@ pub mod git;
 pub mod hooks;
 pub mod init;
 pub mod keys;
+pub mod migrate;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub mod mount;
 #[cfg(feature = "ninep")]

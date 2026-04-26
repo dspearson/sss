@@ -2,7 +2,7 @@
   "name": "sss-vscode",
   "displayName": "Secret String Substitution",
   "description": "Transparent encryption/decryption for SSS (Secret String Substitution) projects with project and key management",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "sss",
   "license": "ISC",
   "repository": {

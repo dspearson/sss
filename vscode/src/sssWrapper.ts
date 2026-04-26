@@ -439,11 +439,10 @@ export class SSSWrapper {
     }
 
     /**
-     * Initialise a new sss project
+     * Initialise a new sss project. Defaults to 'hybrid' for new projects.
      */
-    async initProject(username: string, projectPath?: string, crypto?: 'classic' | 'hybrid'): Promise<void> {
-        const cryptoFlag = crypto ? ` --crypto ${crypto}` : '';
-        await this.runCommand(`"${this.config.sssPath}" init "${username}"${cryptoFlag}`, projectPath, true);
+    async initProject(username: string, projectPath?: string, crypto: 'classic' | 'hybrid' = 'hybrid'): Promise<void> {
+        await this.runCommandWithArgs(['init', username, '--crypto', crypto], projectPath, true);
     }
 
     /**
@@ -497,10 +496,17 @@ export class SSSWrapper {
     }
 
     /**
-     * Add user to project
+     * Add user to project (classic public key)
      */
     async addUser(username: string, publicKey: string): Promise<void> {
-        await this.runCommand(`"${this.config.sssPath}" users add "${username}" "${publicKey}"`, undefined, true);
+        await this.runCommandWithArgs(['users', 'add', username, publicKey], undefined, true);
+    }
+
+    /**
+     * Add hybrid public key for an existing user (v2 projects only)
+     */
+    async addHybridKey(username: string, hybridPublicKey: string): Promise<void> {
+        await this.runCommandWithArgs(['users', 'add-hybrid-key', username, hybridPublicKey], undefined, true);
     }
 
     /**
@@ -514,29 +520,23 @@ export class SSSWrapper {
      * Generate new keypair
      */
     async generateKey(passwordProtected: boolean = false, password?: string, suite?: 'classic' | 'hybrid' | 'both'): Promise<void> {
-        // Always use --force (sss bug: it never overwrites, just creates new keypair)
-        const flags = passwordProtected ? '--force' : '--force --no-password';
-        const suiteFlag = suite ? ` --suite ${suite}` : '';
+        const args = ['keys', 'generate', '--force'];
+        if (!passwordProtected) {
+            args.push('--no-password');
+        }
+        if (suite) {
+            args.push('--suite', suite);
+        }
 
-        // If password-protected and password provided, cache it and set environment variable
         const env: Record<string, string> | undefined = passwordProtected && password
             ? { SSS_PASSPHRASE: password }
             : undefined;
 
-        await this.runCommand(`"${this.config.sssPath}" keys generate ${flags}${suiteFlag}`, undefined, false, env);
+        await this.runCommandWithArgs(args, undefined, false, env);
 
-        // Cache the password for future use if provided
         if (passwordProtected && password) {
             this.setCachedPassword(password);
         }
-    }
-
-    /**
-     * Get hybrid public key
-     */
-    async getHybridPublicKey(): Promise<string> {
-        const { stdout } = await this.runCommand(`"${this.config.sssPath}" keys pubkey --suite hybrid`, undefined, true);
-        return stdout.trim();
     }
 
     /**

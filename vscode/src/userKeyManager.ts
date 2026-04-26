@@ -9,6 +9,10 @@ export class UserKeyManager {
     }
 
     async addUser(): Promise<void> {
+        // Detect project suite so we can ask for the right keys
+        const projectInfo = await this.sssWrapper.checkProjectStatus();
+        const isHybrid = projectInfo.suite === 'hybrid';
+
         // Get existing users first to check for duplicates
         const existingUsers = await this.sssWrapper.listUsers();
         const existingUsernames = existingUsers.map(u => u.username.toLowerCase());
@@ -32,9 +36,13 @@ export class UserKeyManager {
             return;
         }
 
-        // Prompt for public key
+        // Prompt for classic public key
+        const classicKeyPrompt = isHybrid
+            ? 'Classic public key (base64, ~44 chars) — from `sss keys current`, "Public key:" line'
+            : 'Public key (base64) — from `sss keys pubkey`';
+
         const publicKey = await vscode.window.showInputBox({
-            prompt: 'Enter user\'s public key (base64)',
+            prompt: classicKeyPrompt,
             placeHolder: 'base64-encoded-public-key',
             validateInput: (value) => {
                 if (!value || value.trim().length === 0) {
@@ -48,13 +56,26 @@ export class UserKeyManager {
             return;
         }
 
+        // For v2 projects also collect the hybrid public key (optional — can be added later)
+        let hybridPublicKey: string | undefined;
+        if (isHybrid) {
+            hybridPublicKey = await vscode.window.showInputBox({
+                prompt: 'Hybrid public key (base64, ~1600 chars) — from `sss keys pubkey` in a v2 project (leave empty to skip)',
+                placeHolder: 'base64-encoded-hybrid-public-key (optional)',
+                validateInput: () => null
+            });
+        }
+
         try {
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: `Adding user ${username}...`,
                 cancellable: false
             }, async () => {
-                await this.sssWrapper.addUser(username, publicKey);
+                await this.sssWrapper.addUser(username, publicKey.trim());
+                if (hybridPublicKey && hybridPublicKey.trim()) {
+                    await this.sssWrapper.addHybridKey(username, hybridPublicKey.trim());
+                }
             });
 
             vscode.window.showInformationMessage(`User ${username} added successfully`);
@@ -150,14 +171,24 @@ export class UserKeyManager {
     }
 
     async generateKey(): Promise<void> {
-        const suiteChoice = await vscode.window.showQuickPick(
-            [
-                { label: 'Classic', description: 'XChaCha20-Poly1305 (stable default)', value: 'classic' as const },
-                { label: 'Hybrid', description: 'Classic + post-quantum Kyber (experimental)', value: 'hybrid' as const },
-                { label: 'Both', description: 'Generate classic and hybrid keypair together', value: 'both' as const }
-            ],
-            { placeHolder: 'Select key suite' }
-        );
+        // Detect project suite so we can list the recommended option first
+        const projectInfo = await this.sssWrapper.checkProjectStatus();
+        const isClassicProject = projectInfo.suite === 'classic';
+
+        const suiteOptions = [
+            { label: 'Both', description: 'Classic + hybrid keypair (recommended for v2 projects)', value: 'both' as const },
+            { label: 'Hybrid', description: 'Post-quantum KEM (sntrup761 + X448) only', value: 'hybrid' as const },
+            { label: 'Classic', description: 'X25519 / XChaCha20-Poly1305 only', value: 'classic' as const }
+        ];
+
+        // For v1 projects put classic first; otherwise both/hybrid leads
+        if (isClassicProject) {
+            suiteOptions.reverse();
+        }
+
+        const suiteChoice = await vscode.window.showQuickPick(suiteOptions, {
+            placeHolder: isClassicProject ? 'Select key suite (classic recommended for v1 project)' : 'Select key suite'
+        });
         if (!suiteChoice) {
             return;
         }

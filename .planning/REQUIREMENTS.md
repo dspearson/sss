@@ -47,7 +47,7 @@ Per-user keystore gains side-by-side storage for both suites' keypairs.
 
 Surface the security tradeoffs to users and keep release artefacts consistent.
 
-- [ ] **DOCS-01**: `docs/SECURITY.md` and `docs/CRYPTOGRAPHY.md` updated with the hybrid suite spec, threat-model deltas, and an explicit "trelis is unaudited / experimental" disclaimer
+- [ ] **DOCS-01**: `docs/security-model.md` and `docs/CRYPTOGRAPHY.md` updated with the hybrid suite spec, threat-model deltas, and an explicit "trelis is unaudited / experimental" disclaimer
 - [ ] **DOCS-02**: README and man pages describe the classic/hybrid choice, migration flow, and default selection
 - [ ] **DOCS-03**: CHANGELOG entry for v2.0; release-build scripts cross-check the PQ feature compiles cleanly on the existing release matrix (Linux, macOS, musl)
 

@@ -1,6 +1,6 @@
 Name:           sss
 Version:        1.3.1
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
 License:        ISC

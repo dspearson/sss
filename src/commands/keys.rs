@@ -632,7 +632,7 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
             classic_key_bytes.len() as u64,
         );
     }
-    generate_randomart(&classic_hash, "Classic");
+    generate_randomart(&classic_hash, "CLASSIC");
 
     // --- Hybrid keypair block (only if present and hybrid feature enabled) ---
     #[cfg(feature = "hybrid")]

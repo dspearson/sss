@@ -201,25 +201,30 @@ impl Keystore {
         Ok(key_id)
     }
 
-    /// Set the current key by creating/updating the "current" symlink
+    /// Set the current key by atomically replacing the "current" symlink.
+    ///
+    /// Uses a create-at-temp + rename pattern to avoid the TOCTOU race that
+    /// occurs when multiple callers check-then-create the symlink concurrently.
     pub fn set_current_key(&self, key_id: &str) -> Result<()> {
         let current_link = self.keys_dir.join("current");
         let target = format!("{key_id}.toml");
 
-        // Remove existing symlink if it exists
-        if current_link.exists() {
-            fs::remove_file(&current_link)?;
-        }
-
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(&target, &current_link)?;
+            // Write to a unique temp name then rename(2) into place.
+            // rename(2) is atomic on POSIX and replaces an existing destination,
+            // so no explicit remove or existence check is needed.
+            let tmp_link = self.keys_dir.join(format!("current.tmp.{}", Uuid::new_v4()));
+            std::os::unix::fs::symlink(&target, &tmp_link)?;
+            fs::rename(&tmp_link, &current_link)?;
         }
 
         #[cfg(windows)]
         {
-            // On Windows, create a text file containing the target filename
-            fs::write(&current_link, &target)?;
+            // On Windows write to a temp path then rename into place.
+            let tmp_path = self.keys_dir.join(format!("current.tmp.{}", Uuid::new_v4()));
+            fs::write(&tmp_path, &target)?;
+            fs::rename(&tmp_path, &current_link)?;
         }
 
         Ok(())

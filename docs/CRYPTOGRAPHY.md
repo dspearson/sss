@@ -9,13 +9,14 @@ This document provides a detailed technical specification of the cryptographic p
 1. [Cryptographic Dependencies](#cryptographic-dependencies)
 2. [Symmetric Encryption](#symmetric-encryption)
 3. [Asymmetric Encryption](#asymmetric-encryption)
-4. [Key Derivation](#key-derivation)
-5. [Hash Functions](#hash-functions)
-6. [Nonce Derivation](#nonce-derivation)
-7. [Memory Safety](#memory-safety)
-8. [Implementation Patterns](#implementation-patterns)
-9. [Security Properties](#security-properties)
-10. [Code Examples](#code-examples)
+4. [Hybrid Suite (v2.0)](#hybrid-suite-v20)
+5. [Key Derivation](#key-derivation)
+6. [Hash Functions](#hash-functions)
+7. [Nonce Derivation](#nonce-derivation)
+8. [Memory Safety](#memory-safety)
+9. [Implementation Patterns](#implementation-patterns)
+10. [Security Properties](#security-properties)
+11. [Code Examples](#code-examples)
 
 ## Cryptographic Dependencies
 
@@ -232,6 +233,109 @@ pub fn unwrap_repository_key(sealed: &[u8], keypair: &KeyPair) -> Result<Reposit
 - **Anonymous**: No sender identification (sealed box property)
 - **Authenticated**: Poly1305 MAC prevents tampering
 - **Post-Quantum Security**: ~128-bit security against Grover's algorithm
+
+## Hybrid Suite (v2.0)
+
+### WARNING: trelis is Unaudited and Experimental
+
+> **WARNING: The hybrid suite depends on the `trelis` library (X448 + sntrup761), which is
+> experimental and has not undergone a formal third-party security audit. The hybrid suite is
+> opt-in and disabled by default. Classic (libsodium) remains the recommended default for all
+> production deployments until a trelis audit is completed. Do not rely on the hybrid suite
+> for production security without understanding this limitation.**
+
+### Algorithm Overview
+
+The hybrid suite uses **trelis** (X448 + sntrup761) for key-encapsulation, **BLAKE3** for key
+derivation, and **libsodium XChaCha20-Poly1305** for AEAD. The in-file ciphertext layer is
+identical to the classic suite; only per-user `.sss.toml` `sealed_key` entries differ between
+suites. Hybrid is selected when the `.sss.toml` `version` field is `"2.0"`.
+
+### Public Key Sizes
+
+| Component | Size (bytes) | Description |
+|-----------|-------------|-------------|
+| X448 public scalar | 56 | DH component |
+| sntrup761 public key | 1158 | KEM component |
+| Combined (`HYBRID_PUBLIC_KEY_SIZE`) | 1214 | Concatenated |
+| X448 secret scalar | 56 | DH component |
+| sntrup761 secret key | 1763 | KEM component |
+| Combined (`HYBRID_SECRET_KEY_SIZE`) | 1819 | Concatenated |
+
+### KEM and Key-Derivation
+
+The hybrid suite seals the 32-byte repository key `K` via a three-step process:
+
+1. **trelis KEM** — `HybridKemKeypair::encapsulate(recipient_public_key)` produces
+   `(encapsulation[1095], shared_bytes[64])`. The encapsulation contains the X448 ephemeral
+   public key concatenated with the sntrup761 ciphertext.
+2. **BLAKE3 KDF** — `blake3::derive_key("sss hybrid kem v1", shared_bytes)` reduces the
+   64-byte shared secret to a 32-byte AEAD key.
+3. **libsodium XChaCha20-Poly1305** — the derived 32-byte key seals the repository key `K`
+   with a random 24-byte nonce.
+
+### Sealed Key Wire Format
+
+```
+Hybrid sealed key (1167 bytes total):
+  [0..1095)    encapsulation  — X448 ephemeral || sntrup761 ciphertext
+  [1095..1119) nonce          — 24-byte random XChaCha20 nonce
+  [1119..1167) ciphertext     — 32-byte K encrypted + 16-byte Poly1305 tag
+
+Classic sealed key (80 bytes total, for comparison):
+  [0..32)  ephemeral_pubkey   — X25519 ephemeral sender public key
+  [32..80) ciphertext+mac     — 32-byte K encrypted + 16-byte XSalsa20-Poly1305 mac
+```
+
+Per-user `.sss.toml` `sealed_key` field grows by approximately **1448 base64 characters** per
+user entry (1167 bytes vs 80 bytes raw; `ceil(1167/3)*4 − ceil(80/3)*4 = 1556 − 108 ≈ 1448`).
+
+### Byte-Identical Ciphertexts Invariant
+
+A core invariant of the sss v2.0 design is that **in-file ciphertexts are byte-for-byte
+identical regardless of which suite wrapped the repository key**:
+
+- The 32-byte repository key `K` is **identical** regardless of which suite wrapped it — both
+  suites seal the same `K`.
+- Nonce derivation uses `BLAKE2b-192(key=K, input=timestamp||NUL||file_path||NUL||plaintext)`
+  with personalisation `"sss_autononce_v1"`. This uses the **same `K`** for both suites.
+- Therefore the XChaCha20-Poly1305 AEAD ciphertext embedded in each `⊠{...}` marker is
+  byte-identical whether `K` was wrapped via classic or hybrid.
+- `sss migrate` re-wraps the per-user entries in `.sss.toml` only; **no file content is
+  touched**.
+
+### Feature Gate
+
+The hybrid suite is compiled only when the `hybrid` Cargo feature is enabled. The default
+build links only libsodium and contains no trelis code.
+
+```bash
+# Default build: classic suite only
+cargo build
+
+# Hybrid suite included (adds trelis dependency)
+cargo build --features hybrid
+```
+
+### Classic vs Hybrid Comparison
+
+| Property | Classic (v1.0) | Hybrid (v2.0) |
+|----------|----------------|----------------|
+| KEM | X25519 (`crypto_box_seal`) | X448 + sntrup761 (trelis) |
+| KDF | XSalsa20-Poly1305 nonce derivation (implicit in NaCl) | BLAKE3 `derive_key` |
+| AEAD for sealed key | XSalsa20-Poly1305 | XChaCha20-Poly1305 |
+| AEAD for file content | XChaCha20-Poly1305 (unchanged) | XChaCha20-Poly1305 (unchanged) |
+| Post-quantum security | No | Yes (sntrup761 lattice KEM) |
+| Audit status | libsodium (extensively audited) | trelis (unaudited, experimental) |
+| Sealed key size (bytes) | 80 | 1167 |
+| `.sss.toml` size delta/user | — | +~1448 base64 chars |
+| Default | Yes | No (opt-in) |
+
+**Classic (libsodium) is the recommended default for all production deployments.** The hybrid
+suite is opt-in and should only be used when post-quantum key-wrapping is required and the
+experimental status of trelis is understood and accepted.
+
+---
 
 ## Key Derivation
 
@@ -773,6 +877,6 @@ fn example_key_wrapping() -> Result<()> {
 
 ---
 
-**Last Updated**: 2025-12-07
-**Version**: 1.2.0
+**Last Updated**: 2026-04-26
+**Version**: 2.0.0
 **Security Review**: See [SECURITY.md](./SECURITY.md)

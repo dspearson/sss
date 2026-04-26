@@ -18,8 +18,13 @@ The cryptographic implementation is built directly on [libsodium](https://doc.li
 |-----------|---------|----------|------------|-----|
 | XChaCha20-Poly1305 | Symmetric encryption of secret content | 256 bits (32 bytes) | 192 bits (24 bytes) | 128 bits (16 bytes) |
 | BLAKE2b (keyed) | Deterministic nonce derivation | 256-bit BLAKE2b key (repository key) | — | — |
-| X25519 (`crypto_box_seal`) | Asymmetric key wrapping per user | 256 bits (32 bytes) | Ephemeral sender key | XSalsa20-Poly1305 |
+| X25519 (`crypto_box_seal`) | Asymmetric key wrapping per user — **classic suite (v1.0 default)** | 256 bits (32 bytes) | Ephemeral sender key | XSalsa20-Poly1305 |
+| X448 + sntrup761 (`trelis HybridKemKeypair`) | Asymmetric key wrapping per user — **hybrid suite (opt-in, v2.0)** | 1214 bytes (combined public key) | Random 24-byte nonce | XChaCha20-Poly1305 |
 | Argon2id v1.3 | Key derivation from passphrase | 256-bit output | 128-bit random salt | — |
+
+> **NOTE (v2.0): The hybrid suite (trelis, X448 + sntrup761) is an opt-in alternative to the
+> classic X25519 suite. trelis is experimental and unaudited. Classic (libsodium) remains the
+> recommended default. See the "Cryptographic Suite Selection" section below.**
 
 All constants are drawn from the libsodium header values exposed via `libsodium-sys`:
 
@@ -28,6 +33,25 @@ crypto_secretbox_xchacha20poly1305_KEYBYTES  = 32
 crypto_secretbox_xchacha20poly1305_NONCEBYTES = 24
 crypto_secretbox_xchacha20poly1305_MACBYTES  = 16
 ```
+
+---
+
+## Cryptographic Suite Selection
+
+sss supports two cryptographic suites for per-user repository-key wrapping:
+
+| Suite | `.sss.toml` version | Recommendation |
+|-------|---------------------|----------------|
+| Classic (libsodium X25519) | `"1.0"` | **Recommended default** — extensively audited via libsodium |
+| Hybrid (trelis X448 + sntrup761) | `"2.0"` | Opt-in — experimental, unaudited, post-quantum capable |
+
+The suite is selected by the `version` field in `.sss.toml`. New projects default to `"1.0"`
+(classic). Use `sss init --crypto hybrid` to create a v2.0 project or `sss migrate` to upgrade
+an existing project.
+
+**The in-file AEAD ciphertext (the `⊠{...}` markers in your files) is byte-identical regardless
+of which suite is in use.** Only the per-user `sealed_key` entries in `.sss.toml` differ.
+Migration never touches file content.
 
 ---
 
@@ -85,6 +109,7 @@ The following data is visible to anyone with access to the repository or file sy
 | Offline brute-force attack on private key passphrase | Argon2id with `sensitive` parameters (~4 passes, 256 MiB RAM) |
 | Ciphertext tampering | Poly1305 MAC authentication; tampered ciphertexts are rejected |
 | Sensitive data in memory after use | `zeroize` crate: keys and plaintext are overwritten when they go out of scope |
+| Harvest-now-decrypt-later attack by a quantum-capable adversary | Hybrid suite (opt-in): sntrup761 lattice KEM provides post-quantum security for repo-key wrapping; classic suite does not protect against quantum adversaries |
 
 ### Does Not Protect Against
 
@@ -96,6 +121,7 @@ The following data is visible to anyone with access to the repository or file sy
 | Plaintext secrets committed to git before sealing | sss does not rewrite git history |
 | Malware or other code with access to the decrypted process | Once a file is opened with `sss open`, the plaintext is in memory |
 | Supply chain attacks or compromised libsodium | sss trusts its cryptographic dependencies |
+| trelis library vulnerabilities or supply-chain compromise | The hybrid suite depends on trelis (unaudited). A vulnerability in trelis could compromise repo-key wrapping for v2.0 projects. Classic suite is not affected. |
 
 ### DoS Protection
 
@@ -159,6 +185,8 @@ Users running `sss edit` directly should be aware that the editor may create swa
 
 ## Key Hierarchy
 
+**Classic path (version "1.0" — recommended default):**
+
 ```
 User Passphrase
      |
@@ -176,9 +204,35 @@ User Private Key (X25519, 256-bit)
      |
      | crypto_box_seal_open (X25519)
      v
-Repository Key (256-bit)
+Repository Key K (256-bit)
      |
      | XChaCha20-Poly1305 + deterministic BLAKE2b nonce
+     v
+Encrypted Secrets  -->  ⊠{base64(nonce[24]||MAC[16]||ciphertext[N])}
+```
+
+**Hybrid path (version "2.0" — opt-in, experimental):**
+
+```
+User Passphrase
+     |
+     | Argon2id (same path as classic — shared KDF)
+     v
+Derived Key (256-bit)
+     |
+     | XChaCha20-Poly1305 (encrypt hybrid secret key)
+     v
+Encrypted Hybrid Private Key (1819 bytes)  -->  stored in ~/.config/sss/keys/<uuid>.toml
+     |
+     | (decrypt with derived key)
+     v
+Hybrid Private Key (X448 || sntrup761, 1819 bytes)
+     |
+     | trelis decapsulate + BLAKE3 KDF
+     v
+Repository Key K (256-bit)  [same K as classic path]
+     |
+     | XChaCha20-Poly1305 + deterministic BLAKE2b nonce  [identical to classic]
      v
 Encrypted Secrets  -->  ⊠{base64(nonce[24]||MAC[16]||ciphertext[N])}
 ```
@@ -193,3 +247,5 @@ Encrypted Secrets  -->  ⊠{base64(nonce[24]||MAC[16]||ciphertext[N])}
 - [libsodium BLAKE2b](https://doc.libsodium.org/hashing/generic_hashing)
 - [RFC 9106 – Argon2](https://www.rfc-editor.org/rfc/rfc9106.html)
 - [Marker format details](./marker-format.md)
+- [trelis (experimental KEM library)](https://github.com/dspearson/trelis)
+- [BLAKE3](https://github.com/BLAKE3-team/BLAKE3)

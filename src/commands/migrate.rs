@@ -73,7 +73,9 @@ pub fn migrate_project_config(
         return Ok(new_sealed);
     }
 
-    // 4. Apply mutations in memory (all-or-nothing before save)
+    // 4. Apply mutations in memory (all-or-nothing before save).
+    //    Only sealed_key changes — `public` remains the classic identity anchor
+    //    so that find_user_by_public_key continues to work via the classic keypair.
     for (username, sealed) in &new_sealed {
         config.users.get_mut(username).unwrap().sealed_key = sealed.clone();
     }

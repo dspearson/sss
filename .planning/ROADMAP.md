@@ -59,7 +59,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   3. `sss keygen --suite both` on a fresh keystore produces both keypairs atomically; passphrase-wrap uses the same Argon2id (libsodium `crypto_pwhash`) path for every private key in the file — classic and hybrid share one KDF.
   4. A user who only holds a classic keypair gets a clear error when the repo is `version = "2.0"` and they have no hybrid public key on file — not silent failure, not auto-generation.
 **Plans**: 2 plans
-  - [ ] 03-01-PLAN.md — Wave 1: extend StoredKeyPair with optional hybrid fields + Keystore::store_dual_keypair / load_hybrid_keypair / get_current_stored_raw (KEYSTORE-01, KEYSTORE-03, KEYSTORE-04)
+  - [x] 03-01-PLAN.md — Wave 1: extend StoredKeyPair with optional hybrid fields + Keystore::store_dual_keypair / load_hybrid_keypair / get_current_stored_raw (KEYSTORE-01, KEYSTORE-03, KEYSTORE-04) — **Complete 2026-04-26**
   - [ ] 03-02-PLAN.md — Wave 2: sss keys generate --suite CLI flag + handle_keys_generate_command dispatch + sss keys show subcommand (KEYSTORE-02, KEYSTORE-03)
 
 ### Phase 4: Migration Command
@@ -104,7 +104,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 1. Suite Abstraction | 4/4 | Complete | 2026-04-24 |
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
-| 3. Keystore Dual-Suite Support | 0/2 | In progress | - |
+| 3. Keystore Dual-Suite Support | 1/2 | In progress | - |
 | 4. Migration Command | 0/TBD | Not started | - |
 | 5. End-to-End Validation | 0/TBD | Not started | - |
 | 6. Documentation & Release | 0/TBD | Not started | - |

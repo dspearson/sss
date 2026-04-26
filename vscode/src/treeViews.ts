@@ -103,6 +103,18 @@ export class ProjectViewProvider extends BaseTreeProvider {
                 ));
             }
 
+            if (projectInfo.suite) {
+                const suiteLabel = projectInfo.suite === 'hybrid'
+                    ? 'Suite: Hybrid (v2.0, post-quantum)'
+                    : 'Suite: Classic (v1.0)';
+                const suiteIcon = projectInfo.suite === 'hybrid' ? 'shield' : 'lock';
+                items.push(createTreeItem(suiteLabel, suiteIcon, {
+                    tooltip: projectInfo.suite === 'hybrid'
+                        ? 'Post-quantum hybrid suite (XChaCha20-Poly1305 + Kyber). EXPERIMENTAL.'
+                        : 'Classic suite (XChaCha20-Poly1305). Run "Migrate to Hybrid Suite" to upgrade.'
+                }));
+            }
+
             if (currentKey) {
                 items.push(createTreeItem(
                     `Current Key: ${currentKey.substring(0, DISPLAY.UUID_LENGTH)}...`,
@@ -203,7 +215,7 @@ export class ActionsViewProvider extends BaseTreeProvider {
         const config = vscode.workspace.getConfiguration('secrets');
 
         return [
-            ...this.getProjectActions(isProject),
+            ...await this.getProjectActions(isProject),
             ...this.getCommonActions(),
             ...this.getSettingsActions(config)
         ];
@@ -218,16 +230,27 @@ export class ActionsViewProvider extends BaseTreeProvider {
         }
     }
 
-    private getProjectActions(isProject: boolean): SSSTreeItem[] {
+    private async getProjectActions(isProject: boolean): Promise<SSSTreeItem[]> {
         if (!isProject) {
             return [createActionItem('Initialise Project', 'add', 'sss.initProject')];
         }
 
-        return [
+        const actions: SSSTreeItem[] = [
             createActionItem('Seal All Files', 'lock', 'sss.sealWorkspace'),
             createActionItem('Open All Files', 'unlock', 'sss.openWorkspace'),
             createActionItem('Render to Plaintext (Destructive)', 'warning', 'sss.renderProject')
         ];
+
+        try {
+            const projectInfo = await this.sssWrapper.checkProjectStatus();
+            if (projectInfo.suite === 'classic') {
+                actions.push(createActionItem('Migrate to Hybrid Suite', 'shield', 'sss.migrateToHybrid'));
+            }
+        } catch {
+            // ignore — suite unknown, skip migrate action
+        }
+
+        return actions;
     }
 
     private getCommonActions(): SSSTreeItem[] {

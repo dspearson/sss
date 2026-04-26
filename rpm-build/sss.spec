@@ -42,8 +42,8 @@ Features:
 %setup -q
 
 %build
-# Build in release mode with FUSE support only (excludes 9P)
-cargo build --release --features fuse
+# Build in release mode with FUSE and hybrid PQC key support
+cargo build --release --features fuse,hybrid
 
 %install
 # Create necessary directories
@@ -75,6 +75,13 @@ fi
 %{_bindir}/sss-askpass-gui
 
 %changelog
+* Sun Apr 26 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.1-2
+- Build with --features fuse,hybrid to enable post-quantum hybrid key support
+- Fix: braces_balance in marker inference now skips \} escape sequences,
+  restoring correct ⊕{text \} more} reconstruction (was ⊕[text \} more])
+- VS Code extension 0.1.5: hybrid key generation, project init crypto mode,
+  migrate command, suite badge in Project view, Migrate action in Actions view
+
 * Sun Apr 26 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.1-1
 - Fix: rotation path now delegates to Processor::reencrypt_files_batch, preserving per-file deterministic nonces
 - Fix: .secrets files no longer written as plaintext after users remove + rotation

@@ -56,6 +56,29 @@ export class ProjectCommands {
         this.projectManager.showProjectInfo();
     }
 
+    async migrateToHybrid(): Promise<void> {
+        const confirmed = await vscode.window.showWarningMessage(
+            'Migrate this project to the hybrid post-quantum suite (v2.0)? ' +
+            'All users must add their hybrid public key first. ' +
+            'The binary must be built with --features hybrid.',
+            'Migrate', 'Cancel'
+        );
+        if (confirmed !== 'Migrate') {
+            return;
+        }
+
+        try {
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Migrating to hybrid suite…', cancellable: false },
+                async () => { await this.sssWrapper.migrateToHybrid(); }
+            );
+            vscode.window.showInformationMessage('Project migrated to hybrid suite (v2.0).');
+            this.refreshAllViews();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Migration failed: ${error.message}`);
+        }
+    }
+
     async installHooks(): Promise<void> {
         if (!this.gitIntegration) {
             vscode.window.showErrorMessage('Git integration not initialised');

@@ -50,6 +50,11 @@ export function registerAllCommands(
     register('sss.initProject', () => projectCommands.initProject());
     register('sss.showProjectInfo', () => projectCommands.showProjectInfo());
     register('sss.installHooks', () => projectCommands.installHooks());
+    register('sss.migrateToHybrid', async () => {
+        await projectCommands.migrateToHybrid();
+        treeProviders.project.refresh();
+        treeProviders.actions.refresh();
+    });
 
     // User management
     register('sss.addUser', async () => {

@@ -272,9 +272,6 @@ impl RotationManager {
         project_timestamp: &str,
         project_root: &Path,
     ) -> Result<(usize, usize)> {
-        let mut files_processed = 0;
-        let mut files_failed = 0;
-
         let old_processor = Processor::new_with_context(
             (*old_key).clone(),
             project_root.to_path_buf(),
@@ -290,56 +287,24 @@ impl RotationManager {
             println!("🔄 Re-encrypting {} files...", files.len());
         }
 
-        for (i, file_path) in files.iter().enumerate() {
-            if self.options.show_progress {
-                print!(
-                    "\r🔄 Processing file {}/{}: {}",
-                    i + 1,
-                    files.len(),
-                    file_path.display()
-                );
-                std::io::Write::flush(&mut std::io::stdout()).ok();
-            }
-
-            match self.reencrypt_single_file(file_path, &old_processor, &new_processor) {
-                Ok(()) => files_processed += 1,
-                Err(e) => {
-                    eprintln!("\n❌ Failed to re-encrypt {}: {}", file_path.display(), e);
-                    files_failed += 1;
+        let show_progress = self.options.show_progress;
+        let total = files.len();
+        let (files_processed, files_failed) = new_processor.reencrypt_files_batch(
+            files,
+            &old_processor,
+            |i, _, file_path| {
+                if show_progress {
+                    print!("\r🔄 Processing file {i}/{total}: {}", file_path.display());
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
                 }
-            }
-        }
+            },
+        )?;
 
         if self.options.show_progress {
-            println!(); // New line after progress
+            println!();
         }
 
         Ok((files_processed, files_failed))
-    }
-
-    /// Re-encrypt a single file
-    fn reencrypt_single_file(
-        &self,
-        file_path: &Path,
-        old_processor: &Processor,
-        new_processor: &Processor,
-    ) -> Result<()> {
-        // Read and decrypt with old key
-        let decrypted_content = old_processor.process_file(file_path)?;
-
-        // Re-encrypt with new key
-        let reencrypted_content = new_processor.process_content(&decrypted_content)?;
-
-        // Write back to file
-        fs::write(file_path, reencrypted_content).map_err(|e| {
-            anyhow!(
-                "Failed to write re-encrypted file {}: {}",
-                file_path.display(),
-                e
-            )
-        })?;
-
-        Ok(())
     }
 
     /// Update project configuration with new sealed keys for all users
@@ -369,6 +334,7 @@ impl RotationManager {
                 public: user_config.public.clone(),
                 sealed_key,
                 added: user_config.added.clone(),
+                hybrid_public: user_config.hybrid_public.clone(),
             };
 
             updated_users.insert(username.clone(), updated_user_config);

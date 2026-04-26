@@ -20,6 +20,11 @@ pub struct UserConfig {
     /// When this user was added to the project
     #[serde(default = "default_created")]
     pub added: String,
+    /// Hybrid (X448 + sntrup761) public key, base64-encoded.
+    /// None on v1 repos and on users who have not yet registered a hybrid key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub hybrid_public: Option<String>,
 }
 
 /// Project-level configuration (safe for git)
@@ -74,20 +79,18 @@ fn default_created() -> String {
     Utc::now().to_rfc3339()
 }
 
-/// Resolve a `.sss.toml` `version` string to a `Suite`, with an
-/// actionable error for versions this binary does not support.
+/// Resolve a `.sss.toml` `version` string to a `Suite`.
 ///
-/// v2.0 gets special handling (this binary is v1; hybrid isn't wired
-/// until Phase 2) — we surface the upgrade prompt directly here so
-/// every load path emits the same single-line message (SUITE-04).
-/// Phase 2 will collapse this into `Suite::from_version` directly
-/// once `HybridSuite` is implemented.
+/// `"1.0"` → `Suite::Classic`, `"2.0"` → `Suite::Hybrid`.
+/// Any other value produces an actionable error.
+///
+/// Plan 04-01 gate change: `"2.0"` now returns `Ok(Suite::Hybrid)` so
+/// v2 repos are loadable by this binary.  The old SUITE-04 upgrade-prompt
+/// error for `"2.0"` is intentionally removed.
 fn resolve_suite_from_version(version: &str) -> Result<Suite> {
     match version {
         "1.0" => Ok(Suite::Classic),
-        "2.0" => Err(anyhow!(
-            "this project requires sss v2.0 or newer (.sss.toml version = \"2.0\"); upgrade sss or run with a newer binary"
-        )),
+        "2.0" => Ok(Suite::Hybrid),
         other => Err(anyhow!(
             "unknown .sss.toml version {:?}: expected \"1.0\" or \"2.0\"",
             other
@@ -162,6 +165,7 @@ impl ProjectConfig {
             public: user_public_key.to_base64(),
             sealed_key,
             added: default_created(),
+            hybrid_public: None,
         };
 
         let mut users = HashMap::new();
@@ -215,13 +219,8 @@ impl ProjectConfig {
 
     /// Resolve the crypto `Suite` for this project from the `version` field.
     ///
-    /// Maps `version = "1.0"` → `Suite::Classic`. Any other value —
-    /// including `"2.0"` against this v1 binary, or future/malformed
-    /// versions — produces an actionable error telling the user to
-    /// upgrade `sss`.
-    ///
-    /// v1 binaries encountering `version = "2.0"` will see exactly:
-    /// `this project requires sss v2.0 or newer (.sss.toml version = "2.0"); upgrade sss or run with a newer binary`
+    /// `"1.0"` → `Suite::Classic`, `"2.0"` → `Suite::Hybrid`.
+    /// Unknown versions produce an actionable error.
     pub fn suite(&self) -> Result<Suite> {
         resolve_suite_from_version(&self.version)
     }
@@ -245,6 +244,7 @@ impl ProjectConfig {
             public: user_public_key.to_base64(),
             sealed_key,
             added: default_created(),
+            hybrid_public: None,
         };
 
         self.users.insert(username.to_string(), user_config);
@@ -735,33 +735,6 @@ mod tests {
     // --- SUITE-02 / SUITE-04: .sss.toml version gate ---
 
     #[test]
-    fn test_load_from_file_rejects_v2_with_actionable_error() {
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(
-            tmp.path(),
-            r#"version = "2.0"
-created = "2026-01-01T00:00:00Z"
-"#,
-        )
-        .unwrap();
-        let err = ProjectConfig::load_from_file(tmp.path())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("this project requires sss v2.0 or newer"),
-            "expected SUITE-04 actionable message, got: {err}"
-        );
-        assert!(
-            err.contains("2.0"),
-            "error must quote the offending version: {err}"
-        );
-        assert!(
-            err.contains("upgrade sss"),
-            "error must tell user to upgrade: {err}"
-        );
-    }
-
-    #[test]
     fn test_load_from_file_accepts_v1() {
         let tmp = NamedTempFile::new().unwrap();
         std::fs::write(
@@ -806,31 +779,10 @@ created = "2026-01-01T00:00:00Z"
     }
 
     #[test]
-    fn test_load_from_file_single_line_error_for_v2() {
-        let tmp = NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), r#"version = "2.0""#).unwrap();
-        let err = ProjectConfig::load_from_file(tmp.path())
-            .unwrap_err()
-            .to_string();
-        assert!(
-            !err.contains('\n'),
-            "SUITE-04 requires a single-line error; got multiline: {err:?}"
-        );
-    }
-
-    #[test]
     fn test_project_config_suite_returns_classic_for_v1() {
         let mut cfg = ProjectConfig::default();
         cfg.version = "1.0".to_string();
         assert_eq!(cfg.suite().unwrap(), Suite::Classic);
-    }
-
-    #[test]
-    fn test_project_config_suite_returns_error_for_v2() {
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "2.0".to_string();
-        let err = cfg.suite().unwrap_err().to_string();
-        assert!(err.contains("this project requires sss v2.0 or newer"));
     }
 
     #[test]

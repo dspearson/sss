@@ -519,10 +519,10 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
     }
 
     #[test]
-    fn test_init_project_config_hybrid_round_trips_to_suite04_error() {
+    fn test_init_project_config_hybrid_round_trips_and_loads_as_hybrid() {
         // End-to-end: --crypto hybrid writes v2, and re-opening the file with
-        // this v1 binary surfaces the Plan 02 actionable error. Ties SUITE-03
-        // (init flag) and SUITE-04 (load-time gate) together in one check.
+        // this v2-capable binary now succeeds and resolves to Suite::Hybrid.
+        // Ties SUITE-03 (init flag) and the Plan 4-01 gate change together.
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join(".sss.toml");
         let keypair = KeyPair::generate().unwrap();
@@ -535,30 +535,28 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         )
         .unwrap();
 
-        let err = ProjectConfig::load_from_file(&config_path)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("this project requires sss v2.0 or newer"),
-            "hybrid init must make subsequent load surface the SUITE-04 message; got: {err}"
+        let cfg = ProjectConfig::load_from_file(&config_path).unwrap();
+        assert_eq!(
+            cfg.suite().unwrap(),
+            crate::crypto::Suite::Hybrid,
+            "hybrid init must load as Suite::Hybrid after Plan 4-01 gate change"
         );
     }
 
     #[test]
-    fn test_detect_config_format_surfaces_v2_version_error() {
-        // SUITE-04: the actionable v2→v1 error must surface through the
-        // detect_config_format chokepoint (and therefore load_project_config_internal)
-        // without being wrapped or hidden.
+    fn test_detect_config_format_accepts_v2_version() {
+        // SUITE-04 gate removed in Plan 4-01: v2.0 files are now accepted.
+        // A v2.0 file with no users should come back as ConfigFormat::Empty
+        // (not an error), just like a v1.0 file with no users.
         let temp_dir = tempdir().unwrap();
         let config_path = temp_dir.path().join(".sss.toml");
         std::fs::write(&config_path, r#"version = "2.0""#).unwrap();
 
-        let err = detect_config_format(&config_path)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("this project requires sss v2.0 or newer"),
-            "SUITE-04 error must surface through detect_config_format; got: {err}"
+        let format = detect_config_format(&config_path).unwrap();
+        assert_eq!(
+            format,
+            ConfigFormat::Empty,
+            "v2.0 file with no users must be ConfigFormat::Empty, not an error"
         );
     }
 

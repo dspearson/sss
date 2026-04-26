@@ -1285,6 +1285,45 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // Known-answer test (KAT) — wire-format freeze for existing repos
+    //
+    // If this test fails it means the nonce derivation (BLAKE2b parameters,
+    // personal string, input layout) or the AEAD cipher has changed, which
+    // would make every sealed file in every existing v1.0 repo permanently
+    // unreadable. Do NOT update these constants without a migration plan.
+    // =========================================================================
+
+    #[test]
+    fn kat_classic_nonce_and_aead_frozen() {
+        // Fixed inputs — chosen to be memorable and stable across refactors.
+        // Key is all-0x42 (32 bytes); timestamp/filepath/plaintext are ASCII.
+        let key = Key::from_bytes(&[0x42u8; 32]).unwrap();
+        let timestamp = "2026-04-26T00:00:00Z";
+        let filepath  = "config/secrets.env";
+        let plaintext = "DATABASE_URL=postgres://user:pass@localhost/db";
+
+        // Golden ciphertext captured from the first correct implementation.
+        // Algorithm: BLAKE2b-256(key=K, personal="sss_autononce_v1", in=ts\0path\0pt)
+        //            → 24-byte XChaCha20 nonce; then XChaCha20-Poly1305(K, nonce, pt).
+        // Output wire format: base64(nonce || ciphertext || tag).
+        const GOLDEN: &str =
+            "0IQx7v3uF+0gztfvh6umALmRJjQmW+wnqi25LNj0CYaWDr+iO/94K5WbAkZBNYBlVgCNhxjyY37ogyuEwMQ15FMbr78hUjtrDtqjPINSZPZMUD5Pgf4=";
+
+        let ct = encrypt_to_base64_deterministic(plaintext, &key, timestamp, filepath).unwrap();
+        assert_eq!(
+            ct, GOLDEN,
+            "KAT FAILED: classic nonce/AEAD output no longer matches the frozen \
+             wire format. Changing this breaks all existing v1.0 sealed repos. \
+             See the KAT comment block above for the algorithm spec."
+        );
+
+        // Also verify the golden ciphertext decrypts back to the original plaintext,
+        // so a corrupt GOLDEN constant doesn't silently pass.
+        let recovered = decrypt_from_base64(GOLDEN, &key).unwrap();
+        assert_eq!(recovered, plaintext, "KAT round-trip failed — GOLDEN constant is malformed");
+    }
+
 }
 
 #[cfg(test)]

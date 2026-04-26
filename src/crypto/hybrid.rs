@@ -164,7 +164,7 @@ impl CryptoSuite for HybridCryptoSuite {
         // Step 2 — Derive the AEAD key. Context string is load-bearing
         // wire format; see HYBRID_KEM_CONTEXT doc comment.
         let aead_key: Zeroizing<[u8; 32]> =
-            Zeroizing::new(blake3::derive_key(HYBRID_KEM_CONTEXT, shared.as_bytes()));
+            Zeroizing::new(trelis_primitives::derive_key(HYBRID_KEM_CONTEXT, shared.as_bytes()));
 
         // Step 3 — Random 24-byte nonce for XChaCha20-Poly1305.
         let mut nonce = [0u8; HYBRID_SEALED_KEY_NONCE_SIZE];
@@ -259,7 +259,7 @@ impl CryptoSuite for HybridCryptoSuite {
 
         // Step 3 — Derive the AEAD key (same context as seal).
         let aead_key: Zeroizing<[u8; 32]> =
-            Zeroizing::new(blake3::derive_key(HYBRID_KEM_CONTEXT, shared.as_bytes()));
+            Zeroizing::new(trelis_primitives::derive_key(HYBRID_KEM_CONTEXT, shared.as_bytes()));
 
         // Step 4 — AEAD-open. Plaintext buffer sits in Zeroizing<..>.
         let mut plaintext: Zeroizing<[u8; HYBRID_REPO_KEY_PLAINTEXT_SIZE]> =
@@ -652,7 +652,7 @@ mod tests {
         // Stand-in shared secret bytes (what trelis encapsulate would hand us).
         let shared_secret_bytes = [0x42u8; 32];
         let mut wrapped: ManuallyDrop<Zeroizing<[u8; 32]>> = ManuallyDrop::new(
-            Zeroizing::new(blake3::derive_key(HYBRID_KEM_CONTEXT, &shared_secret_bytes)),
+            Zeroizing::new(trelis_primitives::derive_key(HYBRID_KEM_CONTEXT, &shared_secret_bytes)),
         );
         let raw_ptr: *const u8 = wrapped.as_ptr();
 

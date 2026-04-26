@@ -291,9 +291,9 @@ fn create_cli_app() -> Command {
                             Arg::new("suite")
                                 .long("suite")
                                 .value_name("SUITE")
-                                .help("Key suite to generate: classic, hybrid, or both")
+                                .help("Key suite to generate: classic (default), hybrid, or both")
                                 .value_parser(["classic", "hybrid", "both"])
-                                .required(true),
+                                .default_value("classic"),
                         ),
                 )
                 .subcommand(Command::new("list").about("List your private keys"))

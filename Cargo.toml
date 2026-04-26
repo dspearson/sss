@@ -10,7 +10,7 @@ default = []
 fuse = ["dep:fuser", "dep:parking_lot"]
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
 ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
-hybrid = ["dep:trelis-hybrid", "dep:trelis-primitives", "dep:blake3"]
+hybrid = ["dep:trelis-hybrid", "dep:trelis-primitives"]
 
 [[bin]]
 name = "sss"
@@ -75,7 +75,6 @@ nix = { version = "0.26", optional = true }
 # ----------------------------------------------------------------------
 trelis-hybrid = { git = "https://github.com/dspearson/trelis", rev = "5374dff482ba94a94695794b5e4554f908eb0d4d", optional = true }
 trelis-primitives = { git = "https://github.com/dspearson/trelis", rev = "5374dff482ba94a94695794b5e4554f908eb0d4d", optional = true }
-blake3 = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3.21.0"

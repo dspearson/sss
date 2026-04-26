@@ -9,6 +9,17 @@ use sss::processor::Processor;
 use std::path::PathBuf;
 use std::time::Duration;
 
+// Unconditional imports — required by classic benchmarks regardless of feature flags.
+// `PublicKey` is only referenced in cfg(feature = "hybrid") blocks; allow unused on
+// non-hybrid builds so the hybrid build does not need a separate re-import.
+#[allow(unused_imports)]
+use sss::crypto::{ClassicSuite, CryptoSuite, KeyPair, PublicKey};
+use sss::crypto::classic::ClassicKeyPair;
+use base64::prelude::{BASE64_STANDARD, Engine as _};
+
+#[cfg(feature = "hybrid")]
+use sss::crypto::hybrid::{HybridCryptoSuite, HybridKeyPair};
+
 // ---------------------------------------------------------------------------
 // Fixture generation
 // ---------------------------------------------------------------------------
@@ -115,5 +126,173 @@ fn bench_open_1000_files(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Classic crypto benchmarks (always compiled — for comparison baseline)
+// ---------------------------------------------------------------------------
+
+fn bench_classic_keygen(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crypto_keygen");
+    group.sample_size(20);
+
+    group.bench_function("classic_keygen", |b| {
+        b.iter(|| ClassicKeyPair::generate().expect("classic keygen failed"))
+    });
+
+    group.finish();
+}
+
+fn bench_classic_wrap_unwrap(c: &mut Criterion) {
+    let kp = ClassicKeyPair::generate().expect("classic keygen failed");
+    let repo_key = RepositoryKey::new();
+    let classic = ClassicSuite;
+    let public = kp.public_key.clone();
+    let keypair = KeyPair::Classic(kp);
+    let sealed = classic
+        .seal_repo_key(&repo_key, &public)
+        .expect("classic seal failed");
+
+    let mut group = c.benchmark_group("crypto_wrap");
+    group.sample_size(50);
+
+    group.bench_function("classic_wrap", |b| {
+        b.iter(|| {
+            classic
+                .seal_repo_key(&repo_key, &public)
+                .expect("classic seal failed")
+        })
+    });
+
+    group.bench_function("classic_unwrap", |b| {
+        b.iter(|| {
+            classic
+                .open_repo_key(&sealed, &keypair)
+                .expect("classic open failed")
+        })
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid crypto benchmarks (gated: only compiled and run with --features hybrid)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "hybrid")]
+fn bench_hybrid_keygen(c: &mut Criterion) {
+    let mut group = c.benchmark_group("crypto_keygen");
+    group.sample_size(10); // Hybrid keygen is slower; fewer samples
+
+    group.bench_function("hybrid_keygen", |b| {
+        b.iter(|| HybridKeyPair::generate().expect("hybrid keygen failed"))
+    });
+
+    group.finish();
+}
+
+#[cfg(feature = "hybrid")]
+fn bench_hybrid_wrap_unwrap(c: &mut Criterion) {
+    let kp = HybridKeyPair::generate().expect("hybrid keygen failed");
+    let repo_key = RepositoryKey::new();
+    let suite = HybridCryptoSuite;
+    let public = PublicKey::Hybrid(kp.public_key());
+    let keypair = KeyPair::Hybrid(kp);
+    let sealed = suite
+        .seal_repo_key(&repo_key, &public)
+        .expect("hybrid seal failed");
+
+    let mut group = c.benchmark_group("crypto_wrap");
+    group.sample_size(20);
+
+    group.bench_function("hybrid_wrap", |b| {
+        b.iter(|| {
+            suite
+                .seal_repo_key(&repo_key, &public)
+                .expect("hybrid seal failed")
+        })
+    });
+
+    group.bench_function("hybrid_unwrap", |b| {
+        b.iter(|| {
+            suite
+                .open_repo_key(&sealed, &keypair)
+                .expect("hybrid open failed")
+        })
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// .sss.toml size delta: print raw and base64 sizes for sealed key entries
+// This is not a timing benchmark — it is a compile-time constant check.
+// ---------------------------------------------------------------------------
+
+fn bench_sealed_key_size_delta(c: &mut Criterion) {
+    let repo_key = RepositoryKey::new();
+
+    // Classic sealed key size — seal_repo_key returns Result<String> (base64).
+    // Decode to bytes to get the true raw byte count.
+    let classic_kp = ClassicKeyPair::generate().expect("classic keygen");
+    let classic_public = classic_kp.public_key.clone();
+    let classic_sealed_b64 = ClassicSuite
+        .seal_repo_key(&repo_key, &classic_public)
+        .expect("classic seal");
+    let classic_raw = BASE64_STANDARD.decode(&classic_sealed_b64).unwrap().len();
+    let classic_b64_chars = classic_sealed_b64.len();
+
+    eprintln!(
+        "\n[size delta] classic sealed key: {} bytes raw, {} chars base64",
+        classic_raw, classic_b64_chars
+    );
+
+    #[cfg(feature = "hybrid")]
+    {
+        // Hybrid sealed key size — same pattern: decode base64 string to get raw bytes.
+        let hybrid_kp = HybridKeyPair::generate().expect("hybrid keygen");
+        let hybrid_public = PublicKey::Hybrid(hybrid_kp.public_key());
+        let hybrid_sealed_b64 = HybridCryptoSuite
+            .seal_repo_key(&repo_key, &hybrid_public)
+            .expect("hybrid seal");
+        let hybrid_raw = BASE64_STANDARD.decode(&hybrid_sealed_b64).unwrap().len();
+        let hybrid_b64_chars = hybrid_sealed_b64.len();
+
+        eprintln!(
+            "[size delta]  hybrid sealed key: {} bytes raw, {} chars base64",
+            hybrid_raw, hybrid_b64_chars
+        );
+        eprintln!(
+            "[size delta]  delta per user .sss.toml entry: +{} bytes raw, +{} chars base64",
+            hybrid_raw.saturating_sub(classic_raw),
+            hybrid_b64_chars.saturating_sub(classic_b64_chars)
+        );
+    }
+
+    // Trivial timing benchmark so criterion accepts this function
+    let mut group = c.benchmark_group("sealed_key_size");
+    group.sample_size(10);
+    group.bench_function("size_delta_report", |b| {
+        b.iter(|| classic_raw + classic_b64_chars)
+    });
+    group.finish();
+}
+
+#[cfg(feature = "hybrid")]
+criterion_group!(
+    hybrid_benches,
+    bench_classic_keygen,
+    bench_classic_wrap_unwrap,
+    bench_hybrid_keygen,
+    bench_hybrid_wrap_unwrap,
+    bench_sealed_key_size_delta,
+);
+
+#[cfg(not(feature = "hybrid"))]
+criterion_group!(
+    hybrid_benches,
+    bench_classic_keygen,
+    bench_classic_wrap_unwrap,
+    bench_sealed_key_size_delta,
+);
+
 criterion_group!(benches, bench_seal_1000_files, bench_open_1000_files);
-criterion_main!(benches);
+criterion_main!(benches, hybrid_benches);

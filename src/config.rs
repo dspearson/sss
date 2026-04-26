@@ -195,25 +195,6 @@ pub fn init_project_config<P: AsRef<Path>>(
     Ok(())
 }
 
-/// Internal helper to load keypair with password retry logic
-fn load_keypair_with_password_retry() -> Result<crate::crypto::KeyPair> {
-    let keystore = crate::keystore::Keystore::new()?;
-
-    // Try without password first
-    if let Ok(keypair) = keystore.get_current_keypair(None) { Ok(keypair) } else {
-        // Try with password from SSS_PASSPHRASE environment variable or prompt
-        let password = get_passphrase_or_prompt(
-            "Enter your passphrase (or press Enter if none): ",
-        )?;
-        let password_opt = if password.is_empty() {
-            None
-        } else {
-            Some(password.as_str())
-        };
-        keystore.get_current_keypair(password_opt)
-    }
-}
-
 /// Internal unified implementation for loading project configuration
 /// This eliminates code duplication between the public API functions
 fn load_project_config_internal<P: AsRef<Path>>(
@@ -261,27 +242,30 @@ fn load_project_config_internal<P: AsRef<Path>>(
 
             let keystore = crate::keystore::Keystore::new()?;
 
+            // Hoist the password acquisition so it can be reused for both the
+            // classic keypair load and (on v2 repos) the hybrid keypair load.
+            // Try without password first; if that fails, prompt once and cache.
+            // (T-04-01-03: password acquired once, passed as_deref everywhere)
+            let password: Option<String> = {
+                if keystore.get_current_keypair(None).is_ok() {
+                    None
+                } else {
+                    let pw = get_passphrase_or_prompt(
+                        "Enter your passphrase (or press Enter if none): ",
+                    )?;
+                    if pw.is_empty() { None } else { Some(pw) }
+                }
+            };
+
             // Try current keypair first
-            let user_keypair = load_keypair_with_password_retry()?;
+            let user_keypair = keystore.get_current_keypair(password.as_deref())?;
             let mut username_opt = config.find_user_by_public_key(&user_keypair.public_key());
             let mut matched_keypair = user_keypair.clone();
 
             // If current keypair doesn't match, try all available keypairs
             if username_opt.is_none() {
                 eprintln!("Current keypair not found in project, trying other available keys...");
-
-                // Get password once for all keypairs
-                let password = crate::keystore::get_passphrase_or_prompt(
-                    "Enter passphrase to check all keys (or press Enter if none): ",
-                )?;
-                let password_opt = if password.is_empty() {
-                    None
-                } else {
-                    Some(password.as_str())
-                };
-
-                // Try all keypairs
-                if let Ok(all_keypairs) = keystore.get_all_keypairs(password_opt) {
+                if let Ok(all_keypairs) = keystore.get_all_keypairs(password.as_deref()) {
                     for keypair in all_keypairs {
                         if let Some(username) = config.find_user_by_public_key(&keypair.public_key()) {
                             eprintln!("✓ Found matching key for user: {username}");
@@ -311,6 +295,26 @@ fn load_project_config_internal<P: AsRef<Path>>(
             // Use the matched keypair for unsealing
             let user_keypair = matched_keypair;
 
+            // Resolve the suite once — dispatches to HybridCryptoSuite for v2
+            // repos, ClassicSuite for v1 repos (T-04-01-02: explicit match, no
+            // wildcard fallback to Classic).
+            let suite_enum = config.suite()?;
+            use crate::crypto::suite_for;
+            let open_suite = suite_for(suite_enum)?;
+
+            // For v2 repos the sealed_key was written by HybridCryptoSuite; we
+            // must open it with the caller's HybridKeyPair, not the classic KeyPair.
+            #[cfg(feature = "hybrid")]
+            let resolved_keypair: crate::crypto::KeyPair = if suite_enum == crate::crypto::Suite::Hybrid {
+                let current_id = keystore.get_current_key_id()?;
+                let hybrid_kp = keystore.load_hybrid_keypair(&current_id, password.as_deref())?;
+                crate::crypto::KeyPair::Hybrid(hybrid_kp)
+            } else {
+                user_keypair.clone()
+            };
+            #[cfg(not(feature = "hybrid"))]
+            let resolved_keypair = user_keypair.clone();
+
             // Try to use agent if requested and available
             let repository_key = if use_agent && crate::agent::is_agent_available() {
                 // Build context for agent request
@@ -325,19 +329,11 @@ fn load_project_config_internal<P: AsRef<Path>>(
                         eprintln!(
                             "Agent unsealing failed: {e}, falling back to local keystore"
                         );
-                        // SUITE-01 migration: dispatch through ClassicSuite instead of
-                        // the free function. The loaded config has already passed the
-                        // version check in ProjectConfig::load_from_file — any v2 file
-                        // would have been rejected before reaching here. Phase 2 will
-                        // switch this to `config.suite()?` + dyn dispatch.
-                        use crate::crypto::{ClassicSuite, CryptoSuite};
-                        ClassicSuite.open_repo_key(&sealed_key, &user_keypair)?
+                        open_suite.open_repo_key(&sealed_key, &resolved_keypair)?
                     }
                 }
             } else {
-                // Use the already-loaded keypair (via ClassicSuite — see note above).
-                use crate::crypto::{ClassicSuite, CryptoSuite};
-                ClassicSuite.open_repo_key(&sealed_key, &user_keypair)?
+                open_suite.open_repo_key(&sealed_key, &resolved_keypair)?
             };
 
             Ok((config, repository_key, project_root))

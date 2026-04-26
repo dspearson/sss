@@ -19,15 +19,17 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
         Some(("add", sub_matches)) => handle_users_add(main_matches, sub_matches)?,
         Some(("remove", sub_matches)) => handle_users_remove(main_matches, sub_matches)?,
         Some(("info", sub_matches)) => handle_users_info(sub_matches)?,
+        Some(("add-hybrid-key", sub_matches)) => handle_users_add_hybrid_key(sub_matches)?,
         None => {
             // No subcommand provided, show available subcommands
             return Err(anyhow!(
                 "No subcommand provided\n\n\
                 Available subcommands:\n\
-                  list        List project users\n\
-                  add         Add a user to the project\n\
-                  remove      Remove a user from the project\n\
-                  info        Show information about a user\n\n\
+                  list           List project users\n\
+                  add            Add a user to the project\n\
+                  remove         Remove a user from the project\n\
+                  info           Show information about a user\n\
+                  add-hybrid-key Register a user's hybrid public key\n\n\
                 Use 'sss users <subcommand> --help' for more information on a subcommand."
             ));
         }
@@ -211,6 +213,50 @@ fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
         return Err(anyhow!("User '{username}' not found in project"));
     }
     Ok(())
+}
+
+/// Register a hybrid public key for a user in the project config.
+///
+/// Validates the base64 string decodes to exactly `HYBRID_PUBLIC_KEY_SIZE`
+/// bytes, then writes it into the user's `hybrid_public` field in `.sss.toml`.
+/// Does NOT unseal `K` or touch `sealed_key`.
+#[cfg(feature = "hybrid")]
+fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
+    use base64::Engine as _;
+    use crate::constants::HYBRID_PUBLIC_KEY_SIZE;
+
+    let username = sub_matches.get_one::<String>("username").unwrap();
+    let hybrid_b64 = sub_matches.get_one::<String>("hybrid-pubkey").unwrap();
+
+    // Validate length before touching disk (T-04-01-01)
+    let raw = base64::prelude::BASE64_STANDARD
+        .decode(hybrid_b64)
+        .map_err(|e| anyhow!("invalid base64 for hybrid public key: {e}"))?;
+    if raw.len() != HYBRID_PUBLIC_KEY_SIZE {
+        return Err(anyhow!(
+            "hybrid public key must be {HYBRID_PUBLIC_KEY_SIZE} bytes when decoded, got {}",
+            raw.len()
+        ));
+    }
+
+    let config_path = crate::config::get_project_config_path()?;
+    let mut config = ProjectConfig::load_from_file(&config_path)
+        .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
+
+    let user = config.users.get_mut(username.as_str()).ok_or_else(|| {
+        anyhow!("User '{}' not found in project", username)
+    })?;
+    user.hybrid_public = Some(hybrid_b64.clone());
+
+    config.save_to_file(&config_path)?;
+    println!("Registered hybrid public key for user '{username}'");
+    Ok(())
+}
+
+/// Feature-absent stub — fires when `hybrid` feature is not compiled in.
+#[cfg(not(feature = "hybrid"))]
+fn handle_users_add_hybrid_key(_sub_matches: &ArgMatches) -> Result<()> {
+    Err(anyhow!("hybrid suite requires a --features hybrid build"))
 }
 
 #[cfg(test)]

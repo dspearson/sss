@@ -16,9 +16,11 @@ use std::io::{self, Write};
 use crate::{
     commands::utils::{create_keystore, get_password_if_protected},
     constants::KEY_ID_DISPLAY_LENGTH,
-    crypto::{ClassicKeyPair, KeyPair},
+    crypto::KeyPair,
     secure_memory::password,
 };
+#[cfg(feature = "hybrid")]
+use crate::crypto::ClassicKeyPair;
 
 fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     let force = matches.get_flag("force");

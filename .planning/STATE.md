@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 03 Plan 01 complete — 18 keystore integration tests green, KEYSTORE-01/03/04 schema layer done
-last_updated: "2026-04-26T09:16:45.340Z"
+stopped_at: Phase 03 Plan 02 complete — --suite CLI flag, keys show subcommand, 370/391 lib tests green, KEYSTORE-02/03 CLI layer done
+last_updated: "2026-04-26T11:20:00.000Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 6
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-04-23)
 ## Current Position
 
 Phase: 03 (Keystore Dual-Suite Support) — IN PROGRESS
-Plan: 2 of 2 complete (03-01 done; 03-02 next)
-Status: Ready to execute
+Plan: 2 of 2 complete (03-01 done; 03-02 done)
+Status: Phase 3 complete; ready for Phase 4
 Last activity: 2026-04-26
 
 Progress: [███████░░░] 38%
@@ -69,6 +69,7 @@ Full decision log: PROJECT.md Key Decisions table. Summary:
 - [Phase ?]: Plan 02-02: PublicKey/KeyPair widened to suite-aware enums (Classic always, Hybrid cfg-gated); ClassicKeyPair extracted; decode_base64_for_suite with T-02-02-01 downgrade-attempt guard; ClassicSuite rejects Hybrid variants before FFI; 367 lib tests pass.
 - [Phase ?]: Plan 02-02 Rule 3 scope extension: KeyPair::secret_key() -> Result<&SecretKey> accessor added because .secret_key field access appeared in 6 src/ call sites. Fallible return (not panic) for KeyPair::Hybrid variant keeps cross-suite dispatch loud.
 - [Phase 03 Plan 01]: StoredKeyPair extended with hybrid_public_key + hybrid_encrypted_secret_key (both #[serde(default)] + #[cfg_attr(not(hybrid), serde(skip))]). store_dual_keypair Case B shares existing salt for hybrid KDF derivation (KEYSTORE-04). load_hybrid_keypair reconstructs secret bytes into Zeroizing<[u8;1819]> (T-03-05). HybridPublicKey::as_bytes() used in tests (not .bytes which is pub(crate)).
+- [Phase 03 Plan 02]: --suite required(true) with value_parser([classic,hybrid,both]) — no default. handle_keys_show uses get_current_stored_raw on hybrid builds; list_key_ids fallback on non-hybrid. generate_randomart header uses saturating_sub to handle labels wider than RANDOMART_WIDTH (overflow fix). Feature-absent guard fires before no-classic-key check.
 
 ### Phase 1 Artefacts
 
@@ -94,11 +95,12 @@ Full decision log: PROJECT.md Key Decisions table. Summary:
 - `.planning/phases/03-keystore-dual-suite/03-RESEARCH.md` — verified field names, pitfalls, architecture
 - `.planning/phases/03-keystore-dual-suite/03-01-PLAN.md` — Plan 01: schema extension + dual-suite methods
 - `.planning/phases/03-keystore-dual-suite/03-01-SUMMARY.md` — Plan 01 summary (complete)
-- `.planning/phases/03-keystore-dual-suite/03-02-PLAN.md` — Plan 02: --suite CLI flag + keys show (next)
+- `.planning/phases/03-keystore-dual-suite/03-02-PLAN.md` — Plan 02: --suite CLI flag + keys show
+- `.planning/phases/03-keystore-dual-suite/03-02-SUMMARY.md` — Plan 02 summary (complete)
 
 ### Pending Todos
 
-- Execute Phase 3 Plan 02 (03-02-PLAN.md): --suite CLI flag, handle_keys_generate_command dispatch, sss keys show subcommand
+- Execute Phase 4 (Migration Command): sss migrate re-wraps K per user to hybrid, bumps version
 
 ### Blockers/Concerns
 
@@ -116,7 +118,7 @@ Pre-existing flake: `commands::utils::tests::test_get_system_username_with_user_
 
 ## Session Continuity
 
-Last session: 2026-04-26T09:16:45.336Z
-Stopped at: Phase 03 Plan 01 complete — 18 keystore integration tests green, KEYSTORE-01/03/04 schema layer done
+Last session: 2026-04-26T11:20:00.000Z
+Stopped at: Phase 03 Plan 02 complete — --suite CLI flag + keys show + init hint; 370/391 lib tests green; KEYSTORE-02/03 complete
 Resume file: None
-Next step: Execute Phase 3 Plan 02 (03-02-PLAN.md) — --suite CLI flag, keygen dispatch, keys show subcommand
+Next step: Plan Phase 4 (Migration Command) — sss migrate re-wraps K per user to hybrid, bumps .sss.toml version

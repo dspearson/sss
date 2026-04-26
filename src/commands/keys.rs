@@ -633,7 +633,7 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
             classic_key_bytes.len() as u64,
         );
     }
-    generate_randomart(&classic_hash, "SSS KEY (Classic)");
+    generate_randomart(&classic_hash, "Classic");
 
     // --- Hybrid keypair block (only if present and hybrid feature enabled) ---
     #[cfg(feature = "hybrid")]
@@ -649,7 +649,7 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
                 hybrid_key_bytes.len() as u64,
             );
         }
-        generate_randomart(&hybrid_hash, "SSS KEY (Hybrid)");
+        generate_randomart(&hybrid_hash, "Hybrid");
     }
 
     Ok(())

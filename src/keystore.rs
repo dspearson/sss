@@ -260,7 +260,7 @@ impl Keystore {
                 }
         }
 
-        // Sort by creation time (most recent first)
+        // Sort by public-key base64 for deterministic ordering.
         keypairs.sort_by(|a, b| b.public_key().to_base64().cmp(&a.public_key().to_base64()));
 
         Ok(keypairs)

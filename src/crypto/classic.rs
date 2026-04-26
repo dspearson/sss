@@ -9,7 +9,8 @@ use crate::error_helpers;
 use libsodium_sys as sodium;
 
 // Symmetric encryption constants (for repository data)
-const SYMMETRIC_KEY_SIZE: usize = sodium::crypto_secretbox_xchacha20poly1305_KEYBYTES as usize;
+pub(crate) const SYMMETRIC_KEY_SIZE: usize =
+    sodium::crypto_secretbox_xchacha20poly1305_KEYBYTES as usize;
 const SYMMETRIC_NONCE_SIZE: usize = sodium::crypto_secretbox_xchacha20poly1305_NONCEBYTES as usize;
 const SYMMETRIC_MAC_SIZE: usize = sodium::crypto_secretbox_xchacha20poly1305_MACBYTES as usize;
 

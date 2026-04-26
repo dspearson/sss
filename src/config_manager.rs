@@ -253,7 +253,8 @@ impl ConfigManager {
     #[must_use] 
     pub fn use_coloured_output(&self) -> bool {
         // Check if output supports colour
-        if !atty::is(atty::Stream::Stdout) {
+        use std::io::IsTerminal;
+        if !std::io::stdout().is_terminal() {
             return false;
         }
 

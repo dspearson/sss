@@ -712,7 +712,8 @@ fn colorize_char(ch: char, count: u8, use_colors: bool) -> String {
 
 /// Main randomart generation function
 fn generate_randomart(fingerprint: &[u8], key_type: &str) {
-    let use_colors = std::env::var("NO_COLOR").is_err() && atty::is(atty::Stream::Stdout);
+    use std::io::IsTerminal;
+    let use_colors = std::env::var("NO_COLOR").is_err() && std::io::stdout().is_terminal();
 
     // Generate the field using Drunken Bishop walk
     let (field, (end_x, end_y)) = walk_drunken_bishop(fingerprint);

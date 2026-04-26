@@ -527,6 +527,7 @@ impl ProjectConfig {
 
     /// Validate the project configuration
     pub fn validate(&self) -> Result<()> {
+        let suite = self.suite()?;
         // Validate all user configurations
         for (username, user_config) in &self.users {
             // Validate sealed key is valid base64
@@ -535,8 +536,10 @@ impl ProjectConfig {
                 .decode(&user_config.sealed_key)
                 .map_err(|e| anyhow!("Invalid base64 sealed key for user '{username}': {e}"))?;
 
-            // Validate public key
-            PublicKey::from_base64(&user_config.public)
+            // Validate public key — route through suite-aware decode so hybrid-
+            // length public keys (1214 bytes encoded) are not rejected by the
+            // classic-only 32-byte check.
+            PublicKey::decode_base64_for_suite(&user_config.public, suite)
                 .map_err(|e| anyhow!("Invalid public key for user '{username}': {e}"))?;
         }
 

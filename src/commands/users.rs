@@ -238,6 +238,82 @@ mod tests {
         assert!(err_msg.contains("add"));
         assert!(err_msg.contains("remove"));
         assert!(err_msg.contains("info"));
+        assert!(err_msg.contains("add-hybrid-key"), "error must mention add-hybrid-key: {err_msg}");
+    }
+
+    // --- Plan 04-01: handle_users_add_hybrid_key unit tests ---
+
+    /// Build a minimal ArgMatches for the add-hybrid-key subcommand.
+    #[cfg(feature = "hybrid")]
+    fn make_add_hybrid_key_matches(username: &str, hybrid_b64: &str) -> ArgMatches {
+        use clap::{Arg, Command};
+        let app = Command::new("add-hybrid-key")
+            .arg(Arg::new("username").required(true))
+            .arg(Arg::new("hybrid-pubkey").required(true));
+        app.get_matches_from(vec!["add-hybrid-key", username, hybrid_b64])
+    }
+
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn test_add_hybrid_key_wrong_length_errors() {
+        use base64::Engine as _;
+        // Encode 100 bytes (not 1214) — must error with "1214 bytes"
+        let short_b64 = base64::prelude::BASE64_STANDARD.encode(vec![0u8; 100]);
+        let matches = make_add_hybrid_key_matches("alice", &short_b64);
+        let err = handle_users_add_hybrid_key(&matches).unwrap_err().to_string();
+        assert!(
+            err.contains("1214"),
+            "error must mention 1214 bytes; got: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn test_add_hybrid_key_invalid_base64_errors() {
+        let matches = make_add_hybrid_key_matches("alice", "not-valid-base64!!!");
+        let err = handle_users_add_hybrid_key(&matches).unwrap_err().to_string();
+        assert!(
+            err.contains("invalid base64") || err.contains("base64"),
+            "error must mention base64 decoding; got: {err}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn test_add_hybrid_key_correct_length_sets_field() {
+        use base64::Engine as _;
+        use crate::constants::HYBRID_PUBLIC_KEY_SIZE;
+        use tempfile::tempdir;
+
+        // Build a minimal .sss.toml with one user "alice".
+        let temp_dir = tempdir().unwrap();
+        let config_path = temp_dir.path().join(".sss.toml");
+        let keypair = crate::crypto::KeyPair::generate().unwrap();
+        crate::project::ProjectConfig::new("alice", &keypair.public_key())
+            .unwrap()
+            .save_to_file(&config_path)
+            .unwrap();
+
+        // Override cwd so get_project_config_path() finds the temp dir.
+        let _orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(temp_dir.path()).unwrap();
+
+        let valid_b64 = base64::prelude::BASE64_STANDARD.encode(vec![0x42u8; HYBRID_PUBLIC_KEY_SIZE]);
+        let matches = make_add_hybrid_key_matches("alice", &valid_b64);
+        let result = handle_users_add_hybrid_key(&matches);
+
+        // Restore cwd regardless
+        std::env::set_current_dir(_orig).unwrap();
+
+        result.expect("correct 1214-byte key must succeed");
+
+        // Verify the field was persisted.
+        let saved = crate::project::ProjectConfig::load_from_file(&config_path).unwrap();
+        assert_eq!(
+            saved.users.get("alice").unwrap().hybrid_public.as_deref(),
+            Some(valid_b64.as_str()),
+            "hybrid_public must be persisted after add-hybrid-key"
+        );
     }
 
     // Note: Most of handle_users() requires:

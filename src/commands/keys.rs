@@ -16,48 +16,172 @@ use std::io::{self, Write};
 use crate::{
     commands::utils::{create_keystore, get_password_if_protected},
     constants::KEY_ID_DISPLAY_LENGTH,
-    crypto::KeyPair,
+    crypto::{ClassicKeyPair, KeyPair},
     secure_memory::password,
 };
 
 fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     let force = matches.get_flag("force");
     let no_password = matches.get_flag("no-password");
+    let suite = matches.get_one::<String>("suite").map(String::as_str);
+
+    // Feature-absent guard: hybrid and both require the hybrid feature flag.
+    // clap still parses the value; this runtime gate fires immediately.
+    match suite {
+        Some("hybrid") | Some("both") => {
+            #[cfg(not(feature = "hybrid"))]
+            return Err(anyhow!(
+                "hybrid suite requires a --features hybrid build"
+            ));
+        }
+        _ => {}
+    }
 
     let keystore = create_keystore(main_matches)?;
 
-    // Check if current keypair exists
-    if !force && keystore.get_current_keypair(None).is_ok() {
-        return Err(anyhow!(
-            "A keypair already exists. Use --force to overwrite."
-        ));
-    }
+    match suite {
+        Some("classic") | None => {
+            // Check if current keypair exists
+            if !force && keystore.get_current_keypair(None).is_ok() {
+                return Err(anyhow!(
+                    "A keypair already exists. Use --force to overwrite."
+                ));
+            }
 
-    let password_option = if no_password {
-        None
-    } else {
-        let passphrase = password::read_password_with_confirmation(
-            "Enter passphrase for new keypair: ",
-            "Confirm passphrase: ",
-        )?;
+            let password_option = if no_password {
+                None
+            } else {
+                let passphrase = password::read_password_with_confirmation(
+                    "Enter passphrase for new keypair: ",
+                    "Confirm passphrase: ",
+                )?;
 
-        if passphrase.is_empty() {
-            return Err(anyhow!(
-                "Passphrase cannot be empty. Use --no-password for passwordless keys."
-            ));
+                if passphrase.is_empty() {
+                    return Err(anyhow!(
+                        "Passphrase cannot be empty. Use --no-password for passwordless keys."
+                    ));
+                }
+
+                Some(passphrase.as_str()?.to_string())
+            };
+
+            let keypair = KeyPair::generate()?;
+            let key_id = keystore.store_keypair(&keypair, password_option.as_deref())?;
+
+            println!("Generated new keypair: {key_id}");
+            println!("Public key: {}", keypair.public_key().to_base64());
+
+            if no_password {
+                println!("Warning: Keypair stored without password protection. Consider using a passphrase for better security.");
+            }
         }
 
-        Some(passphrase.as_str()?.to_string())
-    };
+        #[cfg(feature = "hybrid")]
+        Some("hybrid") => {
+            use base64::Engine as _;
+            use crate::crypto::hybrid::HybridKeyPair;
 
-    let keypair = KeyPair::generate()?;
-    let key_id = keystore.store_keypair(&keypair, password_option.as_deref())?;
+            // --suite hybrid requires an existing classic keypair.
+            // T-03-08: no silent auto-generation of classic.
+            if keystore.get_current_keypair(None).is_err() {
+                // Also try with a password prompt to distinguish
+                // "no key exists" from "key is password-protected".
+                let has_key = {
+                    use crate::commands::utils::get_password_if_protected;
+                    match get_password_if_protected(&keystore, "Enter passphrase for existing keypair: ") {
+                        Ok(pw_opt) => keystore.get_current_keypair(pw_opt.as_deref()).is_ok(),
+                        Err(_) => false,
+                    }
+                };
+                if !has_key {
+                    return Err(anyhow!(
+                        "no classic keypair found; run `sss keygen --suite both` to generate both"
+                    ));
+                }
+            }
 
-    println!("Generated new keypair: {key_id}");
-    println!("Public key: {}", keypair.public_key().to_base64());
+            let password_option = if no_password {
+                None
+            } else {
+                let passphrase = password::read_password_with_confirmation(
+                    "Enter passphrase for keypair: ",
+                    "Confirm passphrase: ",
+                )?;
 
-    if no_password {
-        println!("Warning: Keypair stored without password protection. Consider using a passphrase for better security.");
+                if passphrase.is_empty() {
+                    return Err(anyhow!(
+                        "Passphrase cannot be empty. Use --no-password for passwordless keys."
+                    ));
+                }
+
+                Some(passphrase.as_str()?.to_string())
+            };
+
+            let hybrid_kp = HybridKeyPair::generate()?;
+            let hybrid_pk_b64 = base64::prelude::BASE64_STANDARD.encode(hybrid_kp.public_key().as_bytes());
+
+            let key_id = keystore.store_dual_keypair(None, Some(&hybrid_kp), password_option.as_deref())?;
+
+            println!("classic keypair kept; hybrid keypair added");
+            println!("Keypair ID:        {key_id}");
+            println!("Hybrid public key: {hybrid_pk_b64}");
+        }
+
+        #[cfg(feature = "hybrid")]
+        Some("both") => {
+            use base64::Engine as _;
+            use crate::crypto::hybrid::HybridKeyPair;
+
+            // Check if current keypair exists
+            if !force && keystore.get_current_keypair(None).is_ok() {
+                return Err(anyhow!(
+                    "A keypair already exists. Use --force to overwrite."
+                ));
+            }
+
+            let password_option = if no_password {
+                None
+            } else {
+                let passphrase = password::read_password_with_confirmation(
+                    "Enter passphrase for new keypair: ",
+                    "Confirm passphrase: ",
+                )?;
+
+                if passphrase.is_empty() {
+                    return Err(anyhow!(
+                        "Passphrase cannot be empty. Use --no-password for passwordless keys."
+                    ));
+                }
+
+                Some(passphrase.as_str()?.to_string())
+            };
+
+            // Generate both keypairs atomically.
+            let keypair = KeyPair::generate()?;
+            let classic_kp: ClassicKeyPair = match keypair {
+                KeyPair::Classic(ref kp) => kp.clone(),
+                #[cfg(feature = "hybrid")]
+                KeyPair::Hybrid(_) => unreachable!("KeyPair::generate() always returns Classic"),
+            };
+            let hybrid_kp = HybridKeyPair::generate()?;
+
+            let classic_pk_b64 = keypair.public_key().to_base64();
+            let hybrid_pk_b64 = base64::prelude::BASE64_STANDARD.encode(hybrid_kp.public_key().as_bytes());
+
+            let key_id = keystore.store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), password_option.as_deref())?;
+
+            println!("Generated new keypair: {key_id}");
+            println!("Classic public key: {classic_pk_b64}");
+            println!("Hybrid public key:  {hybrid_pk_b64}");
+
+            if no_password {
+                println!("Warning: Keypair stored without password protection. Consider using a passphrase for better security.");
+            }
+        }
+
+        _ => {
+            return Err(anyhow!("unknown --suite value; expected classic, hybrid, or both"));
+        }
     }
 
     Ok(())
@@ -68,6 +192,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         Some(("generate", sub_matches)) => handle_keys_generate_command(main_matches, sub_matches)?,
         Some(("list", _)) => handle_keys_list(main_matches)?,
         Some(("pubkey", sub_matches)) => handle_keys_pubkey(main_matches, sub_matches)?,
+        Some(("show", _)) => handle_keys_show(main_matches)?,
         Some(("delete", sub_matches)) => handle_keys_delete(main_matches, sub_matches)?,
         Some(("current", sub_matches)) => handle_keys_current(main_matches, sub_matches)?,
         Some(("rotate", sub_matches)) => {
@@ -87,6 +212,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                   generate           Generate a new keypair\n\
                   list               List your private keys\n\
                   pubkey             Show your public key\n\
+                  show               Display public key fingerprint and randomart\n\
                   current            Show or set current keypair\n\
                   delete             Delete a keypair\n\
                   set-passphrase     Set or change passphrase for a key\n\
@@ -462,6 +588,69 @@ fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMat
 pub fn handle_keygen_deprecated(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     eprintln!("Warning: 'sss keygen' is deprecated. Use 'sss keys generate' instead.");
     handle_keys_generate_command(main_matches, matches)
+}
+
+fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
+    use libsodium_sys::{crypto_hash_sha256, crypto_hash_sha256_BYTES};
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Retrieve the raw StoredKeyPair without decrypting any secret material.
+    // With the hybrid feature we use `get_current_stored_raw` (which also
+    // exposes `hybrid_public_key`).  Without the hybrid feature we fall back
+    // to `list_key_ids` + `get_current_key_id`, which is always available and
+    // likewise returns the public-key string without a passphrase prompt.
+    #[cfg(feature = "hybrid")]
+    let (classic_pk_b64, hybrid_pk_b64_opt) = {
+        let stored = keystore.get_current_stored_raw().map_err(|_| {
+            anyhow!("No current keypair found. Generate one with: sss keys generate --suite classic")
+        })?;
+        (stored.public_key.clone(), stored.hybrid_public_key.clone())
+    };
+
+    #[cfg(not(feature = "hybrid"))]
+    let classic_pk_b64 = {
+        let current_id = keystore.get_current_key_id().map_err(|_| {
+            anyhow!("No current keypair found. Generate one with: sss keys generate --suite classic")
+        })?;
+        let keys = keystore.list_key_ids()?;
+        let entry = keys.into_iter().find(|(id, _)| id == &current_id).ok_or_else(|| {
+            anyhow!("No current keypair found. Generate one with: sss keys generate --suite classic")
+        })?;
+        entry.1.public_key
+    };
+
+    // --- Classic keypair block ---
+    println!("Classic keypair:");
+    let classic_key_bytes = classic_pk_b64.as_bytes();
+    let mut classic_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+    unsafe {
+        crypto_hash_sha256(
+            classic_hash.as_mut_ptr(),
+            classic_key_bytes.as_ptr(),
+            classic_key_bytes.len() as u64,
+        );
+    }
+    generate_randomart(&classic_hash, "SSS KEY (Classic)");
+
+    // --- Hybrid keypair block (only if present and hybrid feature enabled) ---
+    #[cfg(feature = "hybrid")]
+    if let Some(ref hybrid_pk_b64) = hybrid_pk_b64_opt {
+        println!();
+        println!("Hybrid keypair:");
+        let hybrid_key_bytes = hybrid_pk_b64.as_bytes();
+        let mut hybrid_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+        unsafe {
+            crypto_hash_sha256(
+                hybrid_hash.as_mut_ptr(),
+                hybrid_key_bytes.as_ptr(),
+                hybrid_key_bytes.len() as u64,
+            );
+        }
+        generate_randomart(&hybrid_hash, "SSS KEY (Hybrid)");
+    }
+
+    Ok(())
 }
 
 /// Generate ASCII art representation of a fingerprint (Drunken Bishop algorithm)

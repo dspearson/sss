@@ -9,7 +9,7 @@ use crate::{
     commands::utils::{create_keystore, get_password_if_protected, get_system_username},
     config::get_project_config_path,
     constants::{DEFAULT_USERNAME_FALLBACK, ERR_NO_PROJECT_CONFIG},
-    crypto::{ClassicSuite, CryptoSuite, PublicKey},
+    crypto::{KeyPair, PublicKey, Suite, suite_for},
     project::ProjectConfig,
 };
 
@@ -70,45 +70,98 @@ fn handle_users_list() -> Result<()> {
 }
 
 fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    use base64::Engine as _;
+
     let username = sub_matches.get_one::<String>("username").unwrap();
     let public_key_input = sub_matches.get_one::<String>("public-key").unwrap();
 
-    // Parse public key (either from file or inline base64)
-    let public_key = if Path::new(public_key_input).exists() {
+    // Decode raw bytes from file or inline base64; dispatch on length below.
+    let raw: Vec<u8> = if Path::new(public_key_input).exists() {
         let content = fs::read_to_string(public_key_input)?;
-        PublicKey::from_base64(content.trim())?
+        base64::prelude::BASE64_STANDARD
+            .decode(content.trim())
+            .map_err(|e| anyhow!("invalid base64 in key file: {e}"))?
     } else {
-        PublicKey::from_base64(public_key_input)?
+        base64::prelude::BASE64_STANDARD
+            .decode(public_key_input)
+            .map_err(|e| anyhow!("invalid base64 public key: {e}"))?
     };
 
-    // Load project config
+    // 32 bytes → classic X25519;  1214 bytes → hybrid X448+sntrup761.
+    let new_pub: PublicKey = match raw.len() {
+        32 => PublicKey::Classic(raw.try_into().unwrap()),
+        #[cfg(feature = "hybrid")]
+        n if n == crate::constants::HYBRID_PUBLIC_KEY_SIZE => {
+            PublicKey::Hybrid(crate::crypto::HybridPublicKey::from_bytes(&raw)?)
+        }
+        n => {
+            #[cfg(feature = "hybrid")]
+            return Err(anyhow!(
+                "unrecognised public key length {n} bytes — \
+                 expected 32 (classic X25519) or {} (hybrid X448+sntrup761)",
+                crate::constants::HYBRID_PUBLIC_KEY_SIZE
+            ));
+            #[cfg(not(feature = "hybrid"))]
+            return Err(anyhow!(
+                "unrecognised public key length {n} bytes — expected 32 bytes (classic X25519)"
+            ));
+        }
+    };
+
     let config_path = get_project_config_path()?;
     let mut config = ProjectConfig::load_from_file(&config_path)
         .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
 
-    // Get our keypair to decrypt the repository key
-    let keystore = create_keystore(main_matches)?;
+    // Reject mismatches between the provided key type and the project suite.
+    let suite = config.suite()?;
+    match (&new_pub, suite) {
+        (PublicKey::Classic(_), Suite::Hybrid) => {
+            return Err(anyhow!(
+                "this is a v2 (hybrid) project — provide a hybrid public key (~1600 chars base64).\n\
+                 Run `sss keys pubkey` on their machine to get it."
+            ));
+        }
+        #[cfg(feature = "hybrid")]
+        (PublicKey::Hybrid(_), Suite::Classic) => {
+            return Err(anyhow!(
+                "this is a v1 (classic) project — provide a classic public key (~44 chars base64).\n\
+                 Run `sss keys pubkey` on their machine to get it."
+            ));
+        }
+        _ => {}
+    }
 
-    // Get password if key is protected
+    let keystore = create_keystore(main_matches)?;
     let password_str = get_password_if_protected(
         &keystore,
         "Enter your passphrase to add user (or press Enter if none): ",
     )?;
-    let our_keypair = keystore.get_current_keypair(password_str.as_deref())?;
 
-    // Get our sealed repository key and decrypt it
     let current_user =
         get_system_username().unwrap_or_else(|_| DEFAULT_USERNAME_FALLBACK.to_string());
-
     let sealed_key = config.get_sealed_key_for_user(&current_user)?;
-    let repository_key = ClassicSuite.open_repo_key(&sealed_key, &our_keypair)?;
 
-    // Add the new user
-    config.add_user(username, &public_key, &repository_key)?;
+    // Open with the suite that sealed it — classic for v1, hybrid for v2.
+    let open_suite = suite_for(suite)?;
+    let our_keypair: KeyPair = if suite == Suite::Hybrid {
+        #[cfg(feature = "hybrid")]
+        {
+            let id = keystore.get_current_key_id()?;
+            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref())?)
+        }
+        #[cfg(not(feature = "hybrid"))]
+        return Err(anyhow!("hybrid suite requires a --features hybrid build"));
+    } else {
+        keystore.get_current_keypair(password_str.as_deref())?
+    };
+    let repository_key = open_suite.open_repo_key(&sealed_key, &our_keypair)?;
+
+    // add_user dispatches sealing via config.suite() internally.
+    config.add_user(username, &new_pub, &repository_key)?;
     config.save_to_file(&config_path)?;
 
     println!("Added user '{username}' to project");
-    println!("Public key: {}", public_key.to_base64());
+    println!("Public key: {}", new_pub.to_base64());
     Ok(())
 }
 
@@ -118,6 +171,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     // Load project config once.
     let config_path = get_project_config_path()?;
     let mut config = ProjectConfig::load_from_file(&config_path)?;
+    let suite = config.suite()?;
 
     // Check if user exists
     if !config.users.contains_key(username) {
@@ -163,11 +217,22 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
         &keystore,
         "Enter your passphrase to perform key rotation (or press Enter if none): ",
     )?;
-    let our_keypair = keystore.get_current_keypair(password_str.as_deref())?;
+    // Open with the suite that sealed it — classic for v1, hybrid for v2.
+    let open_suite = suite_for(suite)?;
+    let our_keypair: KeyPair = if suite == Suite::Hybrid {
+        #[cfg(feature = "hybrid")]
+        {
+            let id = keystore.get_current_key_id()?;
+            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref())?)
+        }
+        #[cfg(not(feature = "hybrid"))]
+        return Err(anyhow!("hybrid suite requires a --features hybrid build"));
+    } else {
+        keystore.get_current_keypair(password_str.as_deref())?
+    };
 
     // Decrypt the sealed repository key captured above.
-    let current_repository_key =
-        ClassicSuite.open_repo_key(&sealed_key, &our_keypair)?;
+    let current_repository_key = open_suite.open_repo_key(&sealed_key, &our_keypair)?;
 
     // Now perform the key rotation
     use crate::rotation::{RotationManager, RotationOptions};

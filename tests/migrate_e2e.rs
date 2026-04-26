@@ -22,6 +22,9 @@ fn sss_bin() -> &'static str {
 struct UserEnv {
     home_dir: TempDir,
     pub username: String,
+    /// Classic (X25519) base64 public key, captured from `keys generate --suite classic`.
+    /// Empty string until generate_keys() is called.
+    classic_pk: String,
     /// Hybrid base64 public key, captured from stdout of `keys generate --suite hybrid`.
     /// Empty string until generate_keys() is called.
     hybrid_pk: String,
@@ -32,6 +35,7 @@ impl UserEnv {
         Self {
             home_dir: TempDir::new().expect("create temp home"),
             username: username.to_string(),
+            classic_pk: String::new(),
             hybrid_pk: String::new(),
         }
     }
@@ -62,6 +66,8 @@ impl UserEnv {
     /// only emits ASCII randomart and never prints the "Hybrid public key:" line.
     fn generate_keys(&mut self) {
         // Classic keypair first — hybrid requires an existing classic keypair.
+        // Parse "Public key: <base64>" from stdout to avoid calling `sss keys pubkey`
+        // later, which in hybrid builds returns the hybrid key when there is no project.
         let out = self.cmd(self.home_dir.path())
             .args(["keys", "generate", "--suite", "classic", "--no-password"])
             .output()
@@ -71,6 +77,19 @@ impl UserEnv {
             "classic keygen failed for {}: {}",
             self.username,
             String::from_utf8_lossy(&out.stderr)
+        );
+        let classic_stdout = String::from_utf8_lossy(&out.stdout);
+        for line in classic_stdout.lines() {
+            if let Some(pk) = line.strip_prefix("Public key: ") {
+                self.classic_pk = pk.trim().to_string();
+                break;
+            }
+        }
+        assert!(
+            !self.classic_pk.is_empty(),
+            "could not parse 'Public key: ' from classic keygen for {}:\n{}",
+            self.username,
+            classic_stdout
         );
 
         // Hybrid keypair (added alongside existing classic — different suite slot).
@@ -112,19 +131,15 @@ impl UserEnv {
         );
     }
 
-    /// Return the classic base64 public key for this user.
+    /// Return the classic (X25519) base64 public key for this user.
+    /// Value is captured from `keys generate --suite classic` stdout; call generate_keys() first.
     fn classic_pubkey(&self) -> String {
-        let out = self.cmd(self.home_dir.path())
-            .args(["keys", "pubkey"])
-            .output()
-            .expect("keys pubkey");
         assert!(
-            out.status.success(),
-            "keys pubkey failed for {}: {}",
-            self.username,
-            String::from_utf8_lossy(&out.stderr)
+            !self.classic_pk.is_empty(),
+            "classic_pk is empty for {}; call generate_keys() before classic_pubkey()",
+            self.username
         );
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
+        self.classic_pk.clone()
     }
 
     /// Return the hybrid base64 public key for this user.

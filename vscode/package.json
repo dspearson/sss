@@ -2,9 +2,13 @@
   "name": "sss-vscode",
   "displayName": "Secret String Substitution",
   "description": "Transparent encryption/decryption for SSS (Secret String Substitution) projects with project and key management",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "sss",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dspearson/sss"
+  },
   "author": "Dominic Pearson <dsp@technoanimal.net>",
   "engines": {
     "vscode": "^1.85.0"
@@ -183,6 +187,10 @@
         "title": "Secret String Substitution: Clear Cached Password"
       },
       {
+        "command": "sss.migrateToHybrid",
+        "title": "Secret String Substitution: Migrate Project to Hybrid Suite"
+      },
+      {
         "command": "sss.updateBinary",
         "title": "Secret String Substitution: Update sss Binary"
       },
@@ -327,6 +335,10 @@
         },
         {
           "command": "sss.showProjectInfo",
+          "when": "sss.isProject"
+        },
+        {
+          "command": "sss.migrateToHybrid",
           "when": "sss.isProject"
         },
         {

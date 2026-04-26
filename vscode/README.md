@@ -240,5 +240,5 @@ See LICENSE file for details.
 
 ## Related Links
 
-- [SSS Tool Documentation](link-to-sss-docs)
+- [SSS Tool Documentation](https://github.com/dspearson/sss)
 - [VS Code Extension API](https://code.visualstudio.com/api)

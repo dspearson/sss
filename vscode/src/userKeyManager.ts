@@ -150,11 +150,21 @@ export class UserKeyManager {
     }
 
     async generateKey(): Promise<void> {
+        const suiteChoice = await vscode.window.showQuickPick(
+            [
+                { label: 'Classic', description: 'XChaCha20-Poly1305 (stable default)', value: 'classic' as const },
+                { label: 'Hybrid', description: 'Classic + post-quantum Kyber (experimental)', value: 'hybrid' as const },
+                { label: 'Both', description: 'Generate classic and hybrid keypair together', value: 'both' as const }
+            ],
+            { placeHolder: 'Select key suite' }
+        );
+        if (!suiteChoice) {
+            return;
+        }
+
         const passwordProtected = await vscode.window.showQuickPick(
             ['No password', 'Password protected'],
-            {
-                placeHolder: 'Select key protection type'
-            }
+            { placeHolder: 'Select key protection type' }
         );
 
         if (!passwordProtected) {
@@ -201,7 +211,7 @@ export class UserKeyManager {
                 title: 'Generating keypair...',
                 cancellable: false
             }, async () => {
-                await this.sssWrapper.generateKey(isPasswordProtected, password);
+                await this.sssWrapper.generateKey(isPasswordProtected, password, suiteChoice.value);
             });
 
             vscode.window.showInformationMessage('Keypair generated successfully');

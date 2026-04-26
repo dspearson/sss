@@ -15,6 +15,7 @@ export interface ProjectInfo {
     isProject: boolean;
     projectRoot?: string;
     version?: string;
+    suite?: 'classic' | 'hybrid';
 }
 
 export interface UserInfo {
@@ -318,15 +319,24 @@ export class SSSWrapper {
     async checkProjectStatus(): Promise<ProjectInfo> {
         try {
             const { stdout } = await this.runCommand(`"${this.config.sssPath}" status`);
-
-            // Output format is just the project root path
             const projectRoot = stdout.trim();
 
-            return {
-                isProject: true,
-                projectRoot,
-                version: '1.0' // Could parse from .sss.toml if needed
-            };
+            // Read version from .sss.toml to determine suite
+            let version: string | undefined;
+            let suite: 'classic' | 'hybrid' | undefined;
+            try {
+                const tomlPath = require('path').join(projectRoot, '.sss.toml');
+                const tomlContent = require('fs').readFileSync(tomlPath, 'utf8');
+                const versionMatch = tomlContent.match(/^version\s*=\s*"([^"]+)"/m);
+                if (versionMatch) {
+                    version = versionMatch[1];
+                    suite = version === '2.0' ? 'hybrid' : 'classic';
+                }
+            } catch {
+                // No .sss.toml readable — leave suite undefined
+            }
+
+            return { isProject: true, projectRoot, version, suite };
         } catch (error) {
             return { isProject: false };
         }
@@ -431,8 +441,16 @@ export class SSSWrapper {
     /**
      * Initialise a new sss project
      */
-    async initProject(username: string, projectPath?: string): Promise<void> {
-        await this.runCommand(`"${this.config.sssPath}" init "${username}"`, projectPath, true);
+    async initProject(username: string, projectPath?: string, crypto?: 'classic' | 'hybrid'): Promise<void> {
+        const cryptoFlag = crypto ? ` --crypto ${crypto}` : '';
+        await this.runCommand(`"${this.config.sssPath}" init "${username}"${cryptoFlag}`, projectPath, true);
+    }
+
+    /**
+     * Migrate project from classic to hybrid suite
+     */
+    async migrateToHybrid(): Promise<void> {
+        await this.runCommandWithArgs(['migrate'], undefined, true);
     }
 
     /**
@@ -495,21 +513,30 @@ export class SSSWrapper {
     /**
      * Generate new keypair
      */
-    async generateKey(passwordProtected: boolean = false, password?: string): Promise<void> {
+    async generateKey(passwordProtected: boolean = false, password?: string, suite?: 'classic' | 'hybrid' | 'both'): Promise<void> {
         // Always use --force (sss bug: it never overwrites, just creates new keypair)
         const flags = passwordProtected ? '--force' : '--force --no-password';
+        const suiteFlag = suite ? ` --suite ${suite}` : '';
 
         // If password-protected and password provided, cache it and set environment variable
         const env: Record<string, string> | undefined = passwordProtected && password
             ? { SSS_PASSPHRASE: password }
             : undefined;
 
-        await this.runCommand(`"${this.config.sssPath}" keys generate ${flags}`, undefined, false, env);
+        await this.runCommand(`"${this.config.sssPath}" keys generate ${flags}${suiteFlag}`, undefined, false, env);
 
         // Cache the password for future use if provided
         if (passwordProtected && password) {
             this.setCachedPassword(password);
         }
+    }
+
+    /**
+     * Get hybrid public key
+     */
+    async getHybridPublicKey(): Promise<string> {
+        const { stdout } = await this.runCommand(`"${this.config.sssPath}" keys pubkey --suite hybrid`, undefined, true);
+        return stdout.trim();
     }
 
     /**

@@ -98,6 +98,18 @@ export class ProjectManager {
         // Use configured/default username automatically
         const username = this.getDefaultUsername();
 
+        // Ask which crypto suite to use
+        const cryptoChoice = await vscode.window.showQuickPick(
+            [
+                { label: 'Classic (XChaCha20-Poly1305)', description: 'Stable, default', value: 'classic' as const },
+                { label: 'Hybrid (Classic + post-quantum Kyber)', description: 'Experimental — requires hybrid build', value: 'hybrid' as const }
+            ],
+            { placeHolder: 'Choose cryptographic suite' }
+        );
+        if (!cryptoChoice) {
+            return;
+        }
+
         try {
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
@@ -105,7 +117,7 @@ export class ProjectManager {
                 cancellable: false
             }, async () => {
                 const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-                await this.sssWrapper.initProject(username, workspaceFolder?.uri.fsPath);
+                await this.sssWrapper.initProject(username, workspaceFolder?.uri.fsPath, cryptoChoice.value);
             });
 
             vscode.window.showInformationMessage('Secret String Substitution project initialised successfully');

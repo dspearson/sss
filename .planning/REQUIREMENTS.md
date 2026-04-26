@@ -39,9 +39,9 @@ Per-user keystore gains side-by-side storage for both suites' keypairs.
 `sss migrate` flips a repo from classic to hybrid without re-encrypting content.
 
 - [x] **MIGRATE-01**: `sss migrate` re-wraps `K` for every known user under the hybrid suite and rewrites `.sss.toml` user entries
-- [ ] **MIGRATE-02**: Migration never re-encrypts file content — the in-file ciphertexts must be byte-identical before and after `sss migrate`
+- [x] **MIGRATE-02**: Migration never re-encrypts file content — the in-file ciphertexts must be byte-identical before and after `sss migrate`
 - [x] **MIGRATE-03**: Migration errors clearly when any user in `.sss.toml` does not yet have a hybrid public key recorded; offers the user list and remediation
-- [ ] **MIGRATE-04**: `sss migrate --dry-run` shows the full plan (per-user wrap changes, version bump) without touching disk
+- [x] **MIGRATE-04**: `sss migrate --dry-run` shows the full plan (per-user wrap changes, version bump) without touching disk
 
 ### Documentation & Release
 
@@ -106,10 +106,10 @@ Filled by `gsd-roadmapper` on 2026-04-23.
 | KEYSTORE-02 | Phase 3 | Complete (Plan 03-02, 2026-04-26) |
 | KEYSTORE-03 | Phase 3 | Complete (Plan 03-01, 2026-04-26) |
 | KEYSTORE-04 | Phase 3 | Complete (Plan 03-01, 2026-04-26) |
-| MIGRATE-01 | Phase 4 | Complete |
-| MIGRATE-02 | Phase 4 | Pending |
-| MIGRATE-03 | Phase 4 | Complete |
-| MIGRATE-04 | Phase 4 | Pending |
+| MIGRATE-01 | Phase 4 | Complete (Plan 04-02, 2026-04-26) |
+| MIGRATE-02 | Phase 4 | Complete (Plan 04-02, 2026-04-26) |
+| MIGRATE-03 | Phase 4 | Complete (Plan 04-02, 2026-04-26) |
+| MIGRATE-04 | Phase 4 | Complete (Plan 04-02, 2026-04-26) |
 | TEST-01 | Phase 5 | Pending |
 | TEST-02 | Phase 5 | Pending |
 | TEST-03 | Phase 5 | Pending |
@@ -126,4 +126,4 @@ Filled by `gsd-roadmapper` on 2026-04-23.
 
 ---
 *Requirements defined: 2026-04-23*
-*Last updated: 2026-04-26 after Plan 03-02 landed — KEYSTORE-02 complete (gsd-executor)*
+*Last updated: 2026-04-26 after Plan 04-02 landed — MIGRATE-01..04 complete (gsd-executor)*

@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: verifying
-stopped_at: Phase 04 Plan 01 complete — hybrid_public field, v2 gate, suite dispatch, add-hybrid-key command
-last_updated: "2026-04-26T10:45:21.500Z"
+stopped_at: Phase 04 Plan 02 complete — sss migrate command implemented; MIGRATE-01..04 requirements satisfied
+last_updated: "2026-04-26T11:07:38.953Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
@@ -54,6 +54,7 @@ Progress: [███████░░░] 38%
 | Phase 02 P02 | ~2h | 2 tasks | 23 files |
 | Phase 03 P01 | 17 min | 2 tasks (TDD) | 2 files |
 | Phase 04-migration-command P01 | 18 min | 2 tasks | 6 files |
+| Phase 04-migration-command P02 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,7 @@ Full decision log: PROJECT.md Key Decisions table. Summary:
 - [Phase ?]: resolve_suite_from_version(2.0) returns Ok(Suite::Hybrid) — Plan 04-01 gate change
 - [Phase ?]: Password hoisted to single Option<String> in load_project_config_internal; load_keypair_with_password_retry removed
 - [Phase ?]: handle_users_add_hybrid_key: 1214-byte base64 length check (T-04-01-01) before any disk write; feature-absent stub for non-hybrid builds
+- [Phase ?]: migrate_project_config is a pure function extracted from handle_migrate for unit-testability; HybridPublicKey::from_bytes takes &[u8]->Result<Self>; ProjectConfig lacks Clone so dry-run calls core fn directly with dry_run=true — Pure core fn allows MIGRATE-01..04 invariants to be tested without a keystore. from_bytes API is strictly better (fallible). dry_run=true is contractually non-mutating per test coverage.
 
 ### Phase 1 Artefacts
 
@@ -122,7 +124,7 @@ Pre-existing flake: `commands::utils::tests::test_get_system_username_with_user_
 
 ## Session Continuity
 
-Last session: 2026-04-26T10:45:21.497Z
-Stopped at: Phase 04 Plan 01 complete — hybrid_public field, v2 gate, suite dispatch, add-hybrid-key command
+Last session: 2026-04-26T11:07:38.949Z
+Stopped at: Phase 04 Plan 02 complete — sss migrate command implemented; MIGRATE-01..04 requirements satisfied
 Resume file: None
 Next step: Plan Phase 4 (Migration Command) — sss migrate re-wraps K per user to hybrid, bumps .sss.toml version

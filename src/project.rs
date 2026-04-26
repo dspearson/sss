@@ -904,4 +904,90 @@ created = "2026-01-01T00:00:00Z"
             }
         }
     }
+
+    // --- Plan 04-01: hybrid_public field + v2 suite gate ---
+
+    #[test]
+    fn test_load_from_file_accepts_v2() {
+        // After Plan 04-01 gate change, version = "2.0" must load as Ok.
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp.path(),
+            r#"version = "2.0"
+created = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let cfg = ProjectConfig::load_from_file(tmp.path())
+            .expect("v2.0 file must load without error after gate change");
+        assert_eq!(
+            cfg.suite().unwrap(),
+            Suite::Hybrid,
+            "v2.0 must resolve to Suite::Hybrid"
+        );
+    }
+
+    #[test]
+    fn test_project_config_suite_returns_hybrid_for_v2() {
+        let mut cfg = ProjectConfig::default();
+        cfg.version = "2.0".to_string();
+        assert_eq!(
+            cfg.suite().unwrap(),
+            Suite::Hybrid,
+            "suite() must return Suite::Hybrid for version = \"2.0\""
+        );
+    }
+
+    #[test]
+    fn test_userconfig_hybrid_public_roundtrips() {
+        // A v1-format file (no hybrid_public) deserialises with hybrid_public = None.
+        let tmp_none = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp_none.path(),
+            r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-01-01T00:00:00Z"
+"#,
+        )
+        .unwrap();
+        let cfg_none = ProjectConfig::load_from_file(tmp_none.path()).unwrap();
+        let alice_none = cfg_none.users.get("alice").unwrap();
+        #[cfg(feature = "hybrid")]
+        assert!(
+            alice_none.hybrid_public.is_none(),
+            "hybrid_public must be None when absent in TOML"
+        );
+        // On non-hybrid builds the field is serde(skip) so it won't appear;
+        // we just check the user loaded correctly.
+        let _ = alice_none;
+
+        // A file with hybrid_public = "abc123" deserialises correctly.
+        let tmp_some = NamedTempFile::new().unwrap();
+        std::fs::write(
+            tmp_some.path(),
+            r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-01-01T00:00:00Z"
+hybrid_public = "abc123"
+"#,
+        )
+        .unwrap();
+        let cfg_some = ProjectConfig::load_from_file(tmp_some.path()).unwrap();
+        let alice_some = cfg_some.users.get("alice").unwrap();
+        #[cfg(feature = "hybrid")]
+        assert_eq!(
+            alice_some.hybrid_public.as_deref(),
+            Some("abc123"),
+            "hybrid_public must round-trip correctly"
+        );
+        let _ = alice_some;
+    }
 }

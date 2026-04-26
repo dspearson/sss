@@ -5,8 +5,8 @@ use std::env;
 
 use sss::commands::{
     handle_agent, handle_edit, handle_hooks, handle_init, handle_keygen_deprecated, handle_keys,
-    handle_open, handle_project, handle_render, handle_seal, handle_settings, handle_status,
-    handle_users,
+    handle_migrate, handle_open, handle_project, handle_render, handle_seal, handle_settings,
+    handle_status, handle_users,
 };
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 use sss::commands::{handle_git, handle_mount};
@@ -423,6 +423,25 @@ fn create_cli_app() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("migrate")
+                .about("Migrate a v1 (classic) repo to v2 (hybrid) crypto suite")
+                .long_about(
+                    "Re-seals the repository key K for every user under the hybrid suite \
+                     and bumps .sss.toml version from \"1.0\" to \"2.0\".\n\n\
+                     Prerequisites:\n\
+                     - Every user in .sss.toml must have a hybrid public key registered.\n\
+                     - Register with: sss users add-hybrid-key <user> <pubkey>\n\
+                     - Generate a hybrid keypair: sss keygen --suite hybrid\n\n\
+                     This command NEVER rewrites sealed file content; only .sss.toml changes."
+                )
+                .arg(
+                    Arg::new("dry-run")
+                        .long("dry-run")
+                        .help("Print the migration plan without writing any changes")
+                        .action(clap::ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
             Command::new("hooks")
                 .about("Git hooks management")
                 .subcommand(
@@ -772,6 +791,7 @@ fn main() -> Result<()> {
         Some(("keygen", sub_matches)) => handle_keygen_deprecated(&matches, sub_matches),
         Some(("keys", sub_matches)) => handle_keys(&matches, sub_matches),
         Some(("users", sub_matches)) => handle_users(&matches, sub_matches),
+        Some(("migrate", sub_matches)) => handle_migrate(&matches, sub_matches),
         Some(("hooks", sub_matches)) => handle_hooks(&matches, sub_matches),
         Some(("settings", sub_matches)) => handle_settings(&matches, sub_matches),
         Some(("project", sub_matches)) => handle_project(&matches, sub_matches),
@@ -839,6 +859,7 @@ mod tests {
         assert!(subcommands.contains(&"project"), "project subcommand should exist");
         assert!(subcommands.contains(&"settings"), "settings subcommand should exist");
         assert!(subcommands.contains(&"hooks"), "hooks subcommand should exist");
+        assert!(subcommands.contains(&"migrate"), "migrate subcommand should exist");
     }
 
     #[test]

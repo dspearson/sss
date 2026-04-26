@@ -22,6 +22,7 @@ pub use git::handle_git;
 pub use hooks::handle_hooks;
 pub use init::handle_init;
 pub use keys::{handle_keygen_deprecated, handle_keys};
+pub use migrate::handle_migrate;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub use mount::handle_mount;
 #[cfg(feature = "ninep")]
@@ -44,6 +45,7 @@ mod tests {
         // Two-parameter handlers (main_matches, sub_matches)
         let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_init;
         let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_keys;
+        let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_migrate;
         let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_users;
         let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_project;
         let _: fn(&clap::ArgMatches, &clap::ArgMatches) -> anyhow::Result<()> = handle_settings;

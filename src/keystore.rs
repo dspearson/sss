@@ -29,6 +29,17 @@ pub struct StoredKeyPair {
     /// Whether the secret key is stored in the system keyring instead of this file
     #[serde(default)]
     pub in_keyring: bool,
+    /// Optional hybrid (X448 + sntrup761) public key, base64-encoded.
+    /// Absent in classic-only keystores; `#[serde(default)]` ensures old files
+    /// deserialize without error (RESEARCH.md Pitfall 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub hybrid_public_key: Option<String>,
+    /// Optional hybrid secret key (encrypted or plain), base64-encoded.
+    /// Encrypted iff `is_password_protected == true`; shares the same KDF salt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub hybrid_encrypted_secret_key: Option<String>,
 }
 
 /// Simple file-based keystore using ~/.config/sss/keys/
@@ -165,6 +176,8 @@ impl Keystore {
             created_at: Utc::now(),
             is_password_protected,
             in_keyring,
+            hybrid_public_key: None,
+            hybrid_encrypted_secret_key: None,
         };
 
         // Write keypair to file
@@ -472,6 +485,281 @@ impl Keystore {
                 Err(anyhow!("Invalid current file format"))
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Hybrid (dual-suite) methods — gated by `hybrid` feature (KEYSTORE-01/03/04)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Read the raw `StoredKeyPair` for the current identity without decrypting
+    /// any secret material. Used by `handle_keys_show` to display public keys
+    /// and by `store_dual_keypair` Case B to detect whether hybrid is already present.
+    #[cfg(feature = "hybrid")]
+    pub fn get_current_stored_raw(&self) -> Result<StoredKeyPair> {
+        let key_id = self.read_current_key_id()?;
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+        if !key_file.exists() {
+            return Err(anyhow!("Key file not found: {key_id}"));
+        }
+        let content = fs::read_to_string(&key_file)?;
+        Ok(toml::from_str(&content)?)
+    }
+
+    /// Store a dual-suite keypair with optional password protection.
+    ///
+    /// Handles three cases:
+    ///
+    /// - **Case A** (`classic_keypair = Some`, `hybrid_keypair = Some`): generates a fresh
+    ///   UUID, derives one KDF key, encrypts both secrets under the same derived key.
+    ///   Writes a new TOML file and calls `set_current_key`.
+    ///
+    /// - **Case B** (`classic_keypair = None`, `hybrid_keypair = Some`): read-modify-write
+    ///   of the existing current identity. Adds hybrid material only; does NOT change the
+    ///   UUID, classic fields, or salt (KEYSTORE-03). Returns an error if hybrid material
+    ///   is already present.
+    ///
+    /// - **Case C** (`classic_keypair = Some`, `hybrid_keypair = None`): delegates to
+    ///   the existing `store_keypair` by wrapping the classic keypair in `KeyPair::Classic`.
+    #[cfg(feature = "hybrid")]
+    pub fn store_dual_keypair(
+        &self,
+        classic_keypair: Option<&ClassicKeyPair>,
+        hybrid_keypair: Option<&crate::crypto::HybridKeyPair>,
+        password: Option<&str>,
+    ) -> Result<String> {
+        use base64::prelude::BASE64_STANDARD;
+
+        match (classic_keypair, hybrid_keypair) {
+            // Case C — classic only: delegate to the existing method
+            (Some(classic), None) => {
+                self.store_keypair(&KeyPair::Classic(classic.clone()), password)
+            }
+
+            // Case A — both keys, fresh identity file
+            (Some(classic), Some(hybrid)) => {
+                let key_id = uuid::Uuid::new_v4().to_string();
+
+                let (enc_classic, enc_hybrid, stored_salt, is_protected) =
+                    if let Some(pw) = password {
+                        let salt = crate::kdf::Salt::new();
+                        let dk = crate::kdf::DerivedKey::derive_with_params(
+                            pw, &salt, &self.kdf_params,
+                        )?;
+                        let enc_key = dk.to_encryption_key();
+
+                        // Classic secret — standard path (32-byte key, base64 string)
+                        let classic_sk_b64 =
+                            KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+                        let enc_classic =
+                            crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)?;
+
+                        // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
+                        // avoid copying into a non-Zeroizing buffer (T-03-02).
+                        let hybrid_sk_b64 =
+                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                        let enc_hybrid =
+                            crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)?;
+
+                        (enc_classic, enc_hybrid, Some(salt.to_base64()), true)
+                    } else {
+                        // Passwordless path — store raw base64 (same warning as store_keypair)
+                        eprintln!("\n⚠️  WARNING: Storing dual-suite keypair WITHOUT password protection!");
+                        eprintln!("   Your private keys will be accessible to anyone who can read:");
+                        eprintln!("   ~/.config/sss/keys/");
+                        eprintln!("\n   Consider using password protection (recommended)\n");
+
+                        let classic_sk_b64 =
+                            KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+                        let hybrid_sk_b64 =
+                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                        (classic_sk_b64, hybrid_sk_b64, None, false)
+                    };
+
+                let stored = StoredKeyPair {
+                    uuid: key_id.clone(),
+                    public_key: KeyPair::Classic(classic.clone()).public_key().to_base64(),
+                    encrypted_secret_key: enc_classic,
+                    salt: stored_salt,
+                    created_at: chrono::Utc::now(),
+                    is_password_protected: is_protected,
+                    in_keyring: false,
+                    hybrid_public_key: Some(
+                        BASE64_STANDARD.encode(&hybrid.public_bytes),
+                    ),
+                    hybrid_encrypted_secret_key: Some(enc_hybrid),
+                };
+
+                let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+                let content = toml::to_string_pretty(&stored)?;
+                fs::write(&key_file, content)?;
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let metadata = fs::metadata(&key_file)?;
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o600);
+                    fs::set_permissions(&key_file, perms)?;
+                }
+
+                self.set_current_key(&key_id)?;
+                Ok(key_id)
+            }
+
+            // Case B — hybrid only: upgrade existing classic identity
+            (None, Some(hybrid)) => {
+                use base64::prelude::BASE64_STANDARD;
+
+                let key_id = self.read_current_key_id()?;
+                let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+                if !key_file.exists() {
+                    return Err(anyhow!("Key file not found: {key_id}"));
+                }
+
+                let content = fs::read_to_string(&key_file)?;
+                let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+                // Guard: refuse to overwrite existing hybrid material (T-03-03)
+                if stored.hybrid_public_key.is_some() {
+                    return Err(anyhow!(
+                        "hybrid keypair already present in this identity; \
+                         use --suite both to replace"
+                    ));
+                }
+
+                // Encrypt new hybrid material under the EXISTING salt (KEYSTORE-04).
+                // We re-derive only to encrypt the new hybrid secret; the classic
+                // material is not touched.
+                let enc_hybrid = if stored.is_password_protected {
+                    let pw = password.ok_or_else(|| {
+                        anyhow!("Password required to add hybrid material to a protected identity")
+                    })?;
+                    let salt_str = stored.salt.as_ref().ok_or_else(|| {
+                        anyhow!("Salt missing for password-protected key")
+                    })?;
+                    let salt = crate::kdf::Salt::from_base64(salt_str)?;
+                    let dk = crate::kdf::DerivedKey::derive_with_params(
+                        pw, &salt, &self.kdf_params,
+                    )?;
+                    let hybrid_sk_b64 =
+                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                    crate::crypto::encrypt_to_base64(
+                        &hybrid_sk_b64,
+                        &dk.to_encryption_key(),
+                    )?
+                } else {
+                    // Passwordless — store raw base64
+                    BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref())
+                };
+
+                // Append hybrid fields — all classic fields are untouched (KEYSTORE-03)
+                stored.hybrid_public_key =
+                    Some(BASE64_STANDARD.encode(&hybrid.public_bytes));
+                stored.hybrid_encrypted_secret_key = Some(enc_hybrid);
+
+                let updated_content = toml::to_string_pretty(&stored)?;
+                fs::write(&key_file, updated_content)?;
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let metadata = fs::metadata(&key_file)?;
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o600);
+                    fs::set_permissions(&key_file, perms)?;
+                }
+
+                Ok(key_id)
+            }
+
+            // Neither key provided — nothing to store
+            (None, None) => Err(anyhow!(
+                "store_dual_keypair called with neither classic nor hybrid keypair"
+            )),
+        }
+    }
+
+    /// Load and decrypt a hybrid keypair from a stored identity file.
+    ///
+    /// Returns `Err` if the file has no hybrid material, or if decryption fails.
+    #[cfg(feature = "hybrid")]
+    pub fn load_hybrid_keypair(
+        &self,
+        key_id: &str,
+        password: Option<&str>,
+    ) -> Result<crate::crypto::HybridKeyPair> {
+        use base64::prelude::BASE64_STANDARD;
+        use crate::constants::HYBRID_SECRET_KEY_SIZE;
+        use crate::constants::HYBRID_PUBLIC_KEY_SIZE;
+        use zeroize::Zeroizing;
+
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+        if !key_file.exists() {
+            return Err(anyhow!("Key file not found: {key_id}"));
+        }
+
+        let content = fs::read_to_string(&key_file)?;
+        let stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Guard: no hybrid material stored
+        let hybrid_pub_b64 = stored.hybrid_public_key.ok_or_else(|| {
+            anyhow!(
+                "your keystore has no hybrid keypair; \
+                 run `sss keygen --suite hybrid` to add one"
+            )
+        })?;
+        let hybrid_enc_sk_b64 = stored.hybrid_encrypted_secret_key.ok_or_else(|| {
+            anyhow!("hybrid encrypted secret key missing from identity file")
+        })?;
+
+        // Decrypt the hybrid secret material using the same path as classic
+        let raw_secret_bytes: Vec<u8> = if stored.is_password_protected {
+            let pw = password.ok_or_else(|| {
+                anyhow!("Password required for encrypted key")
+            })?;
+            let salt_str = stored.salt.as_ref().ok_or_else(|| {
+                anyhow!("Salt missing for password-protected key")
+            })?;
+            let salt = crate::kdf::Salt::from_base64(salt_str)?;
+            let dk = crate::kdf::DerivedKey::derive_with_params(
+                pw, &salt, &self.kdf_params,
+            )?;
+            let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?;
+            let decrypted = crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?;
+            // decrypted is the base64 string of the raw secret bytes
+            let hybrid_sk_b64 = String::from_utf8(decrypted)?;
+            BASE64_STANDARD.decode(&hybrid_sk_b64)?
+        } else {
+            // Passwordless — stored as raw base64
+            BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?
+        };
+
+        if raw_secret_bytes.len() != HYBRID_SECRET_KEY_SIZE {
+            return Err(anyhow!(
+                "hybrid secret key wrong length: expected {} bytes, got {}",
+                HYBRID_SECRET_KEY_SIZE,
+                raw_secret_bytes.len()
+            ));
+        }
+
+        // Reconstruct public bytes
+        let pub_bytes_raw = BASE64_STANDARD.decode(&hybrid_pub_b64)?;
+        if pub_bytes_raw.len() != HYBRID_PUBLIC_KEY_SIZE {
+            return Err(anyhow!(
+                "hybrid public key wrong length: expected {} bytes, got {}",
+                HYBRID_PUBLIC_KEY_SIZE,
+                pub_bytes_raw.len()
+            ));
+        }
+        let mut public_bytes = [0u8; HYBRID_PUBLIC_KEY_SIZE];
+        public_bytes.copy_from_slice(&pub_bytes_raw);
+
+        // Reconstruct secret bytes into Zeroizing<[u8; N]> (T-03-05)
+        let mut secret_array = [0u8; HYBRID_SECRET_KEY_SIZE];
+        secret_array.copy_from_slice(&raw_secret_bytes);
+        let secret_bytes = Zeroizing::new(secret_array);
+
+        Ok(crate::crypto::HybridKeyPair { public_bytes, secret_bytes })
     }
 
     /// Decrypt a stored keypair

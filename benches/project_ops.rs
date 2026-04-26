@@ -9,16 +9,12 @@ use sss::processor::Processor;
 use std::path::PathBuf;
 use std::time::Duration;
 
-// Unconditional imports — required by classic benchmarks regardless of feature flags.
-// `PublicKey` is only referenced in cfg(feature = "hybrid") blocks; allow unused on
-// non-hybrid builds so the hybrid build does not need a separate re-import.
-#[allow(unused_imports)]
-use sss::crypto::{ClassicSuite, CryptoSuite, KeyPair, PublicKey};
+use sss::crypto::{ClassicSuite, CryptoSuite, KeyPair};
 use sss::crypto::classic::ClassicKeyPair;
 use base64::prelude::{BASE64_STANDARD, Engine as _};
 
 #[cfg(feature = "hybrid")]
-use sss::crypto::hybrid::{HybridCryptoSuite, HybridKeyPair};
+use sss::crypto::{hybrid::{HybridCryptoSuite, HybridKeyPair}, PublicKey};
 
 // ---------------------------------------------------------------------------
 // Fixture generation

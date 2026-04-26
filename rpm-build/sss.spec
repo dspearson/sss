@@ -1,6 +1,6 @@
 Name:           sss
-Version:        1.3.1
-Release:        2%{?dist}
+Version:        2.0.0
+Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
 License:        ISC
@@ -75,6 +75,14 @@ fi
 %{_bindir}/sss-askpass-gui
 
 %changelog
+* Sun Apr 26 2026 Dominic Pearson <dsp@technoanimal.net> - 2.0.0-1
+- Release v2.0.0: hybrid post-quantum suite (X448 + sntrup761 KEM via trelis)
+- Dual-suite keystore: classic and hybrid keypairs side-by-side per user
+- sss migrate: upgrades v1.0 classic repo to v2.0 hybrid; --dry-run supported
+- sss users add-hybrid-key: records hybrid public key before migration
+- Key fingerprint display: [CLASSIC] and [PQCRYPT] box labels with symmetric padding
+- Fix: braces_balance now skips \} escape sequences in marker inference
+
 * Sun Apr 26 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.1-2
 - Build with --features fuse,hybrid to enable post-quantum hybrid key support
 - Fix: braces_balance in marker inference now skips \} escape sequences,

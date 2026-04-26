@@ -2,6 +2,7 @@
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 
+#[cfg(feature = "hybrid")]
 use crate::{
     commands::utils::{create_keystore, get_password_if_protected},
     config::get_project_config_path,
@@ -84,6 +85,8 @@ pub fn migrate_project_config(
 // ---- CLI handler ---------------------------------------------------------
 
 pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
+    #[cfg(not(feature = "hybrid"))]
+    let _ = (main_matches, matches);
     // Feature gate: migrate is a no-op without hybrid support
     #[cfg(not(feature = "hybrid"))]
     return Err(anyhow!(

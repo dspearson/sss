@@ -552,9 +552,8 @@ impl Keystore {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Read the raw `StoredKeyPair` for the current identity without decrypting
-    /// any secret material. Used by `handle_keys_show` to display public keys
+    /// any secret material. Used by `handle_keys_pubkey` to display public keys
     /// and by `store_dual_keypair` Case B to detect whether hybrid is already present.
-    #[cfg(feature = "hybrid")]
     pub fn get_current_stored_raw(&self) -> Result<StoredKeyPair> {
         let key_id = self.read_current_key_id()?;
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));

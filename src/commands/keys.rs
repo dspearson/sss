@@ -14,7 +14,7 @@ use clap::ArgMatches;
 use std::io::{self, Write};
 
 use crate::{
-    commands::utils::{create_keystore, get_password_if_protected},
+    commands::utils::create_keystore,
     constants::KEY_ID_DISPLAY_LENGTH,
     crypto::KeyPair,
     secure_memory::password,
@@ -297,10 +297,34 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 
         user_config.public.clone()
     } else {
-        // Show own public key from keystore
-        let password_opt = get_password_if_protected(&keystore, "Enter passphrase: ")?;
-        let keypair = keystore.get_current_keypair(password_opt.as_deref())?;
-        keypair.public_key().to_base64()
+        // Show own public key from keystore.
+        // Public keys are stored in plaintext so we read the raw stored form
+        // to avoid prompting for a passphrase unnecessarily.
+        use crate::constants::CONFIG_FILE_NAME;
+        use crate::project::ProjectConfig;
+        use std::path::Path;
+
+        let stored = keystore.get_current_stored_raw()?;
+
+        // Gate on repo suite if we are inside a project, otherwise fall back
+        // to the build-time hybrid feature flag.
+        let use_hybrid = if Path::new(CONFIG_FILE_NAME).exists() {
+            ProjectConfig::load_from_file(CONFIG_FILE_NAME)
+                .map(|c| c.version == "2.0")
+                .unwrap_or(cfg!(feature = "hybrid"))
+        } else {
+            cfg!(feature = "hybrid")
+        };
+
+        if use_hybrid {
+            // Prefer hybrid key; fall back to classic if the keypair is classic-only
+            // (e.g. user hasn't run `keys generate --suite hybrid` yet).
+            stored
+                .hybrid_public_key
+                .unwrap_or(stored.public_key)
+        } else {
+            stored.public_key
+        }
     };
 
     if show_fingerprint {

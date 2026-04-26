@@ -78,14 +78,14 @@ export class ProjectManager {
                 }
             }
 
-            // Generate the key
+            // Generate the key — use 'both' so the keypair is ready for a hybrid project
             try {
                 await vscode.window.withProgress({
                     location: vscode.ProgressLocation.Notification,
                     title: 'Generating keypair...',
                     cancellable: false
                 }, async () => {
-                    await this.sssWrapper.generateKey(passwordProtected.value, password);
+                    await this.sssWrapper.generateKey(passwordProtected.value, password, 'both');
                 });
 
                 vscode.window.showInformationMessage('Keypair generated successfully');
@@ -98,13 +98,13 @@ export class ProjectManager {
         // Use configured/default username automatically
         const username = this.getDefaultUsername();
 
-        // Ask which crypto suite to use
+        // Ask which crypto suite to use — hybrid (v2) is recommended for new projects
         const cryptoChoice = await vscode.window.showQuickPick(
             [
-                { label: 'Classic (XChaCha20-Poly1305)', description: 'Stable, default', value: 'classic' as const },
-                { label: 'Hybrid (Classic + post-quantum Kyber)', description: 'Experimental — requires hybrid build', value: 'hybrid' as const }
+                { label: 'Hybrid — v2.0 (recommended)', description: 'X448 + sntrup761 KEM + XChaCha20-Poly1305 — requires hybrid build', value: 'hybrid' as const },
+                { label: 'Classic — v1.0', description: 'X25519 / XChaCha20-Poly1305 (legacy)', value: 'classic' as const }
             ],
-            { placeHolder: 'Choose cryptographic suite' }
+            { placeHolder: 'Choose cryptographic suite for new project' }
         );
         if (!cryptoChoice) {
             return;

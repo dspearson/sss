@@ -110,7 +110,7 @@ export class ProjectViewProvider extends BaseTreeProvider {
                 const suiteIcon = projectInfo.suite === 'hybrid' ? 'shield' : 'lock';
                 items.push(createTreeItem(suiteLabel, suiteIcon, {
                     tooltip: projectInfo.suite === 'hybrid'
-                        ? 'Post-quantum hybrid suite (XChaCha20-Poly1305 + Kyber). EXPERIMENTAL.'
+                        ? 'Post-quantum hybrid suite: X448 + sntrup761 KEM → BLAKE3 KDF → XChaCha20-Poly1305.'
                         : 'Classic suite (XChaCha20-Poly1305). Run "Migrate to Hybrid Suite" to upgrade.'
                 }));
             }

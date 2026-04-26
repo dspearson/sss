@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use tempfile::TempDir;
 
 use sss::crypto::KeyPair;

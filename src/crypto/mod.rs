@@ -15,9 +15,13 @@ pub mod suite;
 
 pub use classic::{
     decrypt, decrypt_from_base64, encrypt, encrypt_to_base64,
-    encrypt_to_base64_deterministic, open_repository_key, seal_repository_key, ClassicKeyPair,
+    encrypt_to_base64_deterministic, ClassicKeyPair,
     ClassicSuite, Key, KeyPair, PublicKey, RepositoryKey, SecretKey,
 };
+// Retained for integration-test wire-format compatibility only; new code must
+// use ClassicSuite.seal_repo_key / open_repo_key via the CryptoSuite trait.
+#[allow(deprecated)]
+pub use classic::{open_repository_key, seal_repository_key};
 pub use suite::{CryptoSuite, Suite};
 
 #[cfg(feature = "hybrid")]

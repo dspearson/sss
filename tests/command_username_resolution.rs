@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 /// Integration tests for username resolution in actual command execution
 ///
 /// These tests verify that the fixed commands properly use ConfigManager

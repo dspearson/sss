@@ -1,5 +1,5 @@
 Name:           sss
-Version:        1.3.0
+Version:        1.3.1
 Release:        1%{?dist}
 Summary:        Secret String Substitution - Transparent file encryption tool
 
@@ -75,6 +75,12 @@ fi
 %{_bindir}/sss-askpass-gui
 
 %changelog
+* Sun Apr 26 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.1-1
+- Fix: rotation path now delegates to Processor::reencrypt_files_batch, preserving per-file deterministic nonces
+- Fix: .secrets files no longer written as plaintext after users remove + rotation
+- Fix: process_secrets_file_content threads real file path through nonce derivation
+- Tests: regression coverage for secrets-file encryption invariant and per-file nonce uniqueness
+
 * Wed Apr 22 2026 Dominic Pearson <dsp@technoanimal.net> - 1.3.0-1
 - Marker syntax: auto-selected delimiter pairs for values containing unbalanced `}`
 - Marker syntax: backslash escapes (\{, \}, \\) honoured inside the default `{}` pair

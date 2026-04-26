@@ -548,7 +548,7 @@ impl Processor {
     }
 
     /// Process .secrets file content - encrypt or decrypt the entire file without markers
-    fn process_secrets_file_content(&self, content: &str) -> Result<String> {
+    fn process_secrets_file_content(&self, content: &str, file_path: &str) -> Result<String> {
         // Check if content looks encrypted (Base64-like)
         // We detect encryption by trying to decrypt first
         if let Ok(decrypted) = self.decrypt_secrets_file_content(content) {
@@ -556,7 +556,7 @@ impl Processor {
             Ok(decrypted)
         } else {
             // Content is plaintext, encrypt it
-            self.encrypt_secrets_file_content(content, "<secrets-file>")
+            self.encrypt_secrets_file_content(content, file_path)
         }
     }
 
@@ -680,7 +680,7 @@ impl Processor {
 
         // Special handling for .secrets files: encrypt/decrypt entire content without markers
         if Self::is_secrets_file(Path::new(file_path)) {
-            return self.process_secrets_file_content(content);
+            return self.process_secrets_file_content(content, file_path);
         }
 
         // Process normally without secrets interpolation
@@ -943,7 +943,7 @@ impl Processor {
     }
 
     /// Re-encrypt a single file
-    fn reencrypt_single_file(
+    pub(crate) fn reencrypt_single_file(
         &self,
         file_path: &std::path::Path,
         old_processor: &Processor,
@@ -1768,6 +1768,43 @@ mod tests {
         assert_eq!(unescape_default_delimiter(r"back\\slash"), r"back\slash");
         // Unrecognised escapes are passed through literally.
         assert_eq!(unescape_default_delimiter(r"tab\t"), r"tab\t");
+    }
+
+    // =========================================================================
+    // Bug-fix regression: process_secrets_file_content path threading
+    // =========================================================================
+
+    /// Regression: process_content_with_path must thread the actual file path
+    /// into process_secrets_file_content so the nonce is keyed to the path.
+    ///
+    /// - Same plaintext at different .secrets paths → different ciphertexts
+    /// - Same path + same plaintext twice → identical ciphertext (deterministic)
+    #[test]
+    fn test_secrets_file_nonce_depends_on_path() {
+        use tempfile::tempdir;
+        let temp_dir = tempdir().unwrap();
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_context(
+            key,
+            temp_dir.path().to_path_buf(),
+            "2025-06-01T00:00:00Z".to_string(),
+        ).unwrap();
+
+        let plaintext = "SECRET_VALUE=hunter2\n";
+
+        let ct_alpha = proc.process_content_with_path(plaintext, "alpha.secrets").unwrap();
+        let ct_beta  = proc.process_content_with_path(plaintext, "beta.secrets").unwrap();
+
+        assert_ne!(
+            ct_alpha, ct_beta,
+            "Same plaintext at different .secrets paths must yield different ciphertexts"
+        );
+
+        let ct_alpha2 = proc.process_content_with_path(plaintext, "alpha.secrets").unwrap();
+        assert_eq!(
+            ct_alpha, ct_alpha2,
+            "Same path + same plaintext must yield identical ciphertext (deterministic nonce)"
+        );
     }
 }
 

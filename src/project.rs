@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::crypto::{ClassicSuite, CryptoSuite, PublicKey, RepositoryKey, Suite};
+use crate::crypto::{ClassicSuite, CryptoSuite, PublicKey, RepositoryKey, Suite, suite_for};
 use crate::{error_helpers, toml_helpers};
 
 /// A user's configuration in the project
@@ -237,8 +237,8 @@ impl ProjectConfig {
             return Err(anyhow!("User '{username}' already exists in project"));
         }
 
-        // Seal the repository key for this new user via the CryptoSuite trait.
-        let sealed_key = ClassicSuite.seal_repo_key(repository_key, user_public_key)?;
+        // Seal via the project's declared suite — ClassicSuite for v1, HybridCryptoSuite for v2.
+        let sealed_key = suite_for(self.suite()?)?.seal_repo_key(repository_key, user_public_key)?;
 
         let user_config = UserConfig {
             public: user_public_key.to_base64(),

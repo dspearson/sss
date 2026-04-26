@@ -36,14 +36,15 @@ export class UserKeyManager {
             return;
         }
 
-        // Prompt for classic public key
-        const classicKeyPrompt = isHybrid
-            ? 'Classic public key (base64, ~44 chars) — from `sss keys current`, "Public key:" line'
-            : 'Public key (base64) — from `sss keys pubkey`';
+        // v2 repos use the hybrid key (~1600 chars); v1 repos use the classic key (~44 chars).
+        // `sss keys pubkey` always outputs the right format for the current repo version.
+        const keyPrompt = isHybrid
+            ? 'Hybrid public key (base64, ~1600 chars) — run `sss keys pubkey` on their machine'
+            : 'Classic public key (base64, ~44 chars) — run `sss keys pubkey` on their machine';
 
         const publicKey = await vscode.window.showInputBox({
-            prompt: classicKeyPrompt,
-            placeHolder: 'base64-encoded-public-key',
+            prompt: keyPrompt,
+            placeHolder: isHybrid ? 'base64-encoded-hybrid-public-key' : 'base64-encoded-classic-public-key',
             validateInput: (value) => {
                 if (!value || value.trim().length === 0) {
                     return 'Public key cannot be empty';
@@ -56,16 +57,6 @@ export class UserKeyManager {
             return;
         }
 
-        // For v2 projects also collect the hybrid public key (optional — can be added later)
-        let hybridPublicKey: string | undefined;
-        if (isHybrid) {
-            hybridPublicKey = await vscode.window.showInputBox({
-                prompt: 'Hybrid public key (base64, ~1600 chars) — from `sss keys pubkey` in a v2 project (leave empty to skip)',
-                placeHolder: 'base64-encoded-hybrid-public-key (optional)',
-                validateInput: () => null
-            });
-        }
-
         try {
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
@@ -73,9 +64,6 @@ export class UserKeyManager {
                 cancellable: false
             }, async () => {
                 await this.sssWrapper.addUser(username, publicKey.trim());
-                if (hybridPublicKey && hybridPublicKey.trim()) {
-                    await this.sssWrapper.addHybridKey(username, hybridPublicKey.trim());
-                }
             });
 
             vscode.window.showInformationMessage(`User ${username} added successfully`);

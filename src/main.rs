@@ -264,9 +264,9 @@ fn create_cli_app() -> Command {
                     Arg::new("suite")
                         .long("suite")
                         .value_name("SUITE")
-                        .help("Key suite to generate: classic, hybrid, or both")
+                        .help("Key suite to generate: classic, hybrid, or both (default: both on hybrid builds, classic otherwise)")
                         .value_parser(["classic", "hybrid", "both"])
-                        .required(true),
+                        .default_value(if cfg!(feature = "hybrid") { "both" } else { "classic" }),
                 ),
         )
         .subcommand(
@@ -291,9 +291,9 @@ fn create_cli_app() -> Command {
                             Arg::new("suite")
                                 .long("suite")
                                 .value_name("SUITE")
-                                .help("Key suite to generate: classic (default), hybrid, or both")
+                                .help("Key suite to generate: classic, hybrid, or both (default: both on hybrid builds, classic otherwise)")
                                 .value_parser(["classic", "hybrid", "both"])
-                                .default_value("classic"),
+                                .default_value(if cfg!(feature = "hybrid") { "both" } else { "classic" }),
                         ),
                 )
                 .subcommand(Command::new("list").about("List your private keys"))

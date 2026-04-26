@@ -40,7 +40,7 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
 
     // Generate passwordless keys first
     let output = run_sss_in_dir(
-        &["keys", "generate", "--no-password", "--force"],
+        &["keys", "generate", "--suite", "classic", "--no-password", "--force"],
         work_dir,
         &config_dir,
     )?;

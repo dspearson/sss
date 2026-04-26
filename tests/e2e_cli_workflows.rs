@@ -65,7 +65,7 @@ impl SssTestEnv {
     fn generate_keys(&self) {
         let out = self
             .cmd()
-            .args(["keys", "generate", "--no-password", "--force"])
+            .args(["keys", "generate", "--suite", "classic", "--no-password", "--force"])
             .output()
             .expect("run keygen");
         assert!(
@@ -151,7 +151,7 @@ fn generate_other_pubkey() -> String {
         .env("SSS_NONINTERACTIVE", "1")
         .env("SSS_PASSPHRASE", "")
         .env("NO_COLOR", "1")
-        .args(["--kdf-level", "interactive", "keys", "generate", "--no-password"])
+        .args(["--kdf-level", "interactive", "keys", "generate", "--suite", "classic", "--no-password"])
         .output()
         .unwrap();
     assert!(out.status.success(), "other keygen failed");
@@ -344,7 +344,7 @@ fn e2e_workflow_open_idempotent() {
 #[test]
 fn e2e_keys_generate_basic() {
     let env = SssTestEnv::new();
-    let (stdout, _) = env.run_ok(&["keys", "generate", "--no-password"]);
+    let (stdout, _) = env.run_ok(&["keys", "generate", "--suite", "classic", "--no-password"]);
     assert!(stdout.contains("Generated new keypair"), "expected keygen confirmation");
     assert!(stdout.contains("Public key:"), "expected public key output");
 }
@@ -354,7 +354,7 @@ fn e2e_keys_generate_force_overwrites() {
     let env = SssTestEnv::new();
     env.generate_keys();
     // Second generation with --force should succeed
-    let (stdout, _) = env.run_ok(&["keys", "generate", "--no-password", "--force"]);
+    let (stdout, _) = env.run_ok(&["keys", "generate", "--suite", "classic", "--no-password", "--force"]);
     assert!(stdout.contains("Generated new keypair"));
 }
 
@@ -362,7 +362,7 @@ fn e2e_keys_generate_force_overwrites() {
 fn e2e_keys_generate_duplicate_without_force_fails() {
     let env = SssTestEnv::new();
     env.generate_keys();
-    let (_, stderr) = env.run_fail(&["keys", "generate", "--no-password"]);
+    let (_, stderr) = env.run_fail(&["keys", "generate", "--suite", "classic", "--no-password"]);
     assert!(
         stderr.contains("already exists") || stderr.contains("--force"),
         "expected duplicate key error, got: {}",
@@ -1214,6 +1214,8 @@ fn e2e_edge_confdir_override() {
             "interactive",
             "keys",
             "generate",
+            "--suite",
+            "classic",
             "--no-password",
         ])
         .output()
@@ -1310,7 +1312,7 @@ impl SssTestEnv {
             .env("SSS_NONINTERACTIVE", "1")
             .env("SSS_PASSPHRASE", "")
             .env("NO_COLOR", "1")
-            .args(["--kdf-level", "interactive", "keys", "generate", "--no-password"])
+            .args(["--kdf-level", "interactive", "keys", "generate", "--suite", "classic", "--no-password"])
             .output()
             .unwrap();
         assert!(out.status.success(), "other keygen failed");

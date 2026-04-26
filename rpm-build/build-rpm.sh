@@ -4,8 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-VERSION="1.3.1"
 NAME="sss"
+VERSION="$(grep '^Version:' "$SCRIPT_DIR/sss.spec" | awk '{print $2}')"
 
 # Colors for output
 RED='\033[0;31m'

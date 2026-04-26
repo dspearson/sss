@@ -13,6 +13,11 @@ use sss::kdf::KdfParams;
 use sss::keystore::Keystore;
 use tempfile::TempDir;
 
+#[cfg(feature = "hybrid")]
+use sss::crypto::hybrid::HybridKeyPair;
+#[cfg(feature = "hybrid")]
+use sss::crypto::ClassicKeyPair;
+
 /// Helper to create a temporary keystore for testing
 fn create_temp_keystore() -> Result<(Keystore, TempDir)> {
     let temp_dir = TempDir::new()?;
@@ -280,6 +285,176 @@ fn test_multiple_keys_different_passwords() -> Result<()> {
     assert!(keystore.load_keypair(&key_id3, Some("password1")).is_err());
     assert!(keystore.load_keypair(&key_id3, Some("password2")).is_err());
     assert!(keystore.load_keypair(&key_id3, Some("password3")).is_ok());
+
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dual-suite integration tests (KEYSTORE-01, KEYSTORE-03, KEYSTORE-04)
+// Gated by the `hybrid` feature; all five use create_temp_keystore() helper.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// KEYSTORE-01: A classic-only TOML file deserializes with hybrid fields = None.
+/// Verifies that the #[serde(default)] guards on hybrid_public_key and
+/// hybrid_encrypted_secret_key prevent parse errors on pre-Phase-3 identity files.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_classic_only_backward_compat() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+    let key_id = keystore.store_keypair(&keypair, None)?;
+
+    // Read the TOML from disk directly and parse it
+    let keys_dir = _temp_dir.path().join("sss").join("keys");
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
+    let content = std::fs::read_to_string(&key_file)?;
+
+    let stored: sss::keystore::StoredKeyPair = toml::from_str(&content)?;
+
+    assert!(stored.hybrid_public_key.is_none(),
+        "classic-only TOML must deserialize with hybrid_public_key = None");
+    assert!(stored.hybrid_encrypted_secret_key.is_none(),
+        "classic-only TOML must deserialize with hybrid_encrypted_secret_key = None");
+
+    Ok(())
+}
+
+/// KEYSTORE-01: store_dual_keypair with both classic and hybrid, then load_hybrid_keypair
+/// returns a HybridKeyPair whose public_key().bytes match the original.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_dual_suite_roundtrip() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+    let hybrid_pub_bytes = hybrid.public_key().bytes;
+
+    let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("test_pass"))?;
+    assert!(!key_id.is_empty(), "key_id must be non-empty");
+
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("test_pass"))?;
+    assert_eq!(
+        loaded_hybrid.public_key().bytes, hybrid_pub_bytes,
+        "loaded hybrid public key must match original"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-03: store classic first, then upgrade with store_dual_keypair(None, hybrid, pass).
+/// The public_key and encrypted_secret_key fields must be byte-for-byte identical after upgrade.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_classic_to_both_preserves_classic() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+
+    // Store classic-only first
+    let key_id = keystore.store_keypair(&KeyPair::Classic(classic.clone()), Some("test_pass"))?;
+
+    // Capture pre-upgrade TOML values
+    let keys_dir = _temp_dir.path().join("sss").join("keys");
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
+
+    let pre_content = std::fs::read_to_string(&key_file)?;
+    let pre_stored: sss::keystore::StoredKeyPair = toml::from_str(&pre_content)?;
+    let pre_public_key = pre_stored.public_key.clone();
+    let pre_enc_sk = pre_stored.encrypted_secret_key.clone();
+
+    // Upgrade: add hybrid material to the existing identity
+    let upgraded_key_id =
+        keystore.store_dual_keypair(None, Some(&hybrid), Some("test_pass"))?;
+    assert_eq!(
+        upgraded_key_id, key_id,
+        "Case B must return the same key_id (no new UUID)"
+    );
+
+    // Read post-upgrade TOML and assert classic fields are byte-for-byte identical
+    let post_content = std::fs::read_to_string(&key_file)?;
+    let post_stored: sss::keystore::StoredKeyPair = toml::from_str(&post_content)?;
+
+    assert_eq!(
+        post_stored.public_key, pre_public_key,
+        "public_key must be byte-for-byte identical after hybrid upgrade (KEYSTORE-03)"
+    );
+    assert_eq!(
+        post_stored.encrypted_secret_key, pre_enc_sk,
+        "encrypted_secret_key must be byte-for-byte identical after hybrid upgrade (KEYSTORE-03)"
+    );
+    assert!(
+        post_stored.hybrid_public_key.is_some(),
+        "hybrid_public_key must be Some after upgrade"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-04: Both classic and hybrid secrets in a dual-suite file are decryptable
+/// with the same passphrase. Wrong passphrase must fail for both.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_dual_suite_single_passphrase() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+
+    let key_id =
+        keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("shared_pass"))?;
+
+    // Classic key must be loadable with the shared passphrase
+    let loaded_classic = keystore.load_keypair(&key_id, Some("shared_pass"));
+    assert!(
+        loaded_classic.is_ok(),
+        "classic key must be decryptable with shared passphrase"
+    );
+    assert_eq!(
+        loaded_classic.unwrap().public_key().to_base64(),
+        KeyPair::Classic(classic).public_key().to_base64()
+    );
+
+    // Hybrid key must be loadable with the same shared passphrase
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("shared_pass"));
+    assert!(
+        loaded_hybrid.is_ok(),
+        "hybrid key must be decryptable with shared passphrase"
+    );
+
+    // Wrong password must fail for classic
+    assert!(
+        keystore.load_keypair(&key_id, Some("wrong_pass")).is_err(),
+        "classic load must fail with wrong passphrase"
+    );
+
+    // Wrong password must fail for hybrid
+    assert!(
+        keystore.load_hybrid_keypair(&key_id, Some("wrong_pass")).is_err(),
+        "hybrid load must fail with wrong passphrase"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-01 error path: load_hybrid_keypair on a classic-only identity file
+/// returns Err with the exact error string "your keystore has no hybrid keypair".
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_load_hybrid_no_hybrid_key_errors() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+    let key_id = keystore.store_keypair(&keypair, Some("pass"))?;
+
+    let result = keystore.load_hybrid_keypair(&key_id, Some("pass"));
+    assert!(result.is_err(), "must return Err for classic-only identity");
+
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("your keystore has no hybrid keypair"),
+        "error message must contain 'your keystore has no hybrid keypair', got: {err_msg}"
+    );
 
     Ok(())
 }

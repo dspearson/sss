@@ -71,7 +71,9 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   2. After migration, SHA-256 of every sealed file in the repo is byte-identical to its pre-migration hash — migration touches only `.sss.toml`.
   3. If any user listed in `.sss.toml` does not yet have a recorded hybrid public key, `sss migrate` exits non-zero with a message listing the affected users and pointing to `sss keygen --suite hybrid` as the remediation; no partial write happens.
   4. `sss migrate --dry-run` prints the full plan (which users get re-wrapped, the version bump) and exits without touching disk; running it produces no modifications detectable by `git status`.
-**Plans**: TBD
+**Plans**: 2 plans
+  - [ ] 04-01-PLAN.md — Wave 1: add hybrid_public to UserConfig; fix resolve_suite_from_version for v2; add sss users add-hybrid-key; fix load_project_config_internal suite dispatch (MIGRATE-01, MIGRATE-03)
+  - [ ] 04-02-PLAN.md — Wave 2: implement sss migrate command with --dry-run, full migration logic, and unit tests (MIGRATE-01, MIGRATE-02, MIGRATE-03, MIGRATE-04)
 
 ### Phase 5: End-to-End Validation
 **Goal**: The invariants this milestone depends on are locked in by property and end-to-end tests — random-input property check on the shared-AEAD invariant, cross-version read tests, and a full multi-user migration test.
@@ -105,6 +107,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 1. Suite Abstraction | 4/4 | Complete | 2026-04-24 |
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
-| 4. Migration Command | 0/TBD | Not started | - |
+| 4. Migration Command | 0/2 | Not started | - |
 | 5. End-to-End Validation | 0/TBD | Not started | - |
 | 6. Documentation & Release | 0/TBD | Not started | - |

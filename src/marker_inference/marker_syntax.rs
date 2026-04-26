@@ -101,7 +101,12 @@ pub fn pick_delimiter(value: &str) -> (char, char) {
 /// an open, and the final depth is zero.
 fn braces_balance(value: &str) -> bool {
     let mut depth: i32 = 0;
-    for ch in value.chars() {
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && chars.peek() == Some(&'}') {
+            chars.next(); // skip escaped close brace
+            continue;
+        }
         match ch {
             '{' => depth += 1,
             '}' => {

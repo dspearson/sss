@@ -349,6 +349,38 @@ impl Keystore {
         let encrypted_secret_key =
             crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
 
+        // Re-encrypt hybrid material before stored.salt is overwritten (WR-01).
+        // Reads the original salt from `stored` to re-derive the old decryption key.
+        #[cfg(feature = "hybrid")]
+        if let Some(ref enc_hybrid_b64) = stored.hybrid_encrypted_secret_key.clone() {
+            use base64::prelude::BASE64_STANDARD;
+            use zeroize::Zeroizing;
+            let raw_hybrid: Zeroizing<Vec<u8>> = if let Some(ref old_pw) = old_password {
+                let old_salt_str = stored
+                    .salt
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
+                let old_salt = Salt::from_base64(old_salt_str)?;
+                let old_dk =
+                    DerivedKey::derive_with_params(old_pw, &old_salt, &self.kdf_params)?;
+                let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)?;
+                let dec = Zeroizing::new(crate::crypto::decrypt(
+                    &enc_bytes,
+                    &old_dk.to_encryption_key(),
+                )?);
+                Zeroizing::new(BASE64_STANDARD.decode(std::str::from_utf8(&dec)?)?)
+            } else {
+                // Was passwordless — stored as raw base64
+                Zeroizing::new(BASE64_STANDARD.decode(enc_hybrid_b64)?)
+            };
+            let hybrid_sk_b64 = BASE64_STANDARD.encode(&raw_hybrid[..]);
+            let new_enc = crate::crypto::encrypt_to_base64(
+                &hybrid_sk_b64,
+                &derived_key.to_encryption_key(),
+            )?;
+            stored.hybrid_encrypted_secret_key = Some(new_enc);
+        }
+
         // Update the stored keypair
         stored.encrypted_secret_key = encrypted_secret_key;
         stored.salt = Some(salt.to_base64());
@@ -387,6 +419,29 @@ impl Keystore {
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = fs::read_to_string(&key_file)?;
         let mut stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Decrypt hybrid material before clearing the salt (WR-02).
+        // After this block, hybrid_encrypted_secret_key holds the raw sk base64 (passwordless form).
+        #[cfg(feature = "hybrid")]
+        if let Some(ref enc_hybrid_b64) = stored.hybrid_encrypted_secret_key.clone() {
+            use base64::prelude::BASE64_STANDARD;
+            use zeroize::Zeroizing;
+            let salt_str = stored
+                .salt
+                .as_ref()
+                .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
+            let salt_obj = Salt::from_base64(salt_str)?;
+            let dk = DerivedKey::derive_with_params(
+                current_password,
+                &salt_obj,
+                &self.kdf_params,
+            )?;
+            let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)?;
+            let dec = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?);
+            // dec is the base64 of the raw sk bytes — store it directly as passwordless form
+            stored.hybrid_encrypted_secret_key =
+                Some(String::from_utf8(dec.to_vec())?);
+        }
 
         // Store secret key as plaintext (base64 encoded)
         stored.encrypted_secret_key = keypair.secret_key()?.to_base64();
@@ -608,8 +663,6 @@ impl Keystore {
 
             // Case B — hybrid only: upgrade existing classic identity
             (None, Some(hybrid)) => {
-                use base64::prelude::BASE64_STANDARD;
-
                 let key_id = self.read_current_key_id()?;
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
                 if !key_file.exists() {
@@ -712,8 +765,9 @@ impl Keystore {
             anyhow!("hybrid encrypted secret key missing from identity file")
         })?;
 
-        // Decrypt the hybrid secret material using the same path as classic
-        let raw_secret_bytes: Vec<u8> = if stored.is_password_protected {
+        // Decrypt the hybrid secret material using the same path as classic.
+        // All intermediates are Zeroizing so secret bytes don't linger on the heap (WR-03).
+        let raw_secret_bytes: Zeroizing<Vec<u8>> = if stored.is_password_protected {
             let pw = password.ok_or_else(|| {
                 anyhow!("Password required for encrypted key")
             })?;
@@ -725,13 +779,12 @@ impl Keystore {
                 pw, &salt, &self.kdf_params,
             )?;
             let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?;
-            let decrypted = crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?;
+            let decrypted = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?);
             // decrypted is the base64 string of the raw secret bytes
-            let hybrid_sk_b64 = String::from_utf8(decrypted)?;
-            BASE64_STANDARD.decode(&hybrid_sk_b64)?
+            Zeroizing::new(BASE64_STANDARD.decode(std::str::from_utf8(&decrypted)?)?)
         } else {
             // Passwordless — stored as raw base64
-            BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?
+            Zeroizing::new(BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?)
         };
 
         if raw_secret_bytes.len() != HYBRID_SECRET_KEY_SIZE {

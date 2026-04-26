@@ -15,7 +15,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
 - [x] **Phase 3: Keystore Dual-Suite Support** - Extend on-disk keystore to carry classic + hybrid keypairs under one user identity; grow `sss keygen` (completed 2026-04-26)
 - [x] **Phase 4: Migration Command** - `sss migrate` re-wraps `K` per user to hybrid, bumps version, never touches file content (completed 2026-04-26)
 - [x] **Phase 5: End-to-End Validation** - Property test and full-repo tests that lock in the cross-suite invariants and v1/v2 interop — **Complete 2026-04-26**
-- [ ] **Phase 6: Documentation & Release** - Security/crypto docs, README/man pages, benchmarks, CHANGELOG, release-matrix cross-check
+- [x] **Phase 6: Documentation & Release** - Security/crypto docs, README/man pages, benchmarks, CHANGELOG, release-matrix cross-check — **Complete 2026-04-26**
 
 ## Phase Details
 
@@ -99,9 +99,9 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
   3. Benchmarks compare hybrid keygen, hybrid wrap, hybrid unwrap vs their classic counterparts and report the per-user `.sss.toml` size delta in bytes; results land in `benches/project_ops.rs`.
   4. `cargo build --features hybrid --release` exits 0 on the current host (local smoke test); rpm-build --features status documented in plan summary.
 **Plans**: 3 plans
-  - [ ] 06-01-PLAN.md — Wave 1: extend docs/CRYPTOGRAPHY.md and docs/security-model.md with hybrid suite spec, wire format, byte-identical invariant, and trelis experimental disclaimers (DOCS-01)
+  - [x] 06-01-PLAN.md — Wave 1: extend docs/CRYPTOGRAPHY.md and docs/security-model.md with hybrid suite spec, wire format, byte-identical invariant, and trelis experimental disclaimers (DOCS-01) — **Complete 2026-04-26**
   - [x] 06-02-PLAN.md — Wave 1: update README.md, man/sss.1, and CHANGELOG.md with v2.0 user-facing docs covering classic/hybrid choice, migration workflow, and new commands (DOCS-02, DOCS-03) — **Complete 2026-04-26**
-  - [ ] 06-03-PLAN.md — Wave 2: add hybrid+classic benchmarks to benches/project_ops.rs; run release-build smoke test (DOCS-03, TEST-05)
+  - [x] 06-03-PLAN.md — Wave 2: add hybrid+classic benchmarks to benches/project_ops.rs; run release-build smoke test (DOCS-03, TEST-05) — **Complete 2026-04-26**
 
 ## Progress
 
@@ -115,4 +115,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
 | 4. Migration Command | 2/2 | Complete   | 2026-04-26 |
 | 5. End-to-End Validation | 3/3 | Complete   | 2026-04-26 |
-| 6. Documentation & Release | 2/3 | In progress | - |
+| 6. Documentation & Release | 3/3 | Complete | 2026-04-26 |

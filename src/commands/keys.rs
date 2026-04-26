@@ -623,7 +623,6 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
     };
 
     // --- Classic keypair block ---
-    println!("Classic keypair:");
     let classic_key_bytes = classic_pk_b64.as_bytes();
     let mut classic_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
     unsafe {
@@ -639,7 +638,6 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
     #[cfg(feature = "hybrid")]
     if let Some(ref hybrid_pk_b64) = hybrid_pk_b64_opt {
         println!();
-        println!("Hybrid keypair:");
         let hybrid_key_bytes = hybrid_pk_b64.as_bytes();
         let mut hybrid_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
         unsafe {
@@ -649,7 +647,7 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
                 hybrid_key_bytes.len() as u64,
             );
         }
-        generate_randomart(&hybrid_hash, "Hybrid");
+        generate_randomart(&hybrid_hash, "PQCRYPT");
     }
 
     Ok(())

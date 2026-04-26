@@ -536,10 +536,14 @@ impl ProjectConfig {
                 .decode(&user_config.sealed_key)
                 .map_err(|e| anyhow!("Invalid base64 sealed key for user '{username}': {e}"))?;
 
-            // Validate public key — route through suite-aware decode so hybrid-
-            // length public keys (1214 bytes encoded) are not rejected by the
-            // classic-only 32-byte check.
-            PublicKey::decode_base64_for_suite(&user_config.public, suite)
+            // Validate public key — always classic (32-byte NaCl) regardless of
+            // suite version.  The `public` field is the classic identity anchor used
+            // by find_user_by_public_key; it never changes during migration.
+            // The hybrid public key lives in `hybrid_public` and is validated separately.
+            // Using decode_base64_for_suite here with Suite::Hybrid would incorrectly
+            // reject classic-length keys in v2 configs as "downgrade attempts".
+            let _ = suite; // suite validated above via self.suite()
+            PublicKey::from_base64(&user_config.public)
                 .map_err(|e| anyhow!("Invalid public key for user '{username}': {e}"))?;
         }
 

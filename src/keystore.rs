@@ -687,4 +687,62 @@ mod tests {
 
         Ok(())
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Task 1 TDD RED: dual-suite struct extension behavioural assertions
+    // These tests will not compile until the StoredKeyPair fields and Keystore
+    // methods introduced in Task 1 are in place.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Classic-only StoredKeyPair has hybrid fields set to None (backward compat).
+    #[test]
+    fn test_stored_keypair_hybrid_fields_default_none() -> Result<()> {
+        let (keystore, _temp_dir) = create_temp_keystore()?;
+        let keypair = KeyPair::generate()?;
+        let key_id = keystore.store_keypair(&keypair, None)?;
+
+        let key_file = keystore.keys_dir.join(format!("{key_id}.toml"));
+        let content = std::fs::read_to_string(&key_file)?;
+        let stored: StoredKeyPair = toml::from_str(&content)?;
+
+        // Both new hybrid fields must default to None on a classic-only file
+        assert!(stored.hybrid_public_key.is_none(),
+            "hybrid_public_key should be None for classic-only identity");
+        assert!(stored.hybrid_encrypted_secret_key.is_none(),
+            "hybrid_encrypted_secret_key should be None for classic-only identity");
+
+        Ok(())
+    }
+
+    /// get_current_stored_raw returns the raw StoredKeyPair without decrypting.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_get_current_stored_raw_returns_stored_keypair() -> Result<()> {
+        let (keystore, _temp_dir) = create_temp_keystore()?;
+        let keypair = KeyPair::generate()?;
+        let key_id = keystore.store_keypair(&keypair, Some("testpass"))?;
+
+        let raw = keystore.get_current_stored_raw()?;
+        assert_eq!(raw.uuid, key_id);
+        assert_eq!(raw.public_key, keypair.public_key().to_base64());
+        assert!(raw.hybrid_public_key.is_none());
+
+        Ok(())
+    }
+
+    /// load_hybrid_keypair on a classic-only file returns the expected error.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_load_hybrid_keypair_on_classic_only_errors() -> Result<()> {
+        let (keystore, _temp_dir) = create_temp_keystore()?;
+        let keypair = KeyPair::generate()?;
+        let key_id = keystore.store_keypair(&keypair, None)?;
+
+        let result = keystore.load_hybrid_keypair(&key_id, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("no hybrid keypair"),
+            "error message must contain 'no hybrid keypair'");
+
+        Ok(())
+    }
 }

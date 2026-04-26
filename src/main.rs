@@ -259,6 +259,14 @@ fn create_cli_app() -> Command {
                         .long("no-password")
                         .help("Generate keypair without password protection")
                         .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("suite")
+                        .long("suite")
+                        .value_name("SUITE")
+                        .help("Key suite to generate: classic, hybrid, or both")
+                        .value_parser(["classic", "hybrid", "both"])
+                        .required(true),
                 ),
         )
         .subcommand(
@@ -278,6 +286,14 @@ fn create_cli_app() -> Command {
                                 .long("no-password")
                                 .help("Generate keypair without password protection")
                                 .action(clap::ArgAction::SetTrue),
+                        )
+                        .arg(
+                            Arg::new("suite")
+                                .long("suite")
+                                .value_name("SUITE")
+                                .help("Key suite to generate: classic, hybrid, or both")
+                                .value_parser(["classic", "hybrid", "both"])
+                                .required(true),
                         ),
                 )
                 .subcommand(Command::new("list").about("List your private keys"))
@@ -353,6 +369,10 @@ fn create_cli_app() -> Command {
                                 .help("Key ID (or partial ID) to modify")
                                 .required(true),
                         ),
+                )
+                .subcommand(
+                    Command::new("show")
+                        .about("Display public key fingerprint and randomart for all suites in the current keypair"),
                 ),
         )
         .subcommand(

@@ -69,6 +69,10 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     println!("Username: {username}");
     println!("Public key: {}...", &keypair.public_key().to_base64()[..32]);
 
+    if crypto == crate::crypto::Suite::Hybrid {
+        println!("Run `sss keygen --suite both` to generate your keypairs.");
+    }
+
     Ok(())
 }
 

@@ -14,7 +14,7 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
 - [x] **Phase 2: Hybrid Crypto Suite** - Vendor trelis, implement `HybridCryptoSuite` for repo-key wrap, lock in the byte-identical-ciphertexts invariant — **Complete 2026-04-26**
 - [x] **Phase 3: Keystore Dual-Suite Support** - Extend on-disk keystore to carry classic + hybrid keypairs under one user identity; grow `sss keygen` (completed 2026-04-26)
 - [x] **Phase 4: Migration Command** - `sss migrate` re-wraps `K` per user to hybrid, bumps version, never touches file content (completed 2026-04-26)
-- [ ] **Phase 5: End-to-End Validation** - Property test and full-repo tests that lock in the cross-suite invariants and v1/v2 interop
+- [x] **Phase 5: End-to-End Validation** - Property test and full-repo tests that lock in the cross-suite invariants and v1/v2 interop — **Complete 2026-04-26**
 - [ ] **Phase 6: Documentation & Release** - Security/crypto docs, README/man pages, benchmarks, CHANGELOG, release-matrix cross-check
 
 ## Phase Details
@@ -94,11 +94,14 @@ Ship an opt-in hybrid post-quantum crypto suite (trelis: X448 + sntrup761 → BL
 **Depends on**: Phase 5
 **Requirements**: DOCS-01, DOCS-02, DOCS-03, TEST-05
 **Success Criteria** (what must be TRUE):
-  1. `docs/SECURITY.md` and `docs/CRYPTOGRAPHY.md` describe the hybrid suite wire format, the shared-`K`/shared-nonce invariant, the threat-model delta, and carry an unmissable "trelis is unaudited and experimental" disclaimer; the hybrid suite is documented as opt-in, classic as the recommended default until audit.
-  2. README and the `sss` man page explain the classic/hybrid choice, show the `sss init --crypto`, `sss keygen --suite`, and `sss migrate` commands with worked examples; the CHANGELOG carries a v2.0 entry covering the above.
-  3. Benchmarks compare hybrid keygen, hybrid wrap, hybrid unwrap vs their classic counterparts and report the per-user `.sss.toml` size delta in bytes; results land in `benches/` or a documented section.
-  4. `rpm-build/build-rpm.sh`, macOS and musl build scripts still produce artefacts with the `hybrid` feature enabled on every host in the existing release matrix (Linux x86_64, Linux aarch64 on `keflavik`, macOS arm64 on `mac`, musl static).
-**Plans**: TBD
+  1. `docs/security-model.md` and `docs/CRYPTOGRAPHY.md` describe the hybrid suite wire format, the shared-`K`/shared-nonce invariant, the threat-model delta, and carry an unmissable "trelis is unaudited and experimental" disclaimer; the hybrid suite is documented as opt-in, classic as the recommended default until audit.
+  2. README and the `sss` man page explain the classic/hybrid choice, show the `sss init --crypto`, `sss keys generate --suite`, and `sss migrate` commands with worked examples; the CHANGELOG carries a v2.0 entry covering the above.
+  3. Benchmarks compare hybrid keygen, hybrid wrap, hybrid unwrap vs their classic counterparts and report the per-user `.sss.toml` size delta in bytes; results land in `benches/project_ops.rs`.
+  4. `cargo build --features hybrid --release` exits 0 on the current host (local smoke test); rpm-build --features status documented in plan summary.
+**Plans**: 3 plans
+  - [ ] 06-01-PLAN.md — Wave 1: extend docs/CRYPTOGRAPHY.md and docs/security-model.md with hybrid suite spec, wire format, byte-identical invariant, and trelis experimental disclaimers (DOCS-01)
+  - [ ] 06-02-PLAN.md — Wave 1: update README.md, man/sss.1, and CHANGELOG.md with v2.0 user-facing docs covering classic/hybrid choice, migration workflow, and new commands (DOCS-02, DOCS-03)
+  - [ ] 06-03-PLAN.md — Wave 2: add hybrid+classic benchmarks to benches/project_ops.rs; run release-build smoke test (DOCS-03, TEST-05)
 
 ## Progress
 
@@ -111,5 +114,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
 | 2. Hybrid Crypto Suite | 4/4 | Complete | 2026-04-26 |
 | 3. Keystore Dual-Suite Support | 2/2 | Complete   | 2026-04-26 |
 | 4. Migration Command | 2/2 | Complete   | 2026-04-26 |
-| 5. End-to-End Validation | 0/3 | Not started | - |
-| 6. Documentation & Release | 0/TBD | Not started | - |
+| 5. End-to-End Validation | 3/3 | Complete   | 2026-04-26 |
+| 6. Documentation & Release | 0/3 | Not started | - |

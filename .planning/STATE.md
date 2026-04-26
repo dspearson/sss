@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 03 Plan 02 complete — --suite CLI flag, keys show subcommand, 370/391 lib tests green, KEYSTORE-02/03 CLI layer done
-last_updated: "2026-04-26T11:20:00.000Z"
+status: verifying
+stopped_at: Phase 04 Plan 01 complete — hybrid_public field, v2 gate, suite dispatch, add-hybrid-key command
+last_updated: "2026-04-26T10:45:21.500Z"
 last_activity: 2026-04-26
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_plans: 12
+  completed_plans: 11
+  percent: 92
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-23)
 
 Phase: 03 (Keystore Dual-Suite Support) — IN PROGRESS
 Plan: 2 of 2 complete (03-01 done; 03-02 done)
-Status: Phase 3 complete; ready for Phase 4
+Status: Phase complete — ready for verification
 Last activity: 2026-04-26
 
 Progress: [███████░░░] 38%
@@ -53,6 +53,7 @@ Progress: [███████░░░] 38%
 
 | Phase 02 P02 | ~2h | 2 tasks | 23 files |
 | Phase 03 P01 | 17 min | 2 tasks (TDD) | 2 files |
+| Phase 04-migration-command P01 | 18 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Full decision log: PROJECT.md Key Decisions table. Summary:
 - [Phase ?]: Plan 02-02 Rule 3 scope extension: KeyPair::secret_key() -> Result<&SecretKey> accessor added because .secret_key field access appeared in 6 src/ call sites. Fallible return (not panic) for KeyPair::Hybrid variant keeps cross-suite dispatch loud.
 - [Phase 03 Plan 01]: StoredKeyPair extended with hybrid_public_key + hybrid_encrypted_secret_key (both #[serde(default)] + #[cfg_attr(not(hybrid), serde(skip))]). store_dual_keypair Case B shares existing salt for hybrid KDF derivation (KEYSTORE-04). load_hybrid_keypair reconstructs secret bytes into Zeroizing<[u8;1819]> (T-03-05). HybridPublicKey::as_bytes() used in tests (not .bytes which is pub(crate)).
 - [Phase 03 Plan 02]: --suite required(true) with value_parser([classic,hybrid,both]) — no default. handle_keys_show uses get_current_stored_raw on hybrid builds; list_key_ids fallback on non-hybrid. generate_randomart header uses saturating_sub to handle labels wider than RANDOMART_WIDTH (overflow fix). Feature-absent guard fires before no-classic-key check.
+- [Phase ?]: resolve_suite_from_version(2.0) returns Ok(Suite::Hybrid) — Plan 04-01 gate change
+- [Phase ?]: Password hoisted to single Option<String> in load_project_config_internal; load_keypair_with_password_retry removed
+- [Phase ?]: handle_users_add_hybrid_key: 1214-byte base64 length check (T-04-01-01) before any disk write; feature-absent stub for non-hybrid builds
 
 ### Phase 1 Artefacts
 
@@ -118,7 +122,7 @@ Pre-existing flake: `commands::utils::tests::test_get_system_username_with_user_
 
 ## Session Continuity
 
-Last session: 2026-04-26T11:20:00.000Z
-Stopped at: Phase 03 Plan 02 complete — --suite CLI flag + keys show + init hint; 370/391 lib tests green; KEYSTORE-02/03 complete
+Last session: 2026-04-26T10:45:21.497Z
+Stopped at: Phase 04 Plan 01 complete — hybrid_public field, v2 gate, suite dispatch, add-hybrid-key command
 Resume file: None
 Next step: Plan Phase 4 (Migration Command) — sss migrate re-wraps K per user to hybrid, bumps .sss.toml version

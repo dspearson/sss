@@ -906,12 +906,6 @@ pub fn get_passphrase_or_prompt(prompt: &str) -> Result<String> {
     rpassword::prompt_password(prompt).map_err(|e| anyhow!("Failed to read passphrase: {e}"))
 }
 
-impl Default for Keystore {
-    fn default() -> Self {
-        Self::new().expect("Failed to create keystore")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

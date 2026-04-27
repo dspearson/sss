@@ -108,12 +108,6 @@ impl AgentClient {
     }
 }
 
-impl Default for AgentClient {
-    fn default() -> Self {
-        Self::new().expect("Failed to create agent client")
-    }
-}
-
 /// Check if the agent is available
 pub fn is_agent_available() -> bool {
     AgentClient::new()

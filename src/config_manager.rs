@@ -493,12 +493,6 @@ impl ConfigManager {
     }
 }
 
-impl Default for ConfigManager {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default ConfigManager")
-    }
-}
-
 impl UserSettings {
     /// Load user settings from config directory
     fn load(config_dir: &Path) -> Result<Self> {

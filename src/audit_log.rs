@@ -117,6 +117,9 @@ impl AuditLogger {
         log_line.push('\n');
 
         // Write to log file
+        // INVARIANT: file_handle Mutex is never poisoned in this single-process
+        // audit logging context; poisoning would mean an earlier writer panicked
+        // mid-write, which is a fatal program bug. HARDEN-01 / 08-01.
         let mut file = self.file_handle.lock().unwrap();
         file.write_all(log_line.as_bytes())?;
         file.flush()?;
@@ -172,6 +175,11 @@ pub struct RateLimiter {
     request_history: Arc<Mutex<HashMap<String, Vec<SystemTime>>>>,
 }
 
+// INVARIANT: every `self.request_history.lock().unwrap()` in this impl block is
+// sound because the inner Mutex is never poisoned in this single-process scope.
+// A poisoned mutex would mean an earlier holder panicked mid-update, which is a
+// fatal program bug — propagating it here would silently swallow unrecoverable
+// corruption. HARDEN-01 / 08-01.
 impl RateLimiter {
     /// Create a new rate limiter
     pub fn new(max_requests_per_minute: usize) -> Self {

@@ -44,6 +44,9 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
             );
         } else {
             // Regular character
+            // INVARIANT: this branch is only reached inside the validate loop
+            // when pos < edited.len(), so remaining = &edited[pos..] is
+            // non-empty and has at least one char. HARDEN-01 / 08-01.
             let ch = remaining.chars().next().unwrap();
             validated.push(ch);
             pos += ch.len_utf8();

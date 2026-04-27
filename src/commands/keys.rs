@@ -354,6 +354,8 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 
 fn handle_keys_delete(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let keystore = create_keystore(main_matches)?;
+    // INVARIANT: clap declares `name` as required(true) for the delete
+    // subcommand. HARDEN-01 / 08-01.
     let key_name = sub_matches.get_one::<String>("name").unwrap();
 
     print!(

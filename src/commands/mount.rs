@@ -49,6 +49,9 @@ pub fn handle_mount(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Res
         (src, src)
     } else {
         // Normal: source and mountpoint are separate
+        // INVARIANT: clap declares both `source` and `mountpoint` as
+        // required_unless_present="in-place"; this branch only fires when
+        // `--in-place` is NOT set, so both args are present. HARDEN-01 / 08-01.
         let src = sub_matches.get_one::<String>("source").unwrap().as_str();
         let mp = sub_matches.get_one::<String>("mountpoint").unwrap().as_str();
         (src, mp)

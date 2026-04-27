@@ -53,6 +53,11 @@ pub fn migrate_project_config(
     usernames.sort();
 
     for username in &usernames {
+        // INVARIANT: `username` was sourced from config.users.keys() above
+        // (line ~52), so config.users.get(username) is always Some. The
+        // `hybrid_public.as_ref().unwrap()` is also sound because the early
+        // validation pass (lines ~33-48) guarantees every user has
+        // hybrid_public.is_some() before we reach this loop. HARDEN-01 / 08-01.
         let uc = config.users.get(username).unwrap();
         let hybrid_b64 = uc.hybrid_public.as_ref().unwrap();
 
@@ -77,6 +82,9 @@ pub fn migrate_project_config(
     //    Only sealed_key changes — `public` remains the classic identity anchor
     //    so that find_user_by_public_key continues to work via the classic keypair.
     for (username, sealed) in &new_sealed {
+        // INVARIANT: every username in new_sealed originates from
+        // config.users.keys() (see the loop at line ~55), so
+        // config.users.get_mut(username) is always Some. HARDEN-01 / 08-01.
         config.users.get_mut(username).unwrap().sealed_key = sealed.clone();
     }
     config.version = "2.0".to_string();
@@ -133,6 +141,9 @@ pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
             println!("  version: {} -> 2.0", config.version);
             println!("  Users to re-seal ({}):", usernames.len());
             for u in &usernames {
+                // INVARIANT: `u` was sourced from config.users.keys() above
+                // (line ~130), so config.users.get(u) is always Some.
+                // HARDEN-01 / 08-01.
                 let uc = config.users.get(u).unwrap();
                 let status = if uc.hybrid_public.is_some() { "ready" } else { "MISSING hybrid key" };
                 println!("    {u}: {status}");

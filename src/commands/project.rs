@@ -95,6 +95,8 @@ fn handle_project_show(config_manager: &crate::config_manager::ConfigManager) ->
 }
 
 fn handle_project_enable(config_manager: &mut crate::config_manager::ConfigManager, sub_matches: &ArgMatches) -> Result<()> {
+    // INVARIANT: clap declares `feature` as required(true) with value_parser
+    // ["render","open"]. HARDEN-01 / 08-01.
     let feature = sub_matches.get_one::<String>("feature").unwrap();
     let project_root = find_project_root()?;
 
@@ -115,6 +117,8 @@ fn handle_project_enable(config_manager: &mut crate::config_manager::ConfigManag
 }
 
 fn handle_project_disable(config_manager: &mut crate::config_manager::ConfigManager, sub_matches: &ArgMatches) -> Result<()> {
+    // INVARIANT: clap declares `feature` as required(true) with value_parser
+    // ["render","open"]. HARDEN-01 / 08-01.
     let feature = sub_matches.get_one::<String>("feature").unwrap();
     let project_root = find_project_root()?;
 
@@ -158,6 +162,8 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
 
     match sub_matches.subcommand() {
         Some(("add", add_matches)) => {
+            // INVARIANT: clap declares `pattern` as required(true) for the add
+            // subcommand. HARDEN-01 / 08-01.
             let new_pattern = add_matches.get_one::<String>("pattern").unwrap();
 
             // Load project config
@@ -178,6 +184,8 @@ fn handle_project_ignore(_config_manager: &mut crate::config_manager::ConfigMana
             }
         }
         Some(("remove", remove_matches)) => {
+            // INVARIANT: clap declares `pattern` as required(true) for the remove
+            // subcommand. HARDEN-01 / 08-01.
             let pattern_to_remove = remove_matches.get_one::<String>("pattern").unwrap();
 
             // Load project config
@@ -238,6 +246,8 @@ fn handle_project_secrets_file(sub_matches: &ArgMatches) -> Result<()> {
 
     match sub_matches.subcommand() {
         Some(("set", set_matches)) => {
+            // INVARIANT: clap declares `filename` as required(true) for the set
+            // subcommand. HARDEN-01 / 08-01.
             let filename = set_matches.get_one::<String>("filename").unwrap();
 
             // Load project config

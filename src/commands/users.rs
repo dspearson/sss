@@ -72,6 +72,9 @@ fn handle_users_list() -> Result<()> {
 fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     use base64::Engine as _;
 
+    // INVARIANT: clap declares both `username` and `public-key` as required(true),
+    // so .unwrap() is guaranteed by the clap framework on the two get_one calls
+    // below. HARDEN-01 / 08-01.
     let username = sub_matches.get_one::<String>("username").unwrap();
     let public_key_input = sub_matches.get_one::<String>("public-key").unwrap();
 
@@ -89,6 +92,8 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // 32 bytes → classic X25519;  1214 bytes → hybrid X448+sntrup761.
     let new_pub: PublicKey = match raw.len() {
+        // INVARIANT: this match arm only fires when raw.len() == 32, so
+        // raw.try_into::<[u8; 32]>() always succeeds. HARDEN-01 / 08-01.
         32 => PublicKey::Classic(raw.try_into().unwrap()),
         #[cfg(feature = "hybrid")]
         n if n == crate::constants::HYBRID_PUBLIC_KEY_SIZE => {
@@ -166,6 +171,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 }
 
 fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    // INVARIANT: clap declares `username` as required(true). HARDEN-01 / 08-01.
     let username = sub_matches.get_one::<String>("username").unwrap();
 
     // Load project config once.
@@ -256,6 +262,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
 }
 
 fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
+    // INVARIANT: clap declares `username` as required(true). HARDEN-01 / 08-01.
     let username = sub_matches.get_one::<String>("username").unwrap();
 
     let config_path = get_project_config_path()?;
@@ -290,6 +297,8 @@ fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
     use base64::Engine as _;
     use crate::constants::HYBRID_PUBLIC_KEY_SIZE;
 
+    // INVARIANT: clap declares both `username` and `hybrid-pubkey` as required(true).
+    // HARDEN-01 / 08-01.
     let username = sub_matches.get_one::<String>("username").unwrap();
     let hybrid_b64 = sub_matches.get_one::<String>("hybrid-pubkey").unwrap();
 

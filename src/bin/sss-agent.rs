@@ -45,10 +45,14 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // Get socket path
-    let socket_path = args.socket.unwrap_or_else(|| {
-        let home = std::env::var("HOME").expect("HOME not set");
-        PathBuf::from(home).join(".sss-agent.sock")
-    });
+    let socket_path = match args.socket {
+        Some(p) => p,
+        None => {
+            let home = std::env::var("HOME")
+                .map_err(|_| anyhow!("HOME environment variable not set"))?;
+            PathBuf::from(home).join(".sss-agent.sock")
+        }
+    };
 
     // Set up audit logger
     let log_path = get_log_path()?;
@@ -145,6 +149,11 @@ fn main() -> Result<()> {
 }
 
 fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
+    // INVARIANT: every `state.policy_manager.lock().unwrap()` in this function (and
+    // any helper it calls) is sound because the PolicyManager mutex is never poisoned
+    // in this single-binary process scope. A poisoned mutex here is a fatal bug, not
+    // a recoverable state — propagating it would mean the agent silently swallows
+    // unrecoverable corruption. Audit: HARDEN-01 / 08-01.
     // Read request
     let request = AgentRequest::read_from(&mut stream)?;
 

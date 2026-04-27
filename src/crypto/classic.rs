@@ -25,6 +25,11 @@ const BLAKE2B_PERSONALBYTES: usize = sodium::crypto_generichash_blake2b_PERSONAL
 // Ensure libsodium is initialised
 pub(crate) fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
+    // SAFETY: `sodium_init()` is thread-safe per libsodium docs; `Once` ensures we
+    // call it exactly once across the process. A negative return value means
+    // libsodium itself failed to initialise — the binary cannot operate without
+    // libsodium, so panicking is the correct response (no recovery is possible).
+    // HARDEN-01 / 08-01.
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });

@@ -39,6 +39,9 @@ impl FileSystemOps for StdFileSystemOps {
 }
 
 /// Regex for secret interpolation - matches ⊲{`secret_name`} or <{`secret_name`}
+// INVARIANT: literal regex pattern is compile-time-correct; .expect is unreachable
+// on any successful build. Same applies to the other two LazyLock regexes below.
+// HARDEN-01 / 08-01.
 pub static SECRETS_INTERPOLATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
 
@@ -446,6 +449,10 @@ fn collect_multiline_value(lines: &[&str], _start_line: usize) -> Result<(String
         }
 
         // Check if line is still indented at least to base level
+        // INVARIANT: base_indent is Some(_) at both unwraps below — the
+        // is_none() branch above either initialises it on this iteration or
+        // breaks out of the loop. Subsequent iterations cannot reach here with
+        // base_indent == None. HARDEN-01 / 08-01.
         if indent < base_indent.unwrap() {
             // Dedented line means end of multi-line value
             break;

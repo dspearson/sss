@@ -116,6 +116,9 @@ fn unescape_default_delimiter(raw: &str) -> String {
             match chars.clone().next() {
                 Some('{') | Some('}') | Some('\\') => {
                     // Escaped brace or backslash — emit the literal.
+                    // INVARIANT: chars.clone().next() returned Some(_) at the match
+                    // arm above, so the un-cloned chars iterator yields the same
+                    // value. .unwrap is unreachable. HARDEN-01 / 08-01.
                     out.push(chars.next().unwrap());
                     continue;
                 }

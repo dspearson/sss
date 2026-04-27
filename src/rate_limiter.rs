@@ -19,9 +19,14 @@ struct AttemptRecord {
     locked_until: Option<Instant>,
 }
 
+// INVARIANT: every `self.attempts.lock().unwrap()` in this impl block is sound
+// because the inner Mutex is never poisoned in this single-process scope. A
+// poisoned mutex would mean a previous holder panicked while holding the lock,
+// which is a fatal program bug — propagating it here would silently swallow
+// unrecoverable corruption. HARDEN-01 / 08-01.
 impl RateLimiter {
     /// Create a new rate limiter
-    #[must_use] 
+    #[must_use]
     pub fn new(max_attempts: u32, window_minutes: u64, lockout_minutes: u64) -> Self {
         Self {
             attempts: Arc::new(Mutex::new(HashMap::new())),

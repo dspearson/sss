@@ -127,9 +127,12 @@ impl DerivedKey {
     }
 
     /// Convert to our `RepositoryKey` type for encryption
-    #[must_use] 
+    #[must_use]
     pub fn to_encryption_key(&self) -> crate::crypto::RepositoryKey {
-        // This is safe because both are 32-byte arrays
+        // INVARIANT: DerivedKey wraps [u8; KEY_SIZE=32] (see Self::from_bytes
+        // length check at line ~117); RepositoryKey::from_bytes accepts exactly
+        // 32 bytes. The .expect below is unreachable on valid program state.
+        // HARDEN-01 / 08-01.
         crate::crypto::RepositoryKey::from_bytes(&self.0)
             .expect("DerivedKey should always be valid RepositoryKey")
     }

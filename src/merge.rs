@@ -17,6 +17,8 @@ use regex::Regex;
 /// Count the number of complete markers in content (both ⊕{} and ⊠{})
 fn count_markers(content: &str) -> usize {
     // Use DOTALL mode to match multiline markers
+    // INVARIANT: literal regex pattern is compile-time-correct; .unwrap is
+    // unreachable on any successful build. HARDEN-01 / 08-01.
     let marker_re = Regex::new(r"(?s)(⊕|⊠)\{.*?\}").unwrap();
     marker_re.find_iter(content).count()
 }
@@ -58,6 +60,8 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
     let mut rendered_pos = 0;
 
     // Use a simpler approach: find all markers with balanced braces
+    // INVARIANT: literal regex pattern is compile-time-correct; .unwrap is
+    // unreachable on any successful build. HARDEN-01 / 08-01.
     let marker_re = Regex::new(r"(?s)(⊕|⊠|o\+|\[\*)\{").unwrap();
 
     let mut search_start = 0;
@@ -117,6 +121,8 @@ fn reconstruct_multimarker_line(old_opened: &str, old_rendered: &str, new_render
     let mut marker_content = String::new();
 
     for change in diff.iter_all_changes() {
+        // INVARIANT: similar::Change::value() yields a non-empty &str per crate API
+        // (one-char chunks for char-level diff); .unwrap is unreachable. HARDEN-01.
         let ch = change.value().chars().next().unwrap();
 
         match change.tag() {
@@ -254,6 +260,8 @@ pub fn smart_reconstruct(
     rendered_old: &str,
 ) -> Result<String> {
     // Special case: if the entire old content was a single marker (possibly multiline), preserve it
+    // INVARIANT: literal regex pattern is compile-time-correct; .unwrap is
+    // unreachable on any successful build. HARDEN-01 / 08-01.
     let marker_re = Regex::new(r"(?s)^(⊕|⊠)\{(.*)\}$").unwrap(); // (?s) = DOTALL mode
     let opened_old_trimmed = opened_old.trim();
     let rendered_old_trimmed = rendered_old.trim();

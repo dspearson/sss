@@ -337,8 +337,11 @@ impl SssFS {
         // SAFETY: `source_path` was verified to exist and be a directory above.
         // `CString::new` is called inside the block; the pointer is valid for the duration
         // of the `open` syscall. The returned fd is checked for errors immediately.
+        let source_path_str = source_path
+            .to_str()
+            .ok_or_else(|| anyhow!("Source path is not valid UTF-8: {:?}", source_path))?;
         let source_fd = unsafe {
-            let path_cstr = std::ffi::CString::new(source_path.to_str().unwrap())?;
+            let path_cstr = std::ffi::CString::new(source_path_str)?;
             libc::open(path_cstr.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY)
         };
 
@@ -360,8 +363,11 @@ impl SssFS {
         let mount_fd = if let Some(ref mount_path) = mount_path {
             // SAFETY: `mount_path` exists (checked by caller). `CString::new` is called inside
             // the block; pointer is valid for the duration of `open`. The fd is checked immediately.
+            let mount_path_str = mount_path
+                .to_str()
+                .ok_or_else(|| anyhow!("Mount path is not valid UTF-8: {:?}", mount_path))?;
             let fd = unsafe {
-                let path_cstr = std::ffi::CString::new(mount_path.to_str().unwrap())?;
+                let path_cstr = std::ffi::CString::new(mount_path_str)?;
                 // O_PATH | O_DIRECTORY: path-based fd for directory access via /proc
                 // macOS doesn't have O_PATH, use O_RDONLY | O_DIRECTORY instead
                 #[cfg(target_os = "linux")]
@@ -540,7 +546,10 @@ impl SssFS {
             }
         }
 
-        // Should never happen if we have a root "/" entry
+        // INVARIANT: SssFS::new always installs a root "/" entry in pinned_paths,
+        // so a caller-supplied virtual_path always matches at least the root prefix.
+        // Reaching this panic means the constructor invariant has been violated —
+        // a fatal program bug, not recoverable state. HARDEN-01 / 08-01.
         panic!("No pinned path found for: {:?}", virtual_path);
     }
 

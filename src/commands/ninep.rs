@@ -38,10 +38,11 @@ pub fn handle_serve9p(matches: &ArgMatches) -> Result<()> {
         .ok_or_else(|| anyhow!("Address is required"))?;
 
     // Get directory (default to current directory)
-    let directory = matches
-        .get_one::<String>("directory")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().expect("Failed to get current directory"));
+    let directory = match matches.get_one::<String>("directory") {
+        Some(d) => PathBuf::from(d),
+        None => std::env::current_dir()
+            .map_err(|e| anyhow!("Failed to determine current directory: {e}"))?,
+    };
 
     // Get optional username
     let username = matches.get_one::<String>("user").cloned();

@@ -130,11 +130,13 @@ impl Keystore {
         let (encrypted_secret_key, salt, is_password_protected) = if let Some(password) = password {
             // Encrypt secret key with password-derived key
             let salt = Salt::new();
-            let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)?;
+            let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive (store_keypair): {}", e))?;
 
             let secret_key_str = keypair.secret_key()?.to_base64();
             let encrypted_secret_key =
-                crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
+                crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_keypair): {}", e))?;
             (encrypted_secret_key, Some(salt.to_base64()), true)
         } else {
             // ⚠️  SECURITY WARNING: Storing secret key without password protection!
@@ -163,7 +165,8 @@ impl Keystore {
         let (final_encrypted_key, in_keyring) = if self.use_keyring && password.is_none() {
             // Store in system keyring instead of file
             let secret_key_b64 = keypair.secret_key()?.to_base64();
-            keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)?;
+            keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)
+                .map_err(|e| anyhow!("keystore: keyring-store for key_id={}: {}", key_id, e))?;
             eprintln!("✓ Private key stored in system keyring");
             // Store placeholder in file
             ("STORED_IN_KEYRING".to_string(), true)
@@ -185,17 +188,21 @@ impl Keystore {
 
         // Write keypair to file
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
-        let content = toml::to_string_pretty(&stored_keypair)?;
-        fs::write(&key_file, content)?;
+        let content = toml::to_string_pretty(&stored_keypair)
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={}: {}", key_id, e))?;
+        fs::write(&key_file, content)
+            .map_err(|e| anyhow!("keystore: write key file {:?} for key_id={}: {}", key_file, key_id, e))?;
 
         // Set secure permissions on the key file
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&key_file)?;
+            let metadata = fs::metadata(&key_file)
+                .map_err(|e| anyhow!("keystore: stat key file {:?} for key_id={}: {}", key_file, key_id, e))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600); // Owner read/write only
-            fs::set_permissions(&key_file, perms)?;
+            fs::set_permissions(&key_file, perms)
+                .map_err(|e| anyhow!("keystore: set-permissions on key file {:?} for key_id={}: {}", key_file, key_id, e))?;
         }
 
         // Update "current" symlink to point to this key

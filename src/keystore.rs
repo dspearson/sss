@@ -278,8 +278,11 @@ impl Keystore {
     pub fn get_all_keypairs(&self, password: Option<&str>) -> Result<Vec<KeyPair>> {
         let mut keypairs = Vec::new();
 
-        for entry in fs::read_dir(&self.keys_dir)? {
-            let entry = entry?;
+        for entry in fs::read_dir(&self.keys_dir)
+            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+        {
+            let entry = entry
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -287,7 +290,8 @@ impl Keystore {
                 continue;
             }
 
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(&path)
+                .map_err(|e| anyhow!("keystore: read key file {:?}: {}", path, e))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content)
                 && let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
                     keypairs.push(keypair);
@@ -304,8 +308,11 @@ impl Keystore {
     pub fn count_keypairs(&self) -> Result<usize> {
         let mut count = 0;
 
-        for entry in fs::read_dir(&self.keys_dir)? {
-            let entry = entry?;
+        for entry in fs::read_dir(&self.keys_dir)
+            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+        {
+            let entry = entry
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
             let path = entry.path();
 
             if path.extension().is_some_and(|ext| ext == "toml") {
@@ -324,7 +331,8 @@ impl Keystore {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
 
-        fs::remove_file(&key_file)?;
+        fs::remove_file(&key_file)
+            .map_err(|e| anyhow!("keystore: remove key file for key_id={}: {}", key_id, e))?;
 
         // If this was the current key, remove the current link.
         // WR-01 fix: bind read_current_key_id once via if-let to avoid TOCTOU double-call.
@@ -332,7 +340,8 @@ impl Keystore {
             && current_id == key_id {
                 let current_link = self.keys_dir.join("current");
                 if current_link.exists() {
-                    fs::remove_file(&current_link)?;
+                    fs::remove_file(&current_link)
+                        .map_err(|e| anyhow!("keystore: remove current symlink for key_id={}: {}", key_id, e))?;
                 }
             }
 
@@ -529,8 +538,10 @@ impl Keystore {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
 
-        let content = fs::read_to_string(&key_file)?;
-        let stored_keypair: StoredKeyPair = toml::from_str(&content)?;
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file (is_current_key_password_protected) for key_id={}: {}", key_id, e))?;
+        let stored_keypair: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (is_current_key_password_protected) for key_id={}: {}", key_id, e))?;
 
         Ok(stored_keypair.is_password_protected)
     }
@@ -539,8 +550,11 @@ impl Keystore {
     pub fn list_key_ids(&self) -> Result<Vec<(String, StoredKeyPair)>> {
         let mut keys = Vec::new();
 
-        for entry in fs::read_dir(&self.keys_dir)? {
-            let entry = entry?;
+        for entry in fs::read_dir(&self.keys_dir)
+            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+        {
+            let entry = entry
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -548,7 +562,8 @@ impl Keystore {
                 continue;
             }
 
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(&path)
+                .map_err(|e| anyhow!("keystore: read key file {:?}: {}", path, e))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content) {
                 keys.push((stored_keypair.uuid.clone(), stored_keypair));
             }
@@ -567,7 +582,8 @@ impl Keystore {
         #[cfg(unix)]
         {
             // On Unix, read the symlink target
-            let target = fs::read_link(&current_path)?;
+            let target = fs::read_link(&current_path)
+                .map_err(|e| anyhow!("keystore: read current symlink {:?}: {}", current_path, e))?;
             let filename = target
                 .file_name()
                 .ok_or_else(|| anyhow!("Invalid current symlink target"))?
@@ -583,7 +599,8 @@ impl Keystore {
         #[cfg(windows)]
         {
             // On Windows, read the file content
-            let target_filename = fs::read_to_string(&current_path)?;
+            let target_filename = fs::read_to_string(&current_path)
+                .map_err(|e| anyhow!("keystore: read current file {:?}: {}", current_path, e))?;
             if let Some(key_id) = target_filename.strip_suffix(".toml") {
                 Ok(key_id.to_string())
             } else {
@@ -605,8 +622,10 @@ impl Keystore {
         if !key_file.exists() {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
-        let content = fs::read_to_string(&key_file)?;
-        Ok(toml::from_str(&content)?)
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file (get_current_stored_raw) for key_id={}: {}", key_id, e))?;
+        Ok(toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (get_current_stored_raw) for key_id={}: {}", key_id, e))?)
     }
 
     /// Store a dual-suite keypair with optional password protection.

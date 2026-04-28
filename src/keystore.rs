@@ -360,15 +360,19 @@ impl Keystore {
 
         // Load the stored keypair metadata to preserve other fields
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
-        let content = fs::read_to_string(&key_file)?;
-        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file for key_id={} (set_passphrase): {}", key_id, e))?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={} (set_passphrase): {}", key_id, e))?;
 
         // Encrypt with new password
         let salt = Salt::new();
-        let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)?;
+        let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)
+            .map_err(|e| anyhow!("keystore: kdf-derive (new passphrase) for key_id={}: {}", key_id, e))?;
         let secret_key_str = keypair.secret_key()?.to_base64();
         let encrypted_secret_key =
-            crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())?;
+            crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
+                .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (set_passphrase) for key_id={}: {}", key_id, e))?;
 
         // Re-encrypt hybrid material before stored.salt is overwritten (WR-01).
         // Reads the original salt from `stored` to re-derive the old decryption key.
@@ -381,24 +385,34 @@ impl Keystore {
                     .salt
                     .as_ref()
                     .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
-                let old_salt = Salt::from_base64(old_salt_str)?;
+                let old_salt = Salt::from_base64(old_salt_str)
+                    .map_err(|e| anyhow!("keystore: salt-decode (set_passphrase, old) for key_id={}: {}", key_id, e))?;
                 let old_dk =
-                    DerivedKey::derive_with_params(old_pw, &old_salt, &self.kdf_params)?;
-                let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)?;
+                    DerivedKey::derive_with_params(old_pw, &old_salt, &self.kdf_params)
+                        .map_err(|e| anyhow!("keystore: kdf-derive (old passphrase) for key_id={}: {}", key_id, e))?;
+                let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, old) for key_id={}: {}", key_id, e))?;
                 let dec = Zeroizing::new(crate::crypto::decrypt(
                     &enc_bytes,
                     &old_dk.to_encryption_key(),
-                )?);
-                Zeroizing::new(BASE64_STANDARD.decode(std::str::from_utf8(&dec)?)?)
+                )
+                    .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (set_passphrase, old) for key_id={}: {}", key_id, e))?);
+                Zeroizing::new(BASE64_STANDARD.decode(
+                    std::str::from_utf8(&dec)
+                        .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (set_passphrase) for key_id={}: {}", key_id, e))?
+                )
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (set_passphrase) for key_id={}: {}", key_id, e))?)
             } else {
                 // Was passwordless — stored as raw base64
-                Zeroizing::new(BASE64_STANDARD.decode(enc_hybrid_b64)?)
+                Zeroizing::new(BASE64_STANDARD.decode(enc_hybrid_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, passwordless) for key_id={}: {}", key_id, e))?)
             };
             let hybrid_sk_b64 = BASE64_STANDARD.encode(&raw_hybrid[..]);
             let new_enc = crate::crypto::encrypt_to_base64(
                 &hybrid_sk_b64,
                 &derived_key.to_encryption_key(),
-            )?;
+            )
+                .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (set_passphrase) for key_id={}: {}", key_id, e))?;
             stored.hybrid_encrypted_secret_key = Some(new_enc);
         }
 
@@ -408,17 +422,21 @@ impl Keystore {
         stored.is_password_protected = true;
 
         // Write back to file
-        let content = toml::to_string_pretty(&stored)?;
-        fs::write(&key_file, content)?;
+        let content = toml::to_string_pretty(&stored)
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={} (set_passphrase): {}", key_id, e))?;
+        fs::write(&key_file, content)
+            .map_err(|e| anyhow!("keystore: write key file for key_id={} (set_passphrase): {}", key_id, e))?;
 
         // Set secure permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&key_file)?;
+            let metadata = fs::metadata(&key_file)
+                .map_err(|e| anyhow!("keystore: stat key file for key_id={} (set_passphrase): {}", key_id, e))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
-            fs::set_permissions(&key_file, perms)?;
+            fs::set_permissions(&key_file, perms)
+                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={} (set_passphrase): {}", key_id, e))?;
         }
 
         Ok(())
@@ -438,8 +456,10 @@ impl Keystore {
 
         // Load the stored keypair metadata
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
-        let content = fs::read_to_string(&key_file)?;
-        let mut stored: StoredKeyPair = toml::from_str(&content)?;
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file for key_id={} (remove_passphrase): {}", key_id, e))?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={} (remove_passphrase): {}", key_id, e))?;
 
         // Decrypt hybrid material before clearing the salt (WR-02).
         // After this block, hybrid_encrypted_secret_key holds the raw sk base64 (passwordless form).
@@ -451,17 +471,22 @@ impl Keystore {
                 .salt
                 .as_ref()
                 .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
-            let salt_obj = Salt::from_base64(salt_str)?;
+            let salt_obj = Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode (remove_passphrase) for key_id={}: {}", key_id, e))?;
             let dk = DerivedKey::derive_with_params(
                 current_password,
                 &salt_obj,
                 &self.kdf_params,
-            )?;
-            let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)?;
-            let dec = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?);
+            )
+                .map_err(|e| anyhow!("keystore: kdf-derive (remove_passphrase) for key_id={}: {}", key_id, e))?;
+            let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (remove_passphrase) for key_id={}: {}", key_id, e))?;
+            let dec = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
+                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (remove_passphrase) for key_id={}: {}", key_id, e))?);
             // dec is the base64 of the raw sk bytes — store it directly as passwordless form
             stored.hybrid_encrypted_secret_key =
-                Some(String::from_utf8(dec.to_vec())?);
+                Some(String::from_utf8(dec.to_vec())
+                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (remove_passphrase) for key_id={}: {}", key_id, e))?);
         }
 
         // Store secret key as plaintext (base64 encoded)
@@ -470,17 +495,21 @@ impl Keystore {
         stored.is_password_protected = false;
 
         // Write back to file
-        let content = toml::to_string_pretty(&stored)?;
-        fs::write(&key_file, content)?;
+        let content = toml::to_string_pretty(&stored)
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={} (remove_passphrase): {}", key_id, e))?;
+        fs::write(&key_file, content)
+            .map_err(|e| anyhow!("keystore: write key file for key_id={} (remove_passphrase): {}", key_id, e))?;
 
         // Set secure permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&key_file)?;
+            let metadata = fs::metadata(&key_file)
+                .map_err(|e| anyhow!("keystore: stat key file for key_id={} (remove_passphrase): {}", key_id, e))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
-            fs::set_permissions(&key_file, perms)?;
+            fs::set_permissions(&key_file, perms)
+                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={} (remove_passphrase): {}", key_id, e))?;
         }
 
         Ok(())

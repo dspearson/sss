@@ -239,6 +239,117 @@ Encrypted Secrets  -->  ⊠{base64(nonce[24]||MAC[16]||ciphertext[N])}
 
 ---
 
+## FFI Audit (Phase 8 / HARDEN-03)
+
+This section records the wrapper-layer FFI boundary audit performed in
+Plan 08-03 (2026-04-28). Scope: every `unsafe { sodium::... }` and
+`unsafe { ptr::... }` call site in `src/kdf.rs`, `src/crypto/classic.rs`,
+and `src/crypto/hybrid.rs`. Out of scope: the vendored `trelis` source
+itself (covered by `AUDIT-01`, deferred to a third-party engagement).
+
+### Properties Audited
+
+For every FFI call site, three properties were verified:
+
+1. **Buffer-size correctness** — every `as_ptr()` / `as_mut_ptr()` argument
+   is paired with a length argument that matches the underlying buffer's
+   declared size (`SYMMETRIC_KEY_SIZE = 32`, `SYMMETRIC_NONCE_SIZE = 24`,
+   `SYMMETRIC_MAC_SIZE = 16`, `PUBLIC_KEY_SIZE = 32`,
+   `SECRET_KEY_SIZE = 32`, `SEALED_BOX_OVERHEAD = 48`,
+   `SALT_SIZE = 16`, `KEY_SIZE = 32`,
+   `HYBRID_REPO_KEY_PLAINTEXT_SIZE = 32`,
+   `HYBRID_SEALED_KEY_NONCE_SIZE = 24`, `HYBRID_SECRET_KEY_SIZE = 1819`).
+   Every output buffer for a libsodium AEAD/seal call is sized to at
+   least `MAC_SIZE + plaintext_len` (or the per-API equivalent) before
+   the call, with explicit length-gates on caller-supplied input slices.
+
+2. **Return-code handling** — every libsodium FFI that follows the
+   documented `0 / non-zero` contract (`crypto_pwhash`, the
+   `crypto_box_*` family, `crypto_secretbox_xchacha20poly1305_*`,
+   `crypto_generichash_*`) is paired with an `if ret != 0 { return Err(...) }`
+   check propagating an `anyhow!` error with adequate context. Void-return
+   helpers (`randombytes_buf`) carry no check; the libsodium contract
+   guarantees infallible operation post-`sodium_init`. `sodium_init` is
+   guarded by an `assert!(... >= 0, ...)` (HARDEN-01-audited as a
+   correct fatal-on-failure pattern).
+
+3. **Lifetime safety** — every buffer passed by raw pointer (`as_ptr`,
+   `as_mut_ptr`, `add(n)`) outlives the FFI call, with no early `drop`
+   in any unsafe block, no aliased `&mut` / `&`, and no pointer
+   arithmetic into uninitialised memory. `Zeroizing<..>` wrappers do
+   not affect borrow lifetimes — the wrapper's `Drop` runs *after* the
+   unsafe block returns, so the underlying buffer is live throughout.
+
+### Sites Audited
+
+26 unsafe sites total (17 production + 9 test):
+
+| File | Production | Test | All-PASS production | All-PASS test |
+|------|-----------:|-----:|:-------------------:|:-------------:|
+| `src/kdf.rs` | 3 | 0 | 3/3 | n/a |
+| `src/crypto/classic.rs` | 11 | 0 | 11/11 | n/a |
+| `src/crypto/hybrid.rs` | 3 | 9 | 3/3 | 9/9 |
+| **Total** | **17** | **9** | **17/17** | **9/9** |
+
+### Findings
+
+- **Zero NEEDS-FIX.** Every production FFI call carries the
+  libsodium-contract return-code check and operates on a buffer whose
+  declared size matches the FFI's expected length.
+- **Zero NEEDS-VERIFY.** The Drop-ordering pattern in `hybrid.rs` test
+  code (`ManuallyDrop::drop` followed by `read_volatile` to confirm
+  zeroisation; threat-register entry `T-08-14`) is verified by manual
+  trace: `ManuallyDrop::drop(&mut kp)` runs the inner type's `Drop`
+  chain (which drops `Zeroizing<..>` and overwrites bytes with zeros)
+  *before* the subsequent post-drop read; the `ManuallyDrop` retains
+  the storage so the post-drop `read_volatile` observes the zeroed
+  memory. Pattern is correct as written.
+- **One documentation gap (not a soundness bug):**
+  `src/crypto/classic.rs:91` (`RepositoryKey::new`) lacks a SAFETY
+  comment despite the surrounding pattern carrying SAFETY comments at
+  every other unsafe block. The block is sound (single libsodium
+  void-return call into a stack-local 32-byte array), but a SAFETY
+  comment would match the project convention. Tracked as a follow-up
+  doc pass; does not meet the bar for `NEEDS-FIX` against the audit's
+  three properties.
+
+### CR-01 Resolution
+
+Plan 02-04's deferred CR-01 issue ("sss-agent always uses
+`ClassicSuite.open_repo_key`, ignoring the project's actual suite") was
+resolved alongside this audit. The fix:
+
+- Bumped `agent_protocol::PROTOCOL_VERSION` from 1 to 2.
+- Extended `AgentRequest` with a `suite: Option<u32>` field, encoded on
+  the wire as `0xFFFFFFFF` (absent / Classic-by-default for v1
+  back-compat), `0` (Classic), or `1` (Hybrid). Unknown values are a
+  hard wire-format error.
+- Replaced the hardcoded `ClassicSuite.open_repo_key(...)` call in
+  `src/bin/sss-agent.rs` with a dispatch through `suite_for(suite)?`,
+  which routes to the matching `Box<dyn CryptoSuite>` based on the
+  protocol-carried suite selector.
+- `AgentClient::unseal_repository_key` and the free `unseal_with_agent`
+  helper now take a `Suite` argument; the only production call site
+  (`src/config.rs`) already had `suite_enum = config.suite()?` available
+  and now passes it through.
+
+The agent retains v1-frame back-compat, treating absent suite as Classic
+to preserve the legacy behaviour during the transition.
+
+### Out of Scope
+
+- **Vendored `trelis` source.** The wrapper-layer review covers our
+  call sites into `trelis-hybrid` and `trelis-primitives`, but not the
+  `trelis` crates' internal C-FFI bindings into `sntrup761`,
+  `xeddsa-rs`, etc. Those are the subject of `AUDIT-01` (third-party
+  audit, deferred milestone).
+- **Production code that does not contain `unsafe { sodium::... }` or
+  `unsafe { ptr::... }`.** Files like `src/processor/`, `src/agent.rs`,
+  `src/config.rs`, etc. were not in scope for this FFI audit (they hold
+  no FFI boundaries).
+
+---
+
 ## References
 
 - [libsodium XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction)

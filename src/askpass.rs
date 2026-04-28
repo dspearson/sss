@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 use crate::agent_policy::UserDecision;
 use crate::agent_protocol::RequestContext;
@@ -122,8 +123,25 @@ fn invoke_helper(
     match result {
         Some(output) => {
             if output.status.success() {
-                // Parse the response
-                let response = String::from_utf8_lossy(&output.stdout);
+                // HARDEN-04 / 08-04 (T-08-17): the helper's stdout carries the
+                // user's response (and may contain a passphrase string in the
+                // future, even though current decisions are short tokens).
+                // Wrap the stdout bytes in Zeroizing<Vec<u8>> first so the
+                // raw buffer is cleared on drop, strip trailing CR/LF in
+                // place, then build a Zeroizing<String> for the parsed
+                // response. The .to_vec() inside String::from_utf8 is a
+                // single-statement transient — dropped before the next ?.
+                let mut stdout_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(output.stdout);
+                if stdout_bytes.last() == Some(&b'\n') {
+                    stdout_bytes.pop();
+                }
+                if stdout_bytes.last() == Some(&b'\r') {
+                    stdout_bytes.pop();
+                }
+                let response: Zeroizing<String> = Zeroizing::new(
+                    String::from_utf8(stdout_bytes.to_vec())
+                        .map_err(|e| anyhow!("askpass response was not valid UTF-8: {e}"))?,
+                );
                 parse_decision(response.trim())
             } else {
                 let error = String::from_utf8_lossy(&output.stderr);

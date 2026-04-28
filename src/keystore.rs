@@ -75,16 +75,19 @@ impl Keystore {
     /// Internal helper to create keystore with a specific directory
     fn create_with_directory(keys_dir: PathBuf, kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         // Ensure directory exists
-        fs::create_dir_all(&keys_dir)?;
+        fs::create_dir_all(&keys_dir)
+            .map_err(|e| anyhow!("keystore: dir-create {:?}: {}", keys_dir, e))?;
 
         // Set secure permissions on the directory
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&keys_dir)?;
+            let metadata = fs::metadata(&keys_dir)
+                .map_err(|e| anyhow!("keystore: stat keys-dir {:?}: {}", keys_dir, e))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o700); // Owner read/write/execute only
-            fs::set_permissions(&keys_dir, perms)?;
+            fs::set_permissions(&keys_dir, perms)
+                .map_err(|e| anyhow!("keystore: set-permissions on keys-dir {:?}: {}", keys_dir, e))?;
         }
 
         // Validate keyring availability if requested
@@ -215,16 +218,20 @@ impl Keystore {
             // rename(2) is atomic on POSIX and replaces an existing destination,
             // so no explicit remove or existence check is needed.
             let tmp_link = self.keys_dir.join(format!("current.tmp.{}", Uuid::new_v4()));
-            std::os::unix::fs::symlink(&target, &tmp_link)?;
-            fs::rename(&tmp_link, &current_link)?;
+            std::os::unix::fs::symlink(&target, &tmp_link)
+                .map_err(|e| anyhow!("keystore: symlink current.tmp -> {}: {}", target, e))?;
+            fs::rename(&tmp_link, &current_link)
+                .map_err(|e| anyhow!("keystore: rename current.tmp -> current: {}", e))?;
         }
 
         #[cfg(windows)]
         {
             // On Windows write to a temp path then rename into place.
             let tmp_path = self.keys_dir.join(format!("current.tmp.{}", Uuid::new_v4()));
-            fs::write(&tmp_path, &target)?;
-            fs::rename(&tmp_path, &current_link)?;
+            fs::write(&tmp_path, &target)
+                .map_err(|e| anyhow!("keystore: write current.tmp: {}", e))?;
+            fs::rename(&tmp_path, &current_link)
+                .map_err(|e| anyhow!("keystore: rename current.tmp -> current: {}", e))?;
         }
 
         Ok(())

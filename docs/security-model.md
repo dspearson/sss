@@ -350,6 +350,58 @@ to preserve the legacy behaviour during the transition.
 
 ---
 
+## Zeroisation (Phase 8 / HARDEN-04 audit input)
+
+Phase 8 (Plan 04, HARDEN-04) walked the full secret-bearing surface in `src/`
+per Decision D-06 and verified each in-scope type either implements
+`ZeroizeOnDrop` (preferred, per D-07) or is wrapped in `Zeroizing<T>` at every
+owning call site. Disposition counts:
+
+- **HAS-ZOD:** 7 — `RepositoryKey`, `SecretKey`, `Salt`, `DerivedKey`,
+  `SecureString`, `SecureBuffer`, plus upstream `trelis-hybrid::HybridKemKeypair`
+  and `HybridSharedSecret`.
+- **WRAPPED-ZEROIZING:** 9 — every secret-bearing function-local in
+  `src/crypto/hybrid.rs` (AEAD keys, plaintexts) and `src/keystore.rs`
+  (rotate/load/decrypt paths) is bound into `Zeroizing<Vec<u8>>` or
+  `Zeroizing<[u8; N]>`.
+- **GAP-FIXED in Phase 8:** 2 — `keystore.rs::decrypt_stored_keypair` (T-08-16)
+  and `askpass.rs::invoke_helper` (T-08-17). Both fixes wrap the previously
+  unwrapped plaintext / passphrase buffers in `Zeroizing<...>` so the heap
+  pages are cleared on drop.
+- **GAP-ACCEPTED (rationale-bearing exclusions):** 4 — see below.
+
+Full audit table lives in
+`.planning/phases/08-internal-code-audit/08-04-SUMMARY.md`.
+
+### Accepted exclusions (each carries rationale)
+
+- **`StoredKeyPair.encrypted_secret_key` and `hybrid_encrypted_secret_key`
+  fields** — rationale: fields hold base64 of AEAD-encrypted ciphertext, not
+  plaintext; ciphertext on disk does not require drop-time zeroise.
+- **`AgentRequest.sealed_key: Option<String>`** (in `src/agent_protocol.rs`) —
+  rationale: holds base64 of the sealed (AEAD-wrapped) repository key — symmetric
+  AEAD output is not plaintext; same disposition as `StoredKeyPair`.
+- **`get_passphrase_or_prompt -> String`** (public re-exported helper in
+  `src/keystore.rs`) — rationale: changing to `Zeroizing<String>` would drift
+  the public re-exported signature (Rule 2 / T-08-23). Callers immediately
+  consume the returned String into `Argon2id::derive_with_params(&pw, ...)`
+  and drop at end of scope; lifetime is bounded by the calling function.
+- **Argon2id input passphrase in `src/kdf.rs::derive_with_params`** —
+  rationale: passphrase enters as `&str` (no rust-side copy beyond the
+  caller's binding); libsodium's `crypto_pwhash` is responsible for its own
+  scratch — D-06's libsodium-internal exclusion holds.
+
+### libsodium-internal scratch
+
+Phase 8 explicitly does not audit libsodium-internal scratch buffers
+(Argon2id state machine, AEAD tag computation buffers). libsodium documents
+its own `sodium_memzero` discipline. Phase 9 (THREAT-01) is the cross-reference
+for that boundary.
+
+Phase 9 (THREAT-01..04) consumes this section as input to the threat model.
+
+---
+
 ## References
 
 - [libsodium XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction)

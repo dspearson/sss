@@ -257,6 +257,113 @@ additional assumption is now in play.
 
 ---
 
+## Trelis Attack Surface
+
+The hybrid suite (v2.0) introduces an additional supply-chain dependency on the
+[trelis](https://github.com/dspearson/trelis) library, which provides the X448 +
+sntrup761 hybrid KEM. trelis is in a different audit posture than libsodium and the
+classic suite. This section names the trelis-specific facts a reviewer needs to
+assess the hybrid suite, and points back at every other place in this document that
+touches trelis-related risk.
+
+### Pinned, vendored at a specific commit
+
+Both `trelis-hybrid` and `trelis-primitives` are pinned in `Cargo.toml` to commit
+`5374dff482ba94a94695794b5e4554f908eb0d4d`. The pin uses git URL + `rev = "..."`
+rather than a published crate version, so updates require an explicit code change to
+`Cargo.toml`. The pin is intentional: trelis is experimental and the project does
+not consume floating versions.
+
+Re-verifying the pin commit against the v2.0 chain-of-custody (i.e. that the SHA
+matches what was reviewed at v2.0 inception) is tracked as
+[DEPS-03](../.planning/REQUIREMENTS.md) and lives in Phase 10 — that work has not
+happened yet at the time of this writing. The pin commit hash above is cited as a
+fact about the build, not a guarantee of provenance.
+
+### Unaudited
+
+trelis has not undergone a formal third-party security audit at the time of this
+writing. The hybrid suite ships with an EXPERIMENTAL warning ([see
+docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) for the
+full WARNING callout) and is opt-in.
+
+Commissioning or tracking a third-party audit of trelis is
+[AUDIT-01](../.planning/REQUIREMENTS.md), and the default-flip from classic to
+hybrid is gated on it via [AUDIT-02](../.planning/REQUIREMENTS.md). Both items are
+deferred to a later milestone — Phase 9 documents the gap, but does not fill it.
+
+The wrapper layer (sss's `unsafe { ... }` blocks that call into trelis APIs) was
+audited in Phase 8: [see FFI Audit (Phase 8 /
+HARDEN-03)](#ffi-audit-phase-8--harden-03). Result for the wrapper layer:
+production sites 17/17 PASS, zero NEEDS-FIX, zero NEEDS-VERIFY. The Phase 8 audit
+explicitly excluded trelis's own internal C-FFI bindings into `sntrup761`,
+`xeddsa-rs`, etc. — those are the AUDIT-01 surface area.
+
+### Feature-flag gated
+
+The hybrid suite is compiled only when the `hybrid` Cargo feature is enabled. The
+default `cargo build` produces a binary with no trelis code linked at all — only
+libsodium is on the link line. [See docs/CRYPTOGRAPHY.md#feature-gate](./CRYPTOGRAPHY.md#feature-gate)
+for the build-command pair (`cargo build` vs `cargo build --features hybrid`).
+
+The feature flag is the **only** runtime gate. There is no per-invocation toggle, no
+environment variable that disables hybrid in a hybrid build, and no policy file that
+can override the suite a project's `.sss.toml` requests. The threat-model
+consequence: if you build sss with `--features hybrid`, every v2.0 project the
+binary opens will use the hybrid suite, including projects you didn't anticipate.
+
+Conversely, a default (classic-only) build is incapable of opening v2.0 projects —
+it will emit the SUITE-04 actionable error and exit. This is the recommended
+posture for any deployment that has not signed off on the trelis audit gap.
+
+### Mitigation options for teams
+
+Three options exist for teams evaluating whether to enable the hybrid suite:
+
+1. **Classic-only build (recommended default).** Use the default `cargo build` and
+   do not enable the `hybrid` feature. v2.0 projects cannot be opened by this
+   binary, but no trelis code is linked, the supply-chain surface is libsodium-only,
+   and there is no exposure to the AUDIT-01 gap. This is the appropriate posture
+   for production deployments that need maturity-of-cryptography assurance today.
+
+2. **Hybrid build with documented acceptance.** Use `cargo build --features hybrid`
+   and explicitly record acceptance of the trelis audit gap in the team's threat
+   register. This posture is appropriate when post-quantum-readiness for repo-key
+   wrapping is a hard requirement and the team has independently reviewed the
+   trelis source or is willing to accept the residual risk. Note that the on-disk
+   AEAD ciphertexts in `⊠{...}` markers are NOT affected — those use libsodium
+   XChaCha20-Poly1305 in both suites ([see byte-identical ciphertexts
+   invariant](./CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant)). The trelis
+   exposure is bounded to per-user `.sss.toml` `sealed_key` entries.
+
+3. **Wait for AUDIT-01 + AUDIT-02.** Track
+   [AUDIT-01](../.planning/REQUIREMENTS.md) (third-party audit) and
+   [AUDIT-02](../.planning/REQUIREMENTS.md) (default flip), and re-evaluate when
+   both land. Until then, classic remains the recommended default per the
+   [Cryptographic Suite Selection](#cryptographic-suite-selection) recommendation
+   and the existing entry in the [Does Not Protect
+   Against](#does-not-protect-against) table for "trelis library vulnerabilities or
+   supply-chain compromise".
+
+### Where else this is documented
+
+Trelis-specific risk material elsewhere in this document and the algorithmic spec:
+
+- [Cryptographic Suite Selection](#cryptographic-suite-selection) — the
+  recommendation that classic remains the default until trelis is audited.
+- [Does Not Protect Against](#does-not-protect-against) — the table row "trelis
+  library vulnerabilities or supply-chain compromise".
+- [FFI Audit (Phase 8 / HARDEN-03)](#ffi-audit-phase-8--harden-03) — Out-of-Scope
+  sub-section, naming the vendored trelis source as AUDIT-01 territory.
+- [Per-Suite Threat Tables](#per-suite-threat-tables) — Audit pedigree row in the
+  Divergent assumptions table.
+- [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) — the
+  WARNING callout and the full algorithmic spec.
+- [docs/CRYPTOGRAPHY.md#classic-vs-hybrid-comparison](./CRYPTOGRAPHY.md#classic-vs-hybrid-comparison)
+  — the audit-status row in the comparison table.
+
+---
+
 ## Deterministic Nonces
 
 sss uses deterministic nonce derivation rather than random nonces. This is a deliberate design choice to produce clean git diffs.

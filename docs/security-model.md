@@ -57,7 +57,7 @@ Migration never touches file content.
 
 ## Key Derivation (Argon2id)
 
-When a user generates a key pair with a passphrase, the passphrase is not used directly. Instead, sss derives a 256-bit wrapping key using Argon2id (variant `ALG_ARGON2ID13` from libsodium `crypto_pwhash`). This wrapping key encrypts the user's private key on disk.
+When a user generates a key pair with a passphrase, the passphrase is not used directly. Instead, sss derives a 256-bit wrapping key using Argon2id (variant `ALG_ARGON2ID13` from libsodium `crypto_pwhash`). This wrapping key encrypts the user's private key on disk. [See `docs/CRYPTOGRAPHY.md#key-derivation`](./CRYPTOGRAPHY.md#key-derivation) for the algorithmic specification.
 
 Three parameter levels are supported, selectable via `--kdf-level` or the `SSS_KDF_LEVEL` environment variable:
 
@@ -75,7 +75,7 @@ The default for keystore operations is `sensitive`. A random 128-bit (16-byte) s
 
 The following data is encrypted at rest:
 
-1. **Secret content inside `⊠{...}` markers** — The ciphertext payload. Encrypted with XChaCha20-Poly1305 using the repository key and a deterministically derived nonce. See [marker-format.md](./marker-format.md) for the precise binary layout.
+1. **Secret content inside `⊠{...}` markers** — The ciphertext payload. Encrypted with XChaCha20-Poly1305 using the repository key and a deterministically derived nonce. See [marker-format.md](./marker-format.md) for the precise binary layout, and [`docs/CRYPTOGRAPHY.md#symmetric-encryption`](./CRYPTOGRAPHY.md#symmetric-encryption) for the AEAD primitive specification.
 
 2. **The repository symmetric key in `.sss.toml`** — Each authorised user's entry has a `sealed_key` field. This contains the repository key encrypted with that user's public key via `crypto_box_seal` (X25519 key exchange + XSalsa20-Poly1305). Only the holder of the corresponding private key can recover the repository key.
 
@@ -107,9 +107,9 @@ The following data is visible to anyone with access to the repository or file sy
 | Repository made public after sealing | Repository key is sealed per-user; no global shared secret |
 | Files shared with untrusted third parties | Sealed markers cannot be decrypted without the repository key |
 | Offline brute-force attack on private key passphrase | Argon2id with `sensitive` parameters (~4 passes, 256 MiB RAM) |
-| Ciphertext tampering | Poly1305 MAC authentication; tampered ciphertexts are rejected |
+| Ciphertext tampering | Poly1305 MAC authentication; tampered ciphertexts are rejected ([see `docs/CRYPTOGRAPHY.md#symmetric-encryption`](./CRYPTOGRAPHY.md#symmetric-encryption)) |
 | Sensitive data in memory after use | `zeroize` crate: keys and plaintext are overwritten when they go out of scope |
-| Harvest-now-decrypt-later attack by a quantum-capable adversary | Hybrid suite (opt-in): sntrup761 lattice KEM provides post-quantum security for repo-key wrapping; classic suite does not protect against quantum adversaries |
+| Harvest-now-decrypt-later attack by a quantum-capable adversary | Hybrid suite (opt-in): sntrup761 lattice KEM provides post-quantum security for repo-key wrapping; classic suite does not protect against quantum adversaries ([see `docs/CRYPTOGRAPHY.md#hybrid-suite-v20`](./CRYPTOGRAPHY.md#hybrid-suite-v20)) |
 
 ### Does Not Protect Against
 
@@ -174,7 +174,7 @@ co-located in `~/.config/sss/keys/<uuid>.toml`). The threat surface this creates
 - **Compromise of one private key (e.g. via differential cryptanalysis of one
   primitive) does not directly compromise the other.** Classic relies on X25519 DLP
   hardness; hybrid relies on X448 DLP hardness combined with sntrup761 lattice
-  hardness. A break of X25519 alone leaves the hybrid private key intact; conversely a
+  hardness ([see `docs/CRYPTOGRAPHY.md#hybrid-suite-v20`](./CRYPTOGRAPHY.md#hybrid-suite-v20) for the algorithmic detail). A break of X25519 alone leaves the hybrid private key intact; conversely a
   break of either X448 or sntrup761 alone leaves the classic private key intact.
   [See Per-Suite Threat Tables](#per-suite-threat-tables) for the divergent assumptions.
 - **Disk-level theft + passphrase compromise = total loss for that user.** This is the
@@ -368,7 +368,7 @@ Trelis-specific risk material elsewhere in this document and the algorithmic spe
 
 sss uses deterministic nonce derivation rather than random nonces. This is a deliberate design choice to produce clean git diffs.
 
-**How it works:** The 24-byte nonce is derived via BLAKE2b in keyed mode, using the repository key as the BLAKE2b key and the following input:
+**How it works:** The 24-byte nonce is derived via BLAKE2b in keyed mode, using the repository key as the BLAKE2b key and the following input ([see `docs/CRYPTOGRAPHY.md#nonce-derivation`](./CRYPTOGRAPHY.md#nonce-derivation) for the algorithmic specification):
 
 ```
 project_timestamp || NUL || file_path || NUL || plaintext

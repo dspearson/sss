@@ -941,12 +941,19 @@ impl Keystore {
             let encrypted_data =
                 base64::prelude::BASE64_STANDARD.decode(&stored.encrypted_secret_key)
                     .map_err(|e| anyhow!("keystore: base64-decode-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
-            let decrypted_data =
+            // HARDEN-04 / 08-04: the decrypted plaintext is the base64 of the
+            // raw secret-key bytes — wrap in Zeroizing<Vec<u8>> so the buffer
+            // is cleared on drop (T-08-16). The follow-on `secret_key_b64`
+            // String is wrapped for the same reason.
+            let decrypted_data: zeroize::Zeroizing<Vec<u8>> = zeroize::Zeroizing::new(
                 crate::crypto::decrypt(&encrypted_data, &derived_key.to_encryption_key())
-                    .map_err(|e| anyhow!("keystore: aead-decrypt-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
+                    .map_err(|e| anyhow!("keystore: aead-decrypt-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?
+            );
 
-            let secret_key_b64 = String::from_utf8(decrypted_data)
-                .map_err(|e| anyhow!("keystore: utf8-decrypted-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
+            let secret_key_b64: zeroize::Zeroizing<String> = zeroize::Zeroizing::new(
+                String::from_utf8(decrypted_data.to_vec())
+                    .map_err(|e| anyhow!("keystore: utf8-decrypted-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?
+            );
             SecretKey::from_base64(&secret_key_b64)
                 .map_err(|e| anyhow!("keystore: parse-secret-key (decrypt_stored_keypair, pw) for key_id={}: {}", stored.uuid, e))?
         } else {

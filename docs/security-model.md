@@ -131,6 +131,132 @@ The following data is visible to anyone with access to the repository or file sy
 
 ---
 
+## Hybrid Trust Boundaries (v2.0)
+
+The hybrid suite (selected by `version = "2.0"` in `.sss.toml`) extends the v1.0 threat
+model along three axes that classic does not cover. This section names the boundaries;
+[docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) owns the
+algorithmic spec, and the [Per-Suite Threat Tables](#per-suite-threat-tables) section
+below structures the same material as a side-by-side comparison.
+
+### Agent-protocol suite-dispatch boundary
+
+`sss-agent` mediates per-process key access on behalf of CLI invocations. As of Phase 8
+(CR-01 resolution; see [FFI Audit](#ffi-audit-phase-8--harden-03)), the agent-protocol
+wire format carries an explicit suite selector:
+
+- `PROTOCOL_VERSION = 2` (`src/agent_protocol.rs`).
+- `AgentRequest.suite: Option<u32>` is encoded on the wire as `0xFFFFFFFF`
+  (`SUITE_WIRE_ABSENT` — absent / Classic-by-default for v1 back-compat), `0`
+  (`SUITE_WIRE_CLASSIC`), or `1` (`SUITE_WIRE_HYBRID`). Any other value is a hard
+  wire-format error: the request is rejected before any suite-specific dispatch can
+  occur.
+- The agent dispatches via `suite_for(request.suite)?` (in `src/bin/sss-agent.rs`), so
+  the agent never silently downgrades a v2 hybrid request to classic.
+- v1 frames (no suite field present) are accepted with `suite = None`, interpreted as
+  Classic; this preserves back-compat with v1 clients during a rolling upgrade.
+
+The boundary's threat-model significance: a malicious or misconfigured client that
+sends a hybrid request with the wrong wire-format suite value is rejected at the
+agent's parse layer, before the agent attempts to unseal a hybrid `K` with the classic
+`crypto_box_seal_open` (which would fail catastrophically on a 1167-byte sealed key
+presented to a 80-byte-expecting decryption path).
+
+### Dual-keystore implications
+
+A user with both classic and hybrid keypairs has both private keys encrypted under the
+same Argon2id-derived wrapping key (one passphrase per keystore entry; both keys
+co-located in `~/.config/sss/keys/<uuid>.toml`). The threat surface this creates:
+
+- **Compromise of the user's passphrase compromises both private keys.** There is no
+  cryptographic separation at the keystore-wrapping layer — both are AEAD-sealed under
+  the same derived key.
+- **Compromise of one private key (e.g. via differential cryptanalysis of one
+  primitive) does not directly compromise the other.** Classic relies on X25519 DLP
+  hardness; hybrid relies on X448 DLP hardness combined with sntrup761 lattice
+  hardness. A break of X25519 alone leaves the hybrid private key intact; conversely a
+  break of either X448 or sntrup761 alone leaves the classic private key intact.
+  [See Per-Suite Threat Tables](#per-suite-threat-tables) for the divergent assumptions.
+- **Disk-level theft + passphrase compromise = total loss for that user.** This is the
+  same model as v1.0; hybrid does not strengthen the keystore-wrapping layer because
+  the wrapping key is symmetric (Argon2id → XChaCha20-Poly1305) regardless of which
+  asymmetric primitive the wrapped key is for.
+- **Both keypair types are zeroised on drop.** `HybridKemKeypair` carries `ZeroizeOnDrop`
+  via the trelis upstream type; classic `KeyPair` carries it via the wrapper. See the
+  [Zeroisation](#zeroisation-phase-8--harden-04-audit-input) section for the full
+  disposition table.
+
+### `sss migrate` safety properties
+
+The `sss migrate` subcommand re-wraps the repository key `K` per user under the hybrid
+suite. Its safety properties:
+
+- **In-file ciphertexts are never touched.** The `⊠{...}` markers in source files are
+  byte-identical regardless of which suite wrapped `K`, because both suites seal the
+  same `K` and the AEAD layer (XChaCha20-Poly1305 with the BLAKE2b-derived
+  deterministic nonce) is identical across suites. See
+  [docs/CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant](./CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant)
+  for the algorithmic basis.
+- **`--dry-run` is determinism-preserving.** Two `--dry-run` invocations on the same
+  repository state produce identical previews; the dry-run never writes to disk.
+- **A user without a hybrid public key is a hard error, not a silent skip.** Migration
+  that cannot complete for a user (no hybrid public key registered for that user)
+  aborts with a clean error before `.sss.toml` is rewritten. The pre-migrate
+  `.sss.toml` remains intact on disk.
+- **`.sss.toml` rewrites are atomic at the filesystem layer.** The new `.sss.toml` is
+  written to a temp file in the same directory and `rename(2)`d into place, so a crash
+  mid-migration leaves either the old or the new file complete.
+- **Idempotency.** Migrating an already-v2.0 project is a no-op (the version-field
+  gate at `src/project.rs` detects v2.0 and returns Ok before any wrap operation runs).
+
+---
+
+## Per-Suite Threat Tables
+
+The aggregate [Protects Against](#protects-against) and [Does Not Protect
+Against](#does-not-protect-against) tables above describe what the project as a whole
+addresses. The two tables in this section break that down per suite, so a reader can
+answer "given a v1.0 vs v2.0 project, which mathematical assumptions am I relying on?"
+without inferring it from the prose.
+
+The full algorithmic spec for each primitive lives in
+[docs/CRYPTOGRAPHY.md](./CRYPTOGRAPHY.md); this table cites the primitive by name and
+cross-references the spec.
+
+### Divergent assumptions (per suite)
+
+| Property | Classic (v1.0) | Hybrid (v2.0) |
+|----------|----------------|----------------|
+| KEM hardness | X25519 ECDH ([Curve25519 DLP](./CRYPTOGRAPHY.md#asymmetric-encryption)) | X448 ECDH (Curve448 DLP) **and** sntrup761 (Streamlined NTRU Prime lattice problem); see [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) |
+| Per-message AEAD on the sealed key | XSalsa20-Poly1305 (sealed-box internal; libsodium) | XChaCha20-Poly1305; see [docs/CRYPTOGRAPHY.md#symmetric-encryption](./CRYPTOGRAPHY.md#symmetric-encryption) |
+| KDF for repo-key wrapping | Implicit in `crypto_box_seal` (no separate KDF step) | BLAKE3 `derive_key("sss hybrid kem v1", shared)`; see [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) |
+| Quantum resistance (KEM layer) | None — broken by Shor's algorithm against X25519 | sntrup761 lattice KEM is believed resistant to known quantum attacks |
+| Audit pedigree | libsodium (extensively reviewed; long deployment history) | trelis (vendored at pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`; **unaudited** — see [Trelis Attack Surface](#trelis-attack-surface) and `AUDIT-01` in `.planning/REQUIREMENTS.md`) |
+| Sealed-key size on disk | 80 bytes per user entry | 1167 bytes per user entry (~1448 base64 chars); see [docs/CRYPTOGRAPHY.md#classic-vs-hybrid-comparison](./CRYPTOGRAPHY.md#classic-vs-hybrid-comparison) |
+
+### Shared assumptions (both suites)
+
+| Shared assumption | Both suites |
+|-------------------|-------------|
+| In-file AEAD on secret content | XChaCha20-Poly1305 — byte-identical ciphertext invariant; see [docs/CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant](./CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant) |
+| Nonce derivation for in-file AEAD | BLAKE2b-192 keyed with the repository key, personalisation `"sss_autononce_v1"`; see [Deterministic Nonces](#deterministic-nonces) and [docs/CRYPTOGRAPHY.md#nonce-derivation](./CRYPTOGRAPHY.md#nonce-derivation) |
+| Passphrase KDF for keystore wrapping | Argon2id v1.3 with `sensitive` parameters (~4 ops, 256 MiB); see [Key Derivation (Argon2id)](#key-derivation-argon2id) and [docs/CRYPTOGRAPHY.md#key-derivation](./CRYPTOGRAPHY.md#key-derivation) |
+| Zeroisation on drop for secret-bearing types | `ZeroizeOnDrop` on `RepositoryKey`, `SecretKey`, `DerivedKey`, `Salt`, plus upstream `trelis_hybrid::HybridKemKeypair` / `HybridSharedSecret`; transient buffers wrapped in `Zeroizing<T>`; see [Zeroisation](#zeroisation-phase-8--harden-04-audit-input) |
+| Determinism of in-file AEAD | Same `(K, path, plaintext, timestamp)` → same ciphertext, regardless of suite — load-bearing for clean git diffs |
+| DoS protection (marker / file size limits) | `MAX_MARKER_CONTENT_SIZE = 100 MB`, `MAX_FILE_SIZE = 100 MB`; see [DoS Protection](#dos-protection) |
+
+### Reading the tables together
+
+The aggregate tables answer "what does sss protect against?". These per-suite tables
+answer "given my chosen suite, on which primitives does that protection rest?". A
+reader picking between v1.0 and v2.0 should consult both. A reviewer evaluating sss
+against a specific threat (e.g. harvest-now-decrypt-later by a quantum adversary)
+should follow the row that touches their threat — that row's "Classic" column will
+state where the protection is absent, and the "Hybrid" column will state which
+additional assumption is now in play.
+
+---
+
 ## Deterministic Nonces
 
 sss uses deterministic nonce derivation rather than random nonces. This is a deliberate design choice to produce clean git diffs.

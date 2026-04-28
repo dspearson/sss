@@ -648,21 +648,24 @@ impl Keystore {
                         let salt = crate::kdf::Salt::new();
                         let dk = crate::kdf::DerivedKey::derive_with_params(
                             pw, &salt, &self.kdf_params,
-                        )?;
+                        )
+                            .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
                         let enc_key = dk.to_encryption_key();
 
                         // Classic secret — standard path (32-byte key, base64 string)
                         let classic_sk_b64 =
                             KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
                         let enc_classic =
-                            crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)?;
+                            crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)
+                                .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
 
                         // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
                         // avoid copying into a non-Zeroizing buffer (T-03-02).
                         let hybrid_sk_b64 =
                             BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
                         let enc_hybrid =
-                            crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)?;
+                            crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)
+                                .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
 
                         (enc_classic, enc_hybrid, Some(salt.to_base64()), true)
                     } else {
@@ -694,16 +697,20 @@ impl Keystore {
                 };
 
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
-                let content = toml::to_string_pretty(&stored)?;
-                fs::write(&key_file, content)?;
+                let content = toml::to_string_pretty(&stored)
+                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                fs::write(&key_file, content)
+                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
 
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let metadata = fs::metadata(&key_file)?;
+                    let metadata = fs::metadata(&key_file)
+                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
                     let mut perms = metadata.permissions();
                     perms.set_mode(0o600);
-                    fs::set_permissions(&key_file, perms)?;
+                    fs::set_permissions(&key_file, perms)
+                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
                 }
 
                 self.set_current_key(&key_id)?;
@@ -718,8 +725,10 @@ impl Keystore {
                     return Err(anyhow!("Key file not found: {key_id}"));
                 }
 
-                let content = fs::read_to_string(&key_file)?;
-                let mut stored: StoredKeyPair = toml::from_str(&content)?;
+                let content = fs::read_to_string(&key_file)
+                    .map_err(|e| anyhow!("keystore: read key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                let mut stored: StoredKeyPair = toml::from_str(&content)
+                    .map_err(|e| anyhow!("keystore: parse-stored-toml (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
 
                 // Guard: refuse to overwrite existing hybrid material (T-03-03)
                 if stored.hybrid_public_key.is_some() {
@@ -739,16 +748,19 @@ impl Keystore {
                     let salt_str = stored.salt.as_ref().ok_or_else(|| {
                         anyhow!("Salt missing for password-protected key")
                     })?;
-                    let salt = crate::kdf::Salt::from_base64(salt_str)?;
+                    let salt = crate::kdf::Salt::from_base64(salt_str)
+                        .map_err(|e| anyhow!("keystore: salt-decode (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
                     let dk = crate::kdf::DerivedKey::derive_with_params(
                         pw, &salt, &self.kdf_params,
-                    )?;
+                    )
+                        .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
                     let hybrid_sk_b64 =
                         BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
                     crate::crypto::encrypt_to_base64(
                         &hybrid_sk_b64,
                         &dk.to_encryption_key(),
-                    )?
+                    )
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?
                 } else {
                     // Passwordless — store raw base64
                     BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref())
@@ -759,16 +771,20 @@ impl Keystore {
                     Some(BASE64_STANDARD.encode(&hybrid.public_bytes));
                 stored.hybrid_encrypted_secret_key = Some(enc_hybrid);
 
-                let updated_content = toml::to_string_pretty(&stored)?;
-                fs::write(&key_file, updated_content)?;
+                let updated_content = toml::to_string_pretty(&stored)
+                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                fs::write(&key_file, updated_content)
+                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
 
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    let metadata = fs::metadata(&key_file)?;
+                    let metadata = fs::metadata(&key_file)
+                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
                     let mut perms = metadata.permissions();
                     perms.set_mode(0o600);
-                    fs::set_permissions(&key_file, perms)?;
+                    fs::set_permissions(&key_file, perms)
+                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
                 }
 
                 Ok(key_id)
@@ -800,8 +816,10 @@ impl Keystore {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
 
-        let content = fs::read_to_string(&key_file)?;
-        let stored: StoredKeyPair = toml::from_str(&content)?;
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+        let stored: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
 
         // Guard: no hybrid material stored
         let hybrid_pub_b64 = stored.hybrid_public_key.ok_or_else(|| {
@@ -823,17 +841,26 @@ impl Keystore {
             let salt_str = stored.salt.as_ref().ok_or_else(|| {
                 anyhow!("Salt missing for password-protected key")
             })?;
-            let salt = crate::kdf::Salt::from_base64(salt_str)?;
+            let salt = crate::kdf::Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
             let dk = crate::kdf::DerivedKey::derive_with_params(
                 pw, &salt, &self.kdf_params,
-            )?;
-            let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?;
-            let decrypted = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())?);
+            )
+                .map_err(|e| anyhow!("keystore: kdf-derive (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+            let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+            let decrypted = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
+                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (load_hybrid_keypair) for key_id={}: {}", key_id, e))?);
             // decrypted is the base64 string of the raw secret bytes
-            Zeroizing::new(BASE64_STANDARD.decode(std::str::from_utf8(&decrypted)?)?)
+            Zeroizing::new(BASE64_STANDARD.decode(
+                std::str::from_utf8(&decrypted)
+                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (load_hybrid_keypair) for key_id={}: {}", key_id, e))?
+            )
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (load_hybrid_keypair) for key_id={}: {}", key_id, e))?)
         } else {
             // Passwordless — stored as raw base64
-            Zeroizing::new(BASE64_STANDARD.decode(&hybrid_enc_sk_b64)?)
+            Zeroizing::new(BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair, passwordless) for key_id={}: {}", key_id, e))?)
         };
 
         if raw_secret_bytes.len() != HYBRID_SECRET_KEY_SIZE {
@@ -845,7 +872,8 @@ impl Keystore {
         }
 
         // Reconstruct public bytes
-        let pub_bytes_raw = BASE64_STANDARD.decode(&hybrid_pub_b64)?;
+        let pub_bytes_raw = BASE64_STANDARD.decode(&hybrid_pub_b64)
+            .map_err(|e| anyhow!("keystore: base64-decode-hybrid-public-key (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
         if pub_bytes_raw.len() != HYBRID_PUBLIC_KEY_SIZE {
             return Err(anyhow!(
                 "hybrid public key wrong length: expected {} bytes, got {}",

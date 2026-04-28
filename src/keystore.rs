@@ -266,8 +266,10 @@ impl Keystore {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
 
-        let content = fs::read_to_string(&key_file)?;
-        let stored_keypair: StoredKeyPair = toml::from_str(&content)?;
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file for key_id={}: {}", key_id, e))?;
+        let stored_keypair: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={}: {}", key_id, e))?;
 
         self.decrypt_stored_keypair(&stored_keypair, password)
     }
@@ -843,8 +845,10 @@ impl Keystore {
 
         let secret_key = if stored.in_keyring {
             // Retrieve from system keyring
-            let secret_key_b64 = keyring_support::get_key_from_keyring(&stored.uuid)?;
-            SecretKey::from_base64(&secret_key_b64)?
+            let secret_key_b64 = keyring_support::get_key_from_keyring(&stored.uuid)
+                .map_err(|e| anyhow!("keystore: keyring-fetch for key_id={}: {}", stored.uuid, e))?;
+            SecretKey::from_base64(&secret_key_b64)
+                .map_err(|e| anyhow!("keystore: parse-secret-key (keyring) for key_id={}: {}", stored.uuid, e))?
         } else if stored.is_password_protected {
             let password =
                 password.ok_or_else(|| anyhow!("Password required for encrypted key"))?;
@@ -853,18 +857,25 @@ impl Keystore {
                 .salt
                 .as_ref()
                 .ok_or_else(|| anyhow!("Salt missing for password-protected key"))?;
-            let salt = crate::kdf::Salt::from_base64(salt)?;
-            let derived_key = crate::kdf::DerivedKey::derive_with_params(password, &salt, &self.kdf_params)?;
+            let salt = crate::kdf::Salt::from_base64(salt)
+                .map_err(|e| anyhow!("keystore: salt-decode (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
+            let derived_key = crate::kdf::DerivedKey::derive_with_params(password, &salt, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
 
             let encrypted_data =
-                base64::prelude::BASE64_STANDARD.decode(&stored.encrypted_secret_key)?;
+                base64::prelude::BASE64_STANDARD.decode(&stored.encrypted_secret_key)
+                    .map_err(|e| anyhow!("keystore: base64-decode-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
             let decrypted_data =
-                crate::crypto::decrypt(&encrypted_data, &derived_key.to_encryption_key())?;
+                crate::crypto::decrypt(&encrypted_data, &derived_key.to_encryption_key())
+                    .map_err(|e| anyhow!("keystore: aead-decrypt-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
 
-            let secret_key_b64 = String::from_utf8(decrypted_data)?;
-            SecretKey::from_base64(&secret_key_b64)?
+            let secret_key_b64 = String::from_utf8(decrypted_data)
+                .map_err(|e| anyhow!("keystore: utf8-decrypted-secret-key (decrypt_stored_keypair) for key_id={}: {}", stored.uuid, e))?;
+            SecretKey::from_base64(&secret_key_b64)
+                .map_err(|e| anyhow!("keystore: parse-secret-key (decrypt_stored_keypair, pw) for key_id={}: {}", stored.uuid, e))?
         } else {
-            SecretKey::from_base64(&stored.encrypted_secret_key)?
+            SecretKey::from_base64(&stored.encrypted_secret_key)
+                .map_err(|e| anyhow!("keystore: parse-secret-key (decrypt_stored_keypair, passwordless) for key_id={}: {}", stored.uuid, e))?
         };
 
         Ok(KeyPair::Classic(ClassicKeyPair {

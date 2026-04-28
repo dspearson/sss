@@ -5,8 +5,11 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::agent_protocol::{AgentRequest, AgentResponse, RequestContext, ResponseStatus};
-use crate::crypto::RepositoryKey;
+use crate::agent_protocol::{
+    AgentRequest, AgentResponse, RequestContext, ResponseStatus, SUITE_WIRE_CLASSIC,
+    SUITE_WIRE_HYBRID,
+};
+use crate::crypto::{RepositoryKey, Suite};
 
 /// Agent client for communicating with sss-agent
 pub struct AgentClient {
@@ -43,16 +46,24 @@ impl AgentClient {
         }
     }
 
-    /// Request the agent to unseal a repository key
+    /// Request the agent to unseal a repository key for the caller's suite.
+    ///
+    /// CR-01 / 08-03: the suite is threaded through the protocol so the agent
+    /// dispatches via `suite_for(suite)` instead of hardcoding `ClassicSuite`.
     pub fn unseal_repository_key(
         &self,
         sealed_key: &str,
         context: RequestContext,
+        suite: Suite,
     ) -> Result<RepositoryKey> {
         let mut stream = self.connect()?;
 
-        // Send request
-        let request = AgentRequest::unseal(sealed_key.to_string(), context);
+        // Send request — map Suite to its wire-format word.
+        let suite_word = match suite {
+            Suite::Classic => SUITE_WIRE_CLASSIC,
+            Suite::Hybrid => SUITE_WIRE_HYBRID,
+        };
+        let request = AgentRequest::unseal(sealed_key.to_string(), context, suite_word);
         request.write_to(&mut stream)?;
 
         // Receive response
@@ -115,10 +126,18 @@ pub fn is_agent_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Unseal a repository key using the agent
-pub fn unseal_with_agent(sealed_key: &str, context: RequestContext) -> Result<RepositoryKey> {
+/// Unseal a repository key using the agent.
+///
+/// CR-01 / 08-03: callers must pass the project's resolved `Suite` so the
+/// agent routes through `suite_for(suite)` instead of the legacy hardcoded
+/// `ClassicSuite`.
+pub fn unseal_with_agent(
+    sealed_key: &str,
+    context: RequestContext,
+    suite: Suite,
+) -> Result<RepositoryKey> {
     let client = AgentClient::new()?;
-    client.unseal_repository_key(sealed_key, context)
+    client.unseal_repository_key(sealed_key, context, suite)
 }
 
 #[cfg(test)]

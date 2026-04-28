@@ -322,8 +322,10 @@ fn load_project_config_internal<P: AsRef<Path>>(
                     crate::agent_protocol::RequestContext::from_environment(username.clone());
                 context.project_path = Some(actual_config_path.display().to_string());
 
-                // Request unsealing from agent
-                match crate::agent::unseal_with_agent(&sealed_key, context) {
+                // Request unsealing from agent — thread the resolved suite
+                // through so the agent dispatches via suite_for(suite) (CR-01
+                // / 08-03).
+                match crate::agent::unseal_with_agent(&sealed_key, context, suite_enum) {
                     Ok(key) => key,
                     Err(e) => {
                         eprintln!(

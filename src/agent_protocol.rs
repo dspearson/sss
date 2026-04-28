@@ -5,8 +5,23 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::time::SystemTime;
 
-/// Protocol version for compatibility checking
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Protocol version for compatibility checking.
+///
+/// Version 1: original wire format (no suite field).
+/// Version 2 (current): adds a trailing `suite: u32` field on `AgentRequest`,
+/// encoded as `0xFFFFFFFF` = absent / Classic-by-default (for v1 back-compat),
+/// `0` = Classic, `1` = Hybrid. Any other value is a hard wire-format error.
+///
+/// The agent accepts both v1 and v2 frames so older clients keep working
+/// during the transition (08-03 / CR-01). New clients always send v2.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Wire-format constants for the `AgentRequest::suite` field. These map to
+/// `Option<crate::crypto::Suite>` at the dispatch boundary (`sss-agent`'s
+/// `RequestType::UnsealRepositoryKey` arm, see CR-01 / 08-03).
+pub const SUITE_WIRE_ABSENT: u32 = 0xFFFF_FFFF;
+pub const SUITE_WIRE_CLASSIC: u32 = 0;
+pub const SUITE_WIRE_HYBRID: u32 = 1;
 
 /// Maximum size for a request (10MB)
 const MAX_REQUEST_SIZE: u32 = 10 * 1024 * 1024;
@@ -124,21 +139,44 @@ impl RequestContext {
     }
 }
 
-/// Agent request message
+/// Agent request message.
+///
+/// Wire format (version 2):
+/// `[u32 version][u32 request_type][u32 sealed_len][sealed_bytes...]`
+/// `[u32 context_len][context_bytes...][u32 suite]`
+///
+/// `suite` encoding (CR-01 / 08-03):
+/// - `SUITE_WIRE_ABSENT` (`0xFFFFFFFF`): no suite specified — agent treats as
+///   Classic for v1 back-compat.
+/// - `SUITE_WIRE_CLASSIC` (`0`): Classic (libsodium `crypto_box_seal`).
+/// - `SUITE_WIRE_HYBRID` (`1`): Hybrid (trelis X448 + sntrup761 + BLAKE3).
+/// - any other value: hard wire-format error (no silent default).
+///
+/// Wire format (version 1, accepted for back-compat): identical to v2 but
+/// without the trailing `suite` u32. Agent treats v1 frames as
+/// `suite = SUITE_WIRE_ABSENT` at dispatch.
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
     pub request_type: RequestType,
     pub sealed_key: Option<String>,
     pub context: Option<RequestContext>,
+    /// Suite selector — `Some(SUITE_WIRE_CLASSIC)` for Classic,
+    /// `Some(SUITE_WIRE_HYBRID)` for Hybrid, `None` for v1-frame-back-compat
+    /// or pings. Maps to `Option<crate::crypto::Suite>` at dispatch.
+    pub suite: Option<u32>,
 }
 
 impl AgentRequest {
-    /// Create a new unsealing request
-    pub fn unseal(sealed_key: String, context: RequestContext) -> Self {
+    /// Create a new unsealing request for a specific suite. The `suite`
+    /// argument is the wire-format `u32` (use `SUITE_WIRE_CLASSIC` /
+    /// `SUITE_WIRE_HYBRID`); pass `SUITE_WIRE_ABSENT` only for v1
+    /// back-compat tests, never for production traffic.
+    pub fn unseal(sealed_key: String, context: RequestContext, suite: u32) -> Self {
         Self {
             request_type: RequestType::UnsealRepositoryKey,
             sealed_key: Some(sealed_key),
             context: Some(context),
+            suite: Some(suite),
         }
     }
 
@@ -148,10 +186,12 @@ impl AgentRequest {
             request_type: RequestType::Ping,
             sealed_key: None,
             context: None,
+            suite: None,
         }
     }
 
-    /// Write request to a stream
+    /// Write request to a stream (always uses the current `PROTOCOL_VERSION`
+    /// = 2 wire format).
     pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<()> {
         // Write protocol version
         writer.write_all(&PROTOCOL_VERSION.to_le_bytes())?;
@@ -178,20 +218,27 @@ impl AgentRequest {
             writer.write_all(&0u32.to_le_bytes())?;
         }
 
+        // Write suite (v2 trailing field). Absent → SUITE_WIRE_ABSENT sentinel
+        // (v1 back-compat path on read; on write we always send v2).
+        let suite_word = self.suite.unwrap_or(SUITE_WIRE_ABSENT);
+        writer.write_all(&suite_word.to_le_bytes())?;
+
         writer.flush()?;
         Ok(())
     }
 
-    /// Read request from a stream
+    /// Read request from a stream. Accepts both v1 and v2 frames; v1 frames
+    /// produce `suite = None` (CR-01 / 08-03 back-compat).
     pub fn read_from<R: Read>(reader: &mut R) -> Result<Self> {
         // Read protocol version
         let mut version_buf = [0u8; 4];
         reader.read_exact(&mut version_buf)?;
         let version = u32::from_le_bytes(version_buf);
 
-        if version != PROTOCOL_VERSION {
+        // Accept v1 and v2; reject anything else with an actionable error.
+        if version != 1 && version != PROTOCOL_VERSION {
             return Err(anyhow!(
-                "Protocol version mismatch: expected {}, got {}",
+                "Protocol version mismatch: expected 1 or {}, got {}",
                 PROTOCOL_VERSION,
                 version
             ));
@@ -234,10 +281,36 @@ impl AgentRequest {
             None
         };
 
+        // Suite field — only present in v2 frames. v1 frames terminate after
+        // the context bytes, so we simply omit the read in that branch.
+        let suite = if version >= 2 {
+            let mut suite_buf = [0u8; 4];
+            reader.read_exact(&mut suite_buf)?;
+            let raw = u32::from_le_bytes(suite_buf);
+            match raw {
+                SUITE_WIRE_ABSENT => None,
+                SUITE_WIRE_CLASSIC | SUITE_WIRE_HYBRID => Some(raw),
+                other => {
+                    return Err(anyhow!(
+                        "Unknown suite wire value: {} (expected {}, {}, or absent {})",
+                        other,
+                        SUITE_WIRE_CLASSIC,
+                        SUITE_WIRE_HYBRID,
+                        SUITE_WIRE_ABSENT
+                    ));
+                }
+            }
+        } else {
+            // v1 frame: no suite field on the wire. None at the type-level
+            // means "treat as Classic at dispatch" (08-03 back-compat).
+            None
+        };
+
         Ok(Self {
             request_type,
             sealed_key,
             context,
+            suite,
         })
     }
 }
@@ -377,7 +450,11 @@ mod tests {
     #[test]
     fn test_request_roundtrip() {
         let context = RequestContext::new("alice".to_string());
-        let request = AgentRequest::unseal("sealed_key_data".to_string(), context);
+        let request = AgentRequest::unseal(
+            "sealed_key_data".to_string(),
+            context,
+            SUITE_WIRE_CLASSIC,
+        );
 
         let mut buffer = Vec::new();
         request.write_to(&mut buffer).unwrap();
@@ -387,6 +464,82 @@ mod tests {
 
         assert_eq!(request.request_type, decoded.request_type);
         assert_eq!(request.sealed_key, decoded.sealed_key);
+        assert_eq!(decoded.suite, Some(SUITE_WIRE_CLASSIC));
+    }
+
+    #[test]
+    fn test_request_roundtrip_v2_hybrid_suite() {
+        // CR-01 / 08-03: v2 frame carries the Hybrid suite selector.
+        let context = RequestContext::new("bob".to_string());
+        let request = AgentRequest::unseal(
+            "sealed_hybrid".to_string(),
+            context,
+            SUITE_WIRE_HYBRID,
+        );
+
+        let mut buffer = Vec::new();
+        request.write_to(&mut buffer).unwrap();
+
+        let mut cursor = Cursor::new(buffer);
+        let decoded = AgentRequest::read_from(&mut cursor).unwrap();
+
+        assert_eq!(decoded.request_type, RequestType::UnsealRepositoryKey);
+        assert_eq!(decoded.sealed_key.as_deref(), Some("sealed_hybrid"));
+        assert_eq!(decoded.suite, Some(SUITE_WIRE_HYBRID));
+    }
+
+    #[test]
+    fn test_request_v1_frame_decodes_with_suite_none() {
+        // CR-01 / 08-03 back-compat: a hand-rolled v1 frame (no trailing suite
+        // u32) must still decode, and the dispatch boundary treats `suite=None`
+        // as Classic.
+        let mut buffer: Vec<u8> = Vec::new();
+        // version = 1
+        buffer.extend_from_slice(&1u32.to_le_bytes());
+        // request_type = UnsealRepositoryKey (1)
+        buffer.extend_from_slice(&(RequestType::UnsealRepositoryKey as u32).to_le_bytes());
+        // sealed_key = "v1_sealed"
+        let sealed = b"v1_sealed";
+        buffer.extend_from_slice(&(sealed.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(sealed);
+        // context = serialized RequestContext
+        let context_json =
+            serde_json::to_string(&RequestContext::new("legacy".to_string())).unwrap();
+        buffer.extend_from_slice(&(context_json.len() as u32).to_le_bytes());
+        buffer.extend_from_slice(context_json.as_bytes());
+        // NO trailing suite field — this is exactly a pre-CR-01 frame.
+
+        let mut cursor = Cursor::new(buffer);
+        let decoded = AgentRequest::read_from(&mut cursor).unwrap();
+
+        assert_eq!(decoded.request_type, RequestType::UnsealRepositoryKey);
+        assert_eq!(decoded.sealed_key.as_deref(), Some("v1_sealed"));
+        assert!(decoded.context.is_some());
+        // The hallmark of a v1 frame: suite is None at the type level.
+        assert!(decoded.suite.is_none());
+    }
+
+    #[test]
+    fn test_request_v2_unknown_suite_word_is_error() {
+        // CR-01 / 08-03: unknown suite word must hard-error rather than
+        // silently default to Classic.
+        let mut buffer: Vec<u8> = Vec::new();
+        buffer.extend_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+        buffer.extend_from_slice(&(RequestType::UnsealRepositoryKey as u32).to_le_bytes());
+        // empty sealed_key
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+        // empty context
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+        // unknown suite word (not 0, 1, or 0xFFFFFFFF)
+        buffer.extend_from_slice(&42u32.to_le_bytes());
+
+        let mut cursor = Cursor::new(buffer);
+        let err = AgentRequest::read_from(&mut cursor).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unknown suite wire value"),
+            "expected 'Unknown suite wire value' error, got: {msg}"
+        );
     }
 
     #[test]

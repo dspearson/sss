@@ -9,10 +9,13 @@ use std::sync::{Arc, Mutex};
 
 // Import SSS modules
 use sss::agent_policy::{PolicyDecision, PolicyManager, UserDecision};
-use sss::agent_protocol::{AgentRequest, AgentResponse, RequestType, ResponseStatus};
+use sss::agent_protocol::{
+    AgentRequest, AgentResponse, RequestType, ResponseStatus, SUITE_WIRE_CLASSIC,
+    SUITE_WIRE_HYBRID,
+};
 use sss::askpass::{prompt_user, AskpassConfig};
 use sss::audit_log::{AuditEvent, AuditLogger, RateLimiter};
-use sss::crypto::{ClassicSuite, CryptoSuite, KeyPair};
+use sss::crypto::{suite_for, KeyPair, Suite};
 use sss::keystore::{get_passphrase_or_prompt, Keystore};
 
 /// SSS Agent - Key Management Daemon
@@ -232,8 +235,50 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
                 UserDecision::DenyOnce => AgentResponse::denied(),
                 UserDecision::DenyAll => AgentResponse::locked(),
                 UserDecision::AllowOnce | UserDecision::AllowAlways => {
-                    // Unseal the repository key
-                    match ClassicSuite.open_repo_key(&sealed_key, &state.keypair) {
+                    // CR-01 / 08-03: dispatch through suite_for(suite) instead
+                    // of hardcoding ClassicSuite. The wire-format `suite`
+                    // field is mapped here:
+                    //   None or SUITE_WIRE_CLASSIC → Suite::Classic (v1
+                    //     back-compat retains the legacy behaviour)
+                    //   SUITE_WIRE_HYBRID         → Suite::Hybrid
+                    //   any other value           → wire-format error
+                    //     (already rejected at AgentRequest::read_from)
+                    let suite = match request.suite {
+                        None | Some(SUITE_WIRE_CLASSIC) => Suite::Classic,
+                        Some(SUITE_WIRE_HYBRID) => Suite::Hybrid,
+                        Some(other) => {
+                            // Defence-in-depth: AgentRequest::read_from has
+                            // already rejected unknown words, but we must not
+                            // silently default if a future change widens that
+                            // gate.
+                            state.audit_logger.log(
+                                AuditEvent::Error,
+                                &format!("Unknown suite wire value: {}", other),
+                            )?;
+                            let response = AgentResponse::error(format!(
+                                "Unknown suite wire value: {}",
+                                other
+                            ));
+                            response.write_to(&mut stream)?;
+                            return Ok(());
+                        }
+                    };
+                    let crypto_suite = match suite_for(suite) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            state
+                                .audit_logger
+                                .log(AuditEvent::Error, &format!("suite_for error: {}", e))?;
+                            let response = AgentResponse::error(format!(
+                                "Failed to resolve crypto suite: {}",
+                                e
+                            ));
+                            response.write_to(&mut stream)?;
+                            return Ok(());
+                        }
+                    };
+                    // Unseal the repository key via the resolved suite.
+                    match crypto_suite.open_repo_key(&sealed_key, &state.keypair) {
                         Ok(repo_key) => {
                             state
                                 .audit_logger

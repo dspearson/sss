@@ -48,6 +48,7 @@ pub static SECRETS_INTERPOLATION_REGEX: std::sync::LazyLock<Regex> =
 /// Regex for parsing secrets file format - single-line values
 /// Supports: name: value, "name": value, name: "value", "name": "value"
 /// Also supports: name: 'value', 'name': 'value'
+// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
 static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|(.*))\s*$"#)
         .expect("Failed to compile secrets line regex")
@@ -55,6 +56,7 @@ static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new
 
 /// Regex for parsing YAML-style multi-line value indicator
 /// Matches: key: | or "key": | or 'key': |
+// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
 static MULTILINE_INDICATOR_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*\|\s*$"#)
         .expect("Failed to compile multiline indicator regex")
@@ -459,6 +461,7 @@ fn collect_multiline_value(lines: &[&str], _start_line: usize) -> Result<(String
         }
 
         // Add the line with relative indentation preserved
+        // INVARIANT: same as the unwrap above — base_indent is Some(_) here.
         let relative_indent = indent - base_indent.unwrap();
         let dedented = format!("{}{}", " ".repeat(relative_indent), line.trim_start());
         value_lines.push(dedented);

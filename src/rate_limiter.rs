@@ -38,6 +38,7 @@ impl RateLimiter {
 
     /// Check if an identifier is allowed to make an attempt
     pub fn check_attempt(&self, identifier: &str) -> Result<(), String> {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
 
@@ -80,6 +81,7 @@ impl RateLimiter {
 
     /// Record a failed attempt
     pub fn record_failure(&self, identifier: &str) {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut attempts = self.attempts.lock().unwrap();
         let now = Instant::now();
 
@@ -108,6 +110,7 @@ impl RateLimiter {
 
     /// Record a successful attempt (clears the record)
     pub fn record_success(&self, identifier: &str) {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut attempts = self.attempts.lock().unwrap();
         attempts.remove(identifier);
     }

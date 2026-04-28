@@ -183,6 +183,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
                     .log(AuditEvent::Denied, "Rate limit exceeded")?;
 
                 // Check if we should auto-lock on suspicious activity
+                // INVARIANT: see handle_client docblock — mutex never poisoned.
                 let mut policy = state.policy_manager.lock().unwrap();
                 policy.lock();
 
@@ -192,6 +193,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
             }
 
             // Evaluate policy
+            // INVARIANT: see handle_client docblock — mutex never poisoned.
             let policy = state.policy_manager.lock().unwrap();
             let decision = policy.evaluate(&context);
             drop(policy);
@@ -220,6 +222,7 @@ fn handle_client(mut stream: UnixStream, state: Arc<AgentState>) -> Result<()> {
             state.audit_logger.log_decision(user_decision, &context)?;
 
             // Apply policy decision
+            // INVARIANT: see handle_client docblock — mutex never poisoned.
             let mut policy = state.policy_manager.lock().unwrap();
             policy.apply_decision(user_decision, &context)?;
             drop(policy);

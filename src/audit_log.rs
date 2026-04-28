@@ -196,6 +196,7 @@ impl RateLimiter {
             None => "local".to_string(),
         };
 
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut history = self.request_history.lock().unwrap();
         let now = SystemTime::now();
         let one_minute_ago = now - Duration::from_secs(60);
@@ -219,6 +220,7 @@ impl RateLimiter {
 
     /// Get the number of recent requests from a host
     pub fn get_request_count(&self, hostname: &str) -> usize {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let history = self.request_history.lock().unwrap();
         let now = SystemTime::now();
         let one_minute_ago = now - Duration::from_secs(60);
@@ -236,12 +238,14 @@ impl RateLimiter {
 
     /// Clear rate limit history for a host
     pub fn clear_host(&self, hostname: &str) {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut history = self.request_history.lock().unwrap();
         history.remove(hostname);
     }
 
     /// Clear all rate limit history
     pub fn clear_all(&self) {
+        // INVARIANT: see impl-block docblock — mutex never poisoned.
         let mut history = self.request_history.lock().unwrap();
         history.clear();
     }

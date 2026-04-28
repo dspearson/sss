@@ -4,6 +4,8 @@
 
 This document provides a detailed technical specification of the cryptographic primitives, algorithms, and implementation patterns used in SSS. It is intended for security auditors, cryptographers, and developers who need to understand the low-level cryptographic details.
 
+For the project's threat model — what each primitive in this spec is required to defend against, the trust boundaries it crosses, and the per-suite assumption breakdown — see [`docs/security-model.md`](./security-model.md). This file owns the algorithmic spec; `security-model.md` owns the threat-model coverage.
+
 ## Table of Contents
 
 1. [Cryptographic Dependencies](#cryptographic-dependencies)
@@ -42,6 +44,8 @@ SSS relies on battle-tested cryptographic libraries:
 - **keyring** (`^3.6`): OS keyring integration
 
 ## Symmetric Encryption
+
+XChaCha20-Poly1305 is the AEAD used both for in-file `⊠{...}` ciphertexts (both suites; see [`docs/security-model.md#protects-against`](./security-model.md#protects-against) for the threat-model rationale) and for the repository-key sealing layer in the hybrid suite.
 
 ### Algorithm: XChaCha20-Poly1305
 
@@ -138,6 +142,8 @@ pub fn decrypt(ciphertext: &[u8], key: &RepositoryKey) -> Result<Vec<u8>> {
 - **Key Commitment**: Poly1305 MAC provides key commitment
 
 ## Asymmetric Encryption
+
+X25519 sealed boxes wrap the per-user repository key in classic-suite (`version = "1.0"`) projects; see [`docs/security-model.md#per-suite-threat-tables`](./security-model.md#per-suite-threat-tables) for the threat-model coverage and the divergent-assumptions table that names the X25519 DLP hardness assumption explicitly.
 
 ### Algorithm: X25519 Sealed Boxes
 
@@ -244,6 +250,8 @@ pub fn unwrap_repository_key(sealed: &[u8], keypair: &KeyPair) -> Result<Reposit
 > production deployments until a trelis audit is completed. Do not rely on the hybrid suite
 > for production security without understanding this limitation.**
 
+For the threat-model framing of this surface — what the hybrid suite is required to defend against, what dual-keystore compromise looks like, and how `sss migrate` is constrained — see [`docs/security-model.md#hybrid-trust-boundaries-v20`](./security-model.md#hybrid-trust-boundaries-v20). For the consolidated trelis attack-surface picture (pinned commit, audit posture, mitigation guidance for teams), see [`docs/security-model.md#trelis-attack-surface`](./security-model.md#trelis-attack-surface).
+
 ### Algorithm Overview
 
 The hybrid suite uses **trelis** (X448 + sntrup761) for key-encapsulation, **BLAKE3** for key
@@ -304,6 +312,8 @@ identical regardless of which suite wrapped the repository key**:
 - `sss migrate` re-wraps the per-user entries in `.sss.toml` only; **no file content is
   touched**.
 
+The threat-model significance of this invariant — and the safety properties of `sss migrate` that depend on it — are documented in [`docs/security-model.md#sss-migrate-safety-properties`](./security-model.md#sss-migrate-safety-properties).
+
 ### Feature Gate
 
 The hybrid suite is compiled only when the `hybrid` Cargo feature is enabled. The default
@@ -335,9 +345,13 @@ cargo build --features hybrid
 suite is opt-in and should only be used when post-quantum key-wrapping is required and the
 experimental status of trelis is understood and accepted.
 
+For the per-suite threat-model breakdown (divergent assumptions, shared assumptions, audit pedigree row by row), see [`docs/security-model.md#per-suite-threat-tables`](./security-model.md#per-suite-threat-tables).
+
 ---
 
 ## Key Derivation
+
+Argon2id derives the symmetric wrapping key used to encrypt user private keys on disk; see [`docs/security-model.md#key-derivation-argon2id`](./security-model.md#key-derivation-argon2id) for the threat-model framing (offline brute-force-attack resistance, parameter-level rationale, DoS-protection consequences).
 
 ### Algorithm: Argon2id v1.3
 
@@ -450,6 +464,8 @@ pub fn new() -> Self {
 - **CSPRNG**: Uses OS-provided random source
 
 ## Hash Functions
+
+BLAKE2b is used exclusively for deterministic nonce derivation in sss; see [`docs/security-model.md#deterministic-nonces`](./security-model.md#deterministic-nonces) for the threat-model rationale (clean git diffs, controlled information leakage, nonce-collision-safety analysis).
 
 ### Algorithm: BLAKE2b
 
@@ -879,4 +895,4 @@ fn example_key_wrapping() -> Result<()> {
 
 **Last Updated**: 2026-04-26
 **Version**: 2.0.0
-**Security Review**: See [SECURITY.md](./SECURITY.md)
+**Security Review**: See [security-model.md](./security-model.md)

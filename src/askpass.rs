@@ -5,8 +5,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-use crate::agent_policy::UserDecision;
-use crate::agent_protocol::RequestContext;
+use crate::agent::policy::UserDecision;
+use crate::agent::protocol::RequestContext;
 
 /// Askpass configuration
 #[derive(Debug, Clone)]

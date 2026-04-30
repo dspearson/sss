@@ -316,16 +316,16 @@ fn load_project_config_internal<P: AsRef<Path>>(
             let resolved_keypair = user_keypair.clone();
 
             // Try to use agent if requested and available
-            let repository_key = if use_agent && crate::agent::is_agent_available() {
+            let repository_key = if use_agent && crate::agent::client::is_agent_available() {
                 // Build context for agent request
                 let mut context =
-                    crate::agent_protocol::RequestContext::from_environment(username.clone());
+                    crate::agent::protocol::RequestContext::from_environment(username.clone());
                 context.project_path = Some(actual_config_path.display().to_string());
 
                 // Request unsealing from agent — thread the resolved suite
                 // through so the agent dispatches via suite_for(suite) (CR-01
                 // / 08-03).
-                match crate::agent::unseal_with_agent(&sealed_key, context, suite_enum) {
+                match crate::agent::client::unseal_with_agent(&sealed_key, context, suite_enum) {
                     Ok(key) => key,
                     Err(e) => {
                         eprintln!(

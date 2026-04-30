@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::agent_policy::UserDecision;
-use crate::agent_protocol::{RequestContext, ResponseStatus};
+use crate::agent::policy::UserDecision;
+use crate::agent::protocol::{RequestContext, ResponseStatus};
 
 /// Audit event types
 #[derive(Debug, Clone, Copy)]

@@ -1,6 +1,4 @@
 pub mod agent;
-pub mod agent_policy;
-pub mod agent_protocol;
 pub mod askpass;
 pub mod audit_log;
 pub mod commands;
@@ -15,8 +13,6 @@ pub mod filesystem_common;
 pub mod toml_helpers;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub mod fuse;
-#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
-pub mod fuse_fs;
 #[cfg(all(target_os = "windows", feature = "winfsp"))]
 pub mod winfsp_fs;
 #[cfg(feature = "ninep")]

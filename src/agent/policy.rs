@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::agent_protocol::RequestContext;
+use crate::agent::protocol::RequestContext;
 
 /// Policy decision for a request
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

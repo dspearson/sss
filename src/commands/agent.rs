@@ -5,8 +5,8 @@ use clap::ArgMatches;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::agent::AgentClient;
-use crate::agent_policy::PolicyManager;
+use crate::agent::client::AgentClient;
+use crate::agent::policy::PolicyManager;
 
 /// Handle agent subcommands
 pub fn handle_agent(matches: &ArgMatches) -> Result<()> {

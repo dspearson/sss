@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::agent_protocol::{
+use crate::agent::protocol::{
     AgentRequest, AgentResponse, RequestContext, ResponseStatus, SUITE_WIRE_CLASSIC,
     SUITE_WIRE_HYBRID,
 };

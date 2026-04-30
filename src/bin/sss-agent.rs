@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 // Import SSS modules
-use sss::agent_policy::{PolicyDecision, PolicyManager, UserDecision};
-use sss::agent_protocol::{
+use sss::agent::policy::{PolicyDecision, PolicyManager, UserDecision};
+use sss::agent::protocol::{
     AgentRequest, AgentResponse, RequestType, ResponseStatus, SUITE_WIRE_CLASSIC,
     SUITE_WIRE_HYBRID,
 };

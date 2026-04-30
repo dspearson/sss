@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use sss::audit_log::{AuditEvent, AuditLogger, RateLimiter};
-use sss::agent_protocol::RequestContext;
+use sss::agent::protocol::RequestContext;
 use std::fs;
 use std::sync::Arc;
 use std::thread;

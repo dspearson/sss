@@ -199,7 +199,7 @@ cargo bench marker_inference
 
 ## Integration with FUSE
 
-The module is integrated into the FUSE layer at `src/fuse_fs.rs::write_and_seal()`:
+The module is integrated into the FUSE layer at `src/fuse/fs.rs::write_and_seal()`:
 
 ```rust
 // Before: Basic marker reconstruction

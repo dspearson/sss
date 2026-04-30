@@ -306,7 +306,7 @@ impl SssFS {
     /// # Examples
     ///
     /// ```no_run
-    /// # use sss::fuse_fs::SssFS;
+    /// # use sss::fuse::fs::SssFS;
     /// # use sss::{Processor, RepositoryKey};
     /// # use std::path::PathBuf;
     /// # fn example() -> anyhow::Result<()> {
@@ -518,7 +518,7 @@ impl SssFS {
     /// # Examples
     ///
     /// ```no_run
-    /// # use sss::fuse_fs::SssFS;
+    /// # use sss::fuse::fs::SssFS;
     /// # use sss::{Processor, RepositoryKey};
     /// # use std::path::PathBuf;
     /// # fn example() -> anyhow::Result<()> {

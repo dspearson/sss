@@ -6,7 +6,7 @@ use crate::Processor;
 use crate::project::ProjectConfig;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::fuse_fs::SssFS;
+use crate::fuse::fs::SssFS;
 
 /// Load project config and create processor for a source directory
 ///

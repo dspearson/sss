@@ -67,6 +67,35 @@ Build with all optional features (Linux/macOS):
 cargo build --features fuse,ninep --release
 ```
 
+### Feature flags
+
+sss exposes four Cargo feature flags. All are off by default; the default build is
+classic-suite-only and runs on every supported platform.
+
+| Flag      | Default | Platform           | Adds                                                           |
+|-----------|---------|--------------------|----------------------------------------------------------------|
+| `fuse`    | off     | Linux / macOS only | FUSE filesystem mount via the `fuser` crate (`sss mount`)     |
+| `winfsp`  | off     | Windows only       | WinFSP filesystem mount (`sss mount` on Windows)               |
+| `ninep`   | off     | All                | 9P network server (`sss serve9p`)                              |
+| `hybrid`  | off     | All                | Post-quantum hybrid suite (X448 + sntrup761 via trelis); experimental and unaudited |
+
+Tested combinations on the v2.1 release matrix (Linux x86_64, Linux aarch64, macOS arm64, Alpine musl):
+
+| Combination                  | Build command                                       | Notes                                              |
+|------------------------------|-----------------------------------------------------|----------------------------------------------------|
+| default                      | `cargo build --release`                             | Classic suite only, no filesystem mount, no 9P    |
+| `fuse`                       | `cargo build --features fuse --release`             | Linux / macOS                                     |
+| `ninep`                      | `cargo build --features ninep --release`            | All platforms                                     |
+| `hybrid`                     | `cargo build --features hybrid --release`           | Adds `trelis-hybrid` + `trelis-primitives` git deps |
+| `fuse,ninep`                 | `cargo build --features fuse,ninep --release`       | Linux / macOS                                     |
+| `fuse,ninep,hybrid`          | `cargo build --features fuse,ninep,hybrid --release` | Linux / macOS, full classic + hybrid feature set |
+| `winfsp`                     | `cargo build --features winfsp --release`           | Windows                                           |
+| `winfsp,hybrid`              | `cargo build --features winfsp,hybrid --release`    | Windows, full classic + hybrid feature set       |
+
+`fuse` and `winfsp` are mutually exclusive by platform: a build cannot enable both.
+The `hybrid` flag depends on the vendored `trelis` git pin; see
+[docs/security-model.md](docs/security-model.md) for the chain-of-custody record.
+
 ### Pre-built Packages
 
 Pre-built packages are available via build scripts:

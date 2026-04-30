@@ -1,3 +1,69 @@
+//! sss — Secret String Substitution.
+//!
+//! Transparent encryption of secrets within files using XChaCha20-Poly1305,
+//! with multi-user key management and git integration. Supports two crypto
+//! suites: Classic (libsodium `crypto_box_seal`, default) and Hybrid (trelis
+//! X448 + sntrup761 + BLAKE3, `feature = "hybrid"`).
+//!
+//! # Module structure
+//!
+//! Core pipeline:
+//! - [`crypto`] — cryptographic primitives (Classic / Hybrid suites; FFI)
+//! - [`kdf`] — Argon2id key derivation
+//! - [`keystore`] — local encrypted keystore; Classic + Hybrid keypairs
+//! - [`processor`] — marker detection and transformation pipeline
+//! - [`scanner`] — project directory scanner with ignore patterns
+//! - [`secrets`] — secret extraction / substitution helpers
+//! - [`merge`] — content reconciliation between encrypted-on-disk and edited
+//! - [`marker_inference`] — placeholder marker resolution
+//! - [`secure_memory`] — zeroising memory primitives
+//! - [`rate_limiter`] — token-bucket rate limiting (agent path)
+//!
+//! Configuration / project surface:
+//! - [`config`] — `.sss.toml` parsing + load_key family
+//! - [`config_manager`] — user-settings layer (orthogonal to `config`)
+//! - [`project`] — `ProjectConfig` and project root discovery
+//! - [`constants`] — crate-wide constant table
+//! - [`toml_helpers`] — TOML serialisation helpers
+//! - [`error`] / [`error_helpers`] — error types and conversions
+//! - [`validation`] — input validation helpers
+//! - [`editor`] — editor invocation helpers
+//!
+//! Daemon / interactive surface:
+//! - [`agent`] — agent client / protocol / policy (directory-module: `client`,
+//!   `policy`, `protocol`)
+//! - [`askpass`] — askpass dialog plumbing
+//! - [`audit_log`] — agent audit logging
+//! - [`commands`] — CLI subcommand implementations
+//! - [`rotation`] — repository-key rotation
+//! - [`keyring_manager`] / [`keyring_support`] — OS keyring integration
+//!   (orthogonal: `support` is independently consumed by `keystore` and
+//!   `commands::settings`; intentional flat split, see Plan 11-03 SUMMARY)
+//!
+//! Filesystem surface (platform-gated):
+//! - [`fuse`] — FUSE filesystem (Linux/macOS, `feature = "fuse"`); the
+//!   directory-module hosts `fs` (top-level `SssFS`), `inode_manager`,
+//!   `file_cache`, `virtual_fs`
+//! - [`winfsp_fs`] — WinFSP filesystem (Windows, `feature = "winfsp"`)
+//! - [`ninep_fs`] — 9P server (`feature = "ninep"`)
+//! - [`filesystem_common`] — cross-backend filesystem helpers
+//!
+//! # Public API
+//!
+//! The curated public surface is the re-export block below: [`Config`],
+//! [`KeyPair`], [`RepositoryKey`], [`SssError`] / [`Result`],
+//! [`KeyringManager`], [`Keystore`], [`Processor`], [`ProjectConfig`], plus
+//! [`SssNinepFS`] (cfg-gated). Internal items that are only needed
+//! crate-internally are `pub(crate)` (visibility tightening tracked in
+//! Plan 11-04 / CLEAN-03).
+//!
+//! # References
+//!
+//! - `docs/CRYPTOGRAPHY.md` — crypto suite design and primitives
+//! - `docs/security-model.md` — trust boundaries and threat model
+//! - `.planning/phases/11-code-cleanup/11-03-SUMMARY.md` — module-structure
+//!   audit (CLEAN-04, D-14 / D-15 / D-16 / D-17)
+
 pub mod agent;
 pub mod askpass;
 pub mod audit_log;

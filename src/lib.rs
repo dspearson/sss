@@ -7,27 +7,33 @@
 //!
 //! # Module structure
 //!
-//! Core pipeline:
+//! Core pipeline (publicly visible — see the listed `pub mod` and
+//! `pub use` items below):
 //! - [`crypto`] — cryptographic primitives (Classic / Hybrid suites; FFI)
-//! - [`kdf`] — Argon2id key derivation
 //! - [`keystore`] — local encrypted keystore; Classic + Hybrid keypairs
 //! - [`processor`] — marker detection and transformation pipeline
-//! - [`scanner`] — project directory scanner with ignore patterns
-//! - [`secrets`] — secret extraction / substitution helpers
-//! - [`merge`] — content reconciliation between encrypted-on-disk and edited
 //! - [`marker_inference`] — placeholder marker resolution
-//! - [`secure_memory`] — zeroising memory primitives
-//! - [`rate_limiter`] — token-bucket rate limiting (agent path)
+//!
+//! Crate-internal pipeline (now `pub(crate)` after CLEAN-03 — addressable from
+//! within the crate but not part of the published API):
+//! - `kdf` — Argon2id key derivation
+//! - `scanner` — project directory scanner with ignore patterns
+//! - `secrets` — secret extraction / substitution helpers
+//! - `merge` — content reconciliation between encrypted-on-disk and edited
+//! - `secure_memory` — zeroising memory primitives
+//! - `rate_limiter` — token-bucket rate limiting (agent path)
 //!
 //! Configuration / project surface:
-//! - [`config`] — `.sss.toml` parsing + load_key family
-//! - [`config_manager`] — user-settings layer (orthogonal to `config`)
-//! - [`project`] — `ProjectConfig` and project root discovery
-//! - [`constants`] — crate-wide constant table
-//! - [`toml_helpers`] — TOML serialisation helpers
-//! - [`error`] / [`error_helpers`] — error types and conversions
-//! - [`validation`] — input validation helpers
-//! - [`editor`] — editor invocation helpers
+//! - [`config`] — `.sss.toml` parsing + load_key family (public)
+//! - [`config_manager`] — user-settings layer (public, orthogonal to `config`)
+//! - `project` — `ProjectConfig` and project-root discovery (re-export
+//!   `ProjectConfig` is public)
+//! - `constants` — crate-wide constant table (`pub(crate)`)
+//! - `toml_helpers` — TOML serialisation helpers (`pub(crate)`)
+//! - `error` / `error_helpers` — error types and conversions (re-exports
+//!   `Result` / `SssError` are public; modules are `pub(crate)`)
+//! - `validation` — input validation helpers (`pub(crate)`)
+//! - `editor` — editor invocation helpers (`pub(crate)`)
 //!
 //! Daemon / interactive surface:
 //! - [`agent`] — agent client / protocol / policy (directory-module: `client`,
@@ -35,27 +41,33 @@
 //! - [`askpass`] — askpass dialog plumbing
 //! - [`audit_log`] — agent audit logging
 //! - [`commands`] — CLI subcommand implementations
-//! - [`rotation`] — repository-key rotation
-//! - [`keyring_manager`] / [`keyring_support`] — OS keyring integration
-//!   (orthogonal: `support` is independently consumed by `keystore` and
-//!   `commands::settings`; intentional flat split, see Plan 11-03 SUMMARY)
+//! - `rotation` — repository-key rotation (`pub(crate)`)
+//! - `keyring_manager` / `keyring_support` — OS keyring integration
+//!   (`pub(crate)`; the re-export `KeyringManager` is public)
 //!
 //! Filesystem surface (platform-gated):
-//! - [`fuse`] — FUSE filesystem (Linux/macOS, `feature = "fuse"`); the
-//!   directory-module hosts `fs` (top-level `SssFS`), `inode_manager`,
+//! - `fuse` — FUSE filesystem (Linux/macOS, `feature = "fuse"`, `pub(crate)`);
+//!   the directory-module hosts `fs` (top-level `SssFS`), `inode_manager`,
 //!   `file_cache`, `virtual_fs`
-//! - [`winfsp_fs`] — WinFSP filesystem (Windows, `feature = "winfsp"`)
-//! - [`ninep_fs`] — 9P server (`feature = "ninep"`)
-//! - [`filesystem_common`] — cross-backend filesystem helpers
+//! - `winfsp_fs` — WinFSP filesystem (Windows, `feature = "winfsp"`,
+//!   `pub(crate)`)
+//! - `ninep_fs` — 9P server (`feature = "ninep"`, `pub(crate)`; the re-export
+//!   [`SssNinepFS`] is public)
+//! - [`filesystem_common`] — cross-backend filesystem helpers (public; reached
+//!   by `benches/fuse_read_latency.rs`)
 //!
 //! # Public API
 //!
 //! The curated public surface is the re-export block below: [`Config`],
 //! [`KeyPair`], [`RepositoryKey`], [`SssError`] / [`Result`],
 //! [`KeyringManager`], [`Keystore`], [`Processor`], [`ProjectConfig`], plus
-//! [`SssNinepFS`] (cfg-gated). Internal items that are only needed
-//! crate-internally are `pub(crate)` (visibility tightening tracked in
-//! Plan 11-04 / CLEAN-03).
+//! [`SssNinepFS`] (cfg-gated). The 11 `pub mod` declarations (`agent`,
+//! `askpass`, `audit_log`, `commands`, `config`, `config_manager`, `crypto`,
+//! `filesystem_common`, `keystore`, `marker_inference`, `processor`)
+//! constitute the additional reachable module surface (consumed by binaries
+//! and benches; verified via `tests/public_api_panic_surface.rs`). Internal
+//! items that are only needed crate-internally are `pub(crate)` (CLEAN-03
+//! visibility narrowing — Plan 11-04).
 //!
 //! # References
 //!
@@ -63,19 +75,118 @@
 //! - `docs/security-model.md` — trust boundaries and threat model
 //! - `.planning/phases/11-code-cleanup/11-03-SUMMARY.md` — module-structure
 //!   audit (CLEAN-04, D-14 / D-15 / D-16 / D-17)
+//! - `.planning/phases/11-code-cleanup/11-04-SUMMARY.md` — public-API surface
+//!   review (CLEAN-03, D-09 / D-10 / D-11 / D-13)
 
+/// Agent client, protocol and policy plumbing for the local sss-agent daemon.
+///
+/// Use this module from the `sss-agent` binary (and from in-tree integration
+/// tests that exercise the agent socket) to obtain `AgentClient`,
+/// `PolicyManager`, and the request/response message types defined in
+/// `agent::protocol`. The directory-module hosts three sub-modules: `client`
+/// (Unix-socket connection management), `policy` (passphrase-prompt
+/// authorisation rules), and `protocol` (wire-format codec).
+///
+/// Available unconditionally — agent functionality is always compiled in,
+/// though socket binding is the agent binary's responsibility, not this
+/// crate's. See `docs/security-model.md` for the agent trust boundary.
 pub mod agent;
+
+/// Askpass dialog plumbing — TTY-driven passphrase prompts.
+///
+/// Use this module to invoke an askpass-style dialog when the agent path needs
+/// to prompt the user for a passphrase that is not present in
+/// `SSS_PASSPHRASE` and is not cached by an earlier policy decision. The
+/// `AskpassConfig` struct controls prompt text and timeout; `prompt_user`
+/// returns the entered passphrase wrapped in zeroising storage.
+///
+/// Public because consumed by the `sss-agent` binary at
+/// `src/bin/sss-agent.rs:16`.
 pub mod askpass;
+
+/// Audit logging for the agent path — append-only event log of policy
+/// decisions, key access, and rate-limit events.
+///
+/// Use this module to record every authorisation outcome (`PolicyDecision`)
+/// and every passphrase-prompt event for forensic auditability. The log is
+/// rotated by the agent on size threshold; see `docs/security-model.md` for
+/// the audit-log threat-model treatment (information disclosure on disk is
+/// mitigated by appropriate `umask`).
+///
+/// Public because consumed by the `sss-agent` binary at
+/// `src/bin/sss-agent.rs:17` (`AuditEvent`, `AuditLogger`, `RateLimiter`).
 pub mod audit_log;
+
+/// CLI subcommand implementations — one module per top-level `sss <verb>`.
+///
+/// Use this module from `src/main.rs` to dispatch parsed clap arguments to
+/// the corresponding handler (`handle_init`, `handle_encrypt`, `handle_show`,
+/// `handle_keys_*`, `handle_users_*`, etc.). Each subcommand's contract
+/// (panic / error semantics, expected files, `.sss.toml` requirements) is
+/// documented in the per-command module's rustdoc.
+///
+/// Public because the binary `src/main.rs` consumes virtually every
+/// `commands::handle_*` function.
 pub mod commands;
+
+/// `.sss.toml` parsing and the `load_key` family — primary user-facing
+/// configuration entrypoint.
+///
+/// Use this module to load a project's `.sss.toml`, retrieve a user's wrapped
+/// repository key (`load_key` / `load_key_for_user`), and obtain a `Config`
+/// struct for in-place inspection. The crypto-suite version field is parsed
+/// here and dispatched via `ProjectConfig::suite()`.
+///
+/// Public because reached by `tests/public_api_panic_surface.rs:29`
+/// (HARDEN-05 baseline) and exposed via the `Config`, `load_key`,
+/// `load_key_for_user` re-exports below.
 pub mod config;
+
+/// User-settings layer — orthogonal to `config` (`.sss.toml`-side, repo-local)
+/// and to `keyring_*` (OS keyring side, machine-local).
+///
+/// Use this module for cross-cutting user preferences (editor choice, default
+/// suite, rate-limit defaults) that are NOT part of repo configuration and
+/// NOT secret material. Settings are persisted under the user's
+/// platform-appropriate config dir.
+///
+/// Public because consumed by `commands::settings`; the downgrade probe
+/// failed because `SystemSettings.max_file_size` would be flagged dead.
 pub mod config_manager;
+
 pub(crate) mod constants;
+
+/// Cryptographic primitives — Classic (libsodium-backed) and Hybrid
+/// post-quantum suites; FFI surface fully audited under HARDEN-03 (see
+/// `08-03-SUMMARY.md`).
+///
+/// Use this module to obtain a `CryptoSuite` implementation matching the
+/// `Suite` selector returned by `ProjectConfig::suite()`. The classic suite
+/// is always available (libsodium `crypto_box_seal` for repo-key wrap,
+/// XChaCha20-Poly1305 for content); the hybrid suite requires the `hybrid`
+/// feature and uses vendored trelis primitives (X448 + sntrup761 + BLAKE3).
+///
+/// See `docs/CRYPTOGRAPHY.md` for the suite contract, deterministic-nonce
+/// derivation, and the byte-identical-ciphertext invariant across suites.
 pub mod crypto;
+
 pub(crate) mod editor;
 pub(crate) mod error;
 pub(crate) mod error_helpers;
+
+/// Cross-backend filesystem helpers — marker detection on raw bytes, path
+/// canonicalisation, and inode-stable identity helpers shared by `fuse`,
+/// `winfsp_fs`, and `ninep_fs`.
+///
+/// Use `has_any_markers_bytes` to do a fast pre-check before invoking the
+/// full processor pipeline (the marker scan is the hot path in FUSE-style
+/// reads — see `benches/fuse_read_latency.rs:29`).
+///
+/// Public because consumed by `benches/fuse_read_latency.rs:29` outside the
+/// `fuse` feature gate (the bench compiles unconditionally; the marker-bytes
+/// check is feature-independent).
 pub mod filesystem_common;
+
 pub(crate) mod toml_helpers;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub(crate) mod fuse;
@@ -86,10 +197,50 @@ pub(crate) mod ninep_fs;
 pub(crate) mod kdf;
 pub(crate) mod keyring_manager;
 pub(crate) mod keyring_support;
+
+/// Local on-disk encrypted keystore — stores Classic and (with `hybrid`
+/// feature) Hybrid keypairs under per-user Argon2id-protected envelopes.
+///
+/// Use this module to load a keypair from disk (`Keystore::load_keypair`),
+/// generate a new pair (`Keystore::generate_classic` / `_hybrid` /
+/// `_dual`), or obtain a passphrase via the `SSS_PASSPHRASE` env-var-or-prompt
+/// helper (`get_passphrase_or_prompt`). Loaded secret keys are wrapped in
+/// `Zeroizing<...>` storage per the HARDEN-04 zeroisation audit.
+///
+/// Public because consumed by `tests/public_api_panic_surface.rs:32`
+/// (HARDEN-05 baseline assert_type entries) and `src/bin/sss-agent.rs:19`
+/// (`get_passphrase_or_prompt`, `Keystore`).
 pub mod keystore;
+
+/// Marker-inference helpers — heuristic resolution of placeholder markers
+/// (`⊕{...}` / `O+{...}`) in mixed-content files.
+///
+/// Use `infer_markers` to attempt inference of marker locations for a file
+/// where the marker syntax is partial (e.g. user-edited content where one
+/// half of the marker pair was deleted). Heuristic-driven; not part of the
+/// canonical encryption pipeline.
+///
+/// Public because consumed by `benches/marker_inference.rs:4`.
 pub mod marker_inference;
+
 pub(crate) mod merge;
+
+/// Marker detection and transformation pipeline — the canonical
+/// encrypt/decrypt entry point for in-content secret substitution.
+///
+/// Use `Processor::new_with_context` to construct a processor bound to a
+/// repository key and a path/timestamp context (the context drives the
+/// deterministic-nonce derivation per `docs/CRYPTOGRAPHY.md`); then call
+/// `process_content` (auto-detect direction), `encrypt_content`, or
+/// `decrypt_content`. The pipeline is byte-identical across suites for
+/// matching plaintexts because the per-secret nonce derivation is suite-
+/// independent.
+///
+/// Public because consumed by `tests/public_api_panic_surface.rs:31`
+/// (HARDEN-05 baseline) and reachable from binaries via `crate::Processor`
+/// at `src/commands/process.rs:21`.
 pub mod processor;
+
 pub(crate) mod project;
 pub(crate) mod rate_limiter;
 pub(crate) mod rotation;
@@ -98,14 +249,102 @@ pub(crate) mod secrets;
 pub(crate) mod secure_memory;
 pub(crate) mod validation;
 
+/// Re-exports the user-facing configuration entry points — the parsed
+/// `.sss.toml` struct (`Config`) plus the two passphrase-aware key-load
+/// helpers (`load_key`, `load_key_for_user`).
+///
+/// Use these when the caller only needs to read repository configuration and
+/// fetch a wrapped repo key without depending on the `config` module path
+/// directly. `load_key` reads the current user's wrapped key (resolving the
+/// system username via `commands::utils::get_system_username`);
+/// `load_key_for_user` lets the caller specify a username for multi-user
+/// scripts. Both return `SssError::Config` on missing `.sss.toml`,
+/// `SssError::KeyDerivation` on Argon2id failure, and `SssError::Crypto` on
+/// envelope-unwrap failure. These re-exports are also referenced by the
+/// in-file `#[cfg(test)] mod tests::test_load_key_functions` at the bottom
+/// of this file.
 pub use config::{load_key, load_key_for_user, Config};
+
+/// Re-exports the two crypto types used at every public API boundary —
+/// `KeyPair` (the per-user public/secret pair, suite-aware enum) and
+/// `RepositoryKey` (the per-repo symmetric key wrapped by recipient public
+/// keys for content encryption).
+///
+/// Use `KeyPair::generate()` when bootstrapping a new user; the returned
+/// secret-key half is wrapped in zeroising storage per HARDEN-04.
+/// `RepositoryKey::new()` generates a fresh repo key; `to_base64` /
+/// `from_base64` round-trip via the wire format used in `.sss.toml`. See
+/// `docs/CRYPTOGRAPHY.md` for the deterministic-nonce derivation contract.
 pub use crypto::{KeyPair, RepositoryKey};
+
+/// Re-exports the crate-wide error type and the matching `Result` alias
+/// (`std::result::Result<T, SssError>`).
+///
+/// Use `SssError` for all fallible-API surfaces that this crate exposes; the
+/// `Result` alias avoids the `Result<T, sss::SssError>` long form throughout
+/// the public API and the panic-surface regression tests
+/// (`tests/public_api_panic_surface.rs:540` references
+/// `assert_type::<sss::Result<()>>()`). `SssError` is non-exhaustive — match
+/// arms must include a wildcard. See `docs/security-model.md` for the
+/// information-disclosure threat-model: error messages are user-facing and
+/// must not leak passphrase / secret material.
 pub use error::{Result, SssError};
+
+/// Re-exports the OS-keyring integration entry point — store and retrieve
+/// per-user passphrases and keypair material from the platform keyring
+/// (Secret Service on Linux, Keychain on macOS, Credential Manager on
+/// Windows).
+///
+/// Use `KeyringManager::new()` to obtain a manager (returns Result), then
+/// `store_passphrase` / `get_passphrase` / `delete_passphrase` for
+/// passphrase-side operations. The keyring is the only persistence path for
+/// secret material outside the on-disk encrypted keystore, so callers MUST
+/// handle "key not found" errors as recoverable (the user may not have
+/// stored the passphrase yet) rather than fatal.
 pub use keyring_manager::KeyringManager;
+
+/// Re-exports the on-disk encrypted keystore — the canonical persistence
+/// path for Classic and (with `hybrid` feature) Hybrid keypairs.
+///
+/// Use `Keystore::new()` to bind to a path; then `load_keypair` / `_with_id`
+/// to read a keypair (with passphrase prompt or env-var fallback) or
+/// `generate_classic` / `_hybrid` / `_dual` to create one. Loaded secret-key
+/// material is wrapped in `Zeroizing<...>` storage. The keystore file format
+/// is Argon2id-derived envelope per HARDEN-02 / HARDEN-04.
 pub use keystore::Keystore;
+
+/// Re-exports the marker-detection and transformation pipeline entry point.
+///
+/// Use `Processor::new_with_context(repo_key, path, timestamp)` to bind a
+/// processor instance; then call `process_content` to auto-detect direction
+/// (encrypt or decrypt based on marker state), `encrypt_content` to force
+/// encryption, or `decrypt_content` to force decryption. Output is
+/// byte-identical across suites for matching plaintexts because the per-
+/// secret nonce derivation is suite-independent — see
+/// `docs/CRYPTOGRAPHY.md`. Reachable internally as `crate::Processor` at
+/// `src/commands/process.rs:21`.
 pub use processor::Processor;
+
+/// Re-exports the canonical project-configuration struct — layered over
+/// `Config` (which is the raw `.sss.toml` parse) with project-root discovery
+/// + crypto-suite dispatch.
+///
+/// Use `ProjectConfig::load_from_file(path)` to load (with the version-gate
+/// check applied — v1.0 stays Classic, v2.0 routes to Hybrid via
+/// `resolve_suite_from_version`); `ProjectConfig::suite()` returns the
+/// matching `Suite` enum for downstream `CryptoSuite` dispatch. See
+/// `docs/CRYPTOGRAPHY.md` for the suite-version dispatch contract.
 pub use project::ProjectConfig;
 
+/// Re-exports the 9P-protocol filesystem server (`feature = "ninep"`).
+///
+/// Use `SssNinepFS::new(...)` from the `sss 9p` subcommand to mount a 9P
+/// endpoint that exposes the project's marker-decrypted view to 9P clients
+/// (Plan 9 / styx-style mounts; complementary to the `fuse` and `winfsp_fs`
+/// alternatives). Available only when compiled with `--features ninep` —
+/// the cfg attribute below gates the re-export so non-ninep builds do not
+/// expose the symbol. Reachable internally as `crate::SssNinepFS` at
+/// `src/commands/ninep.rs:117`.
 #[cfg(feature = "ninep")]
 pub use ninep_fs::SssNinepFS;
 

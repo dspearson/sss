@@ -5,6 +5,13 @@ All notable changes to sss (Secret String Substitution) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-04-30
+
+### Internal
+- DEPS-04 — pruned unused direct dependencies
+  - `shell-escape` — no reachable call site under any feature combination; superseded by direct command-arg passing in `src/commands/`
+  - `once_cell` — no reachable call site under any feature combination; remains as a transitive dep of `regex` / `tempfile`, no functional change
+
 ## [2.0.1] - 2026-04-26
 
 ### Fixed

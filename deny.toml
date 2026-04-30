@@ -9,3 +9,29 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
 ]
+
+# Phase 10 / DEPS-02 — full advisory / bans / sources policy.
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+unmaintained = "workspace"
+# `notice` removed in cargo-deny 0.19 (EmbarkStudios/cargo-deny#611);
+# use `ignore` per-advisory if a notice-level RUSTSEC needs to be silenced.
+ignore = [
+    # Format: "RUSTSEC-YYYY-NNNNN", # rationale; expires: YYYY-MM-DD
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = [
+    "https://github.com/dspearson/trelis",
+]

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build script for static musl binaries
+# Purpose: Build static musl binary locally using rustup target + system musl-gcc (interactive strip prompt; supports x86_64 / aarch64 / armv7).
 
 set -e
 

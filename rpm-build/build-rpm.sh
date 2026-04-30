@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build RPM packages for RHEL 8, RHEL 9, and RHEL 10
+# Purpose: Canonical RPM-build entry point — builds sss RPMs for RHEL 8/9/10 and Fedora 42 inside per-distro Rocky/Fedora Docker images (or --no-container locally).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

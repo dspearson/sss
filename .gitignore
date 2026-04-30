@@ -42,6 +42,8 @@ sss-master/
 # Packaging and build infrastructure
 /debian/
 /dist/
+# Release staging directories (e.g. release-2.0.1/) — generated locally, not committed
+release-*/
 
 # GSD workflow metadata (local planning artefacts, not for distribution)
 /.planning/

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run FUSE integration tests
+# Purpose: Run the FUSE-feature integration test suite (mounts /tmp/sss-test, exercises sss mount, asserts cleanup).
 #
 # Usage: ./scripts/run-fuse-tests.sh [test_name]
 #

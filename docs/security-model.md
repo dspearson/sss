@@ -279,6 +279,7 @@ matches what was reviewed at v2.0 inception) is tracked as
 [DEPS-03](../.planning/REQUIREMENTS.md) and lives in Phase 10 — that work has not
 happened yet at the time of this writing. The pin commit hash above is cited as a
 fact about the build, not a guarantee of provenance.
+Verified by Phase 10 (DEPS-03) on 2026-04-29 — pin matches v2.0-inception citation; remote reachable.
 
 ### Unaudited
 

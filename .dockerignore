@@ -1,0 +1,5 @@
+target/
+dist/
+.git/
+rpm-build/rpmbuild/
+*.vsix

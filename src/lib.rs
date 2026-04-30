@@ -52,7 +52,7 @@
 //! - `winfsp_fs` — WinFSP filesystem (Windows, `feature = "winfsp"`,
 //!   `pub(crate)`)
 //! - `ninep_fs` — 9P server (`feature = "ninep"`, `pub(crate)`; the re-export
-//!   [`SssNinepFS`] is public)
+//!   `SssNinepFS` is public — only reachable under `feature = "ninep"`)
 //! - [`filesystem_common`] — cross-backend filesystem helpers (public; reached
 //!   by `benches/fuse_read_latency.rs`)
 //!
@@ -61,7 +61,7 @@
 //! The curated public surface is the re-export block below: [`Config`],
 //! [`KeyPair`], [`RepositoryKey`], [`SssError`] / [`Result`],
 //! [`KeyringManager`], [`Keystore`], [`Processor`], [`ProjectConfig`], plus
-//! [`SssNinepFS`] (cfg-gated). The 11 `pub mod` declarations (`agent`,
+//! `SssNinepFS` (cfg-gated, `feature = "ninep"`). The 11 `pub mod` declarations (`agent`,
 //! `askpass`, `audit_log`, `commands`, `config`, `config_manager`, `crypto`,
 //! `filesystem_common`, `keystore`, `marker_inference`, `processor`)
 //! constitute the additional reachable module surface (consumed by binaries

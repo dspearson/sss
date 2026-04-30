@@ -1,5 +1,5 @@
 #!/bin/bash
-# Universal Development Environment Manager
+# Purpose: Universal development-environment manager for sss across Linux distros (apt/dnf/pacman/zypper) — installs build deps, Rust, optional FUSE.
 # Supports: macOS, Linux, WSL (Ubuntu/Debian/Fedora/Arch)
 # Features: Install/Uninstall Determinate Nix (with flakes) + direnv + shell hooks
 set -e

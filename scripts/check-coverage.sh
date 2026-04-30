@@ -1,5 +1,5 @@
 #!/bin/bash
-# Simple test coverage analyzer for SSS
+# Purpose: Run cargo test with coverage instrumentation and report per-module coverage stats.
 # Usage: ./scripts/check-coverage.sh
 
 set -e

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Development Environment Installer for macOS
+# Purpose: Bootstrap a macOS development environment for sss (homebrew deps, Rust toolchain, FUSE prerequisites).
 # Installs: Determinate Nix (with flakes) + direnv
 set -e
 

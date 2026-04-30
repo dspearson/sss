@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build fully static sss binary locally (no libsodium dependency)
+# Purpose: Build a fully-static sss binary on macOS (compiling libsodium from source) or on Linux (musl toolchain) — full bootstrap, no system libsodium dependency.
 
 set -euo pipefail
 

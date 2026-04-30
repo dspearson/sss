@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build static musl binaries using Docker (no local musl-tools needed)
+# Purpose: Build static musl binary inside the clux/muslrust Docker container (no host musl toolchain required).
 
 set -e
 

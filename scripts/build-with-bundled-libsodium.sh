@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build sss with bundled libsodium that loads from executable directory
+# Purpose: Build sss with dynamic libsodium and rewrite RPATH ($ORIGIN on Linux, @executable_path on macOS) so libsodium ships next to the binary.
 
 set -euo pipefail
 

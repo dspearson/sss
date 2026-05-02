@@ -704,7 +704,7 @@ sss keys list --show-usage
 
 ## See Also
 
-- [SECURITY.md](./SECURITY.md) - Security architecture and threat model
+- [SECURITY.md](../SECURITY.md) - Security architecture and threat model
 - [CRYPTOGRAPHY.md](./CRYPTOGRAPHY.md) - Cryptographic implementation details
 - [README.md](../README.md) - General usage documentation
 

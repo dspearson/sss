@@ -323,11 +323,13 @@ sss init --crypto hybrid alice    # create v2.0 project
 ### Migrating an existing project to hybrid
 
 ```bash
-# Step 1: every user generates a hybrid keypair
-sss keys generate --suite hybrid
+# Step 1: every user generates a hybrid keypair (stdout shows the new
+# "Hybrid public key: <base64>" line — capture it for the next step)
+sss keys generate --suite hybrid | tee alice-hybrid-keygen.log
 
-# Step 2: every user exports their hybrid public key and shares it
-sss keys pubkey --suite hybrid > alice-hybrid.pub
+# Step 2: every user extracts their hybrid public key from the keygen output
+grep '^Hybrid public key:' alice-hybrid-keygen.log \
+  | awk '{print $NF}' > alice-hybrid.pub
 
 # Step 3: the project owner records each user's hybrid key
 sss users add-hybrid-key alice "$(cat alice-hybrid.pub)"
@@ -340,6 +342,10 @@ sss migrate
 ```
 
 After `sss migrate`, `.sss.toml` carries `version = "2.0"`. All sealed files are unchanged.
+
+Once the project is at `version = "2.0"`, `sss keys pubkey` automatically returns
+the hybrid public key, so subsequent post-migration sharing reduces to
+`sss keys pubkey > username-hybrid.pub`.
 
 ### Building with hybrid support
 

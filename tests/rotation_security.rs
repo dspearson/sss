@@ -22,8 +22,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use sss::crypto::{KeyPair, RepositoryKey};
-use sss::project::ProjectConfig;
-use sss::rotation::{RotationManager, RotationOptions, RotationReason};
+use sss::{ProjectConfig, RotationManager, RotationOptions, RotationReason};
 
 /// Helper to create a test project with encrypted files
 fn create_test_project_with_files(
@@ -101,7 +100,19 @@ fn test_end_to_end_key_rotation_workflow() -> Result<()> {
     // Verify backup was created
     let backup_path = result.backup_path.unwrap();
     assert!(backup_path.exists());
-    assert_eq!(fs::read_dir(&backup_path)?.count(), 5);
+    // Why: the production rotate_keys path now backs up .sss.toml plus
+    // intermediate config files alongside the user-created test fixtures.
+    // A strict `count() == 5` was correct when written but drifted with the
+    // production backup logic (surfaced by Phase 11-01 audit: 8 vs 5).
+    // Filter to the `test_file_*` prefix we created above so the assertion
+    // stays robust against future config-backup churn. The exact-count form
+    // is preserved — all 5 created fixtures must appear in the backup.
+    // TEST-06 / Phase 14 / D-01.
+    let test_file_count = fs::read_dir(&backup_path)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("test_file_"))
+        .count();
+    assert_eq!(test_file_count, 5);
 
     // Verify files were re-encrypted (content changed)
     let new_content = fs::read_to_string(&test_file)?;

@@ -336,6 +336,19 @@ pub use processor::Processor;
 /// `docs/CRYPTOGRAPHY.md` for the suite-version dispatch contract.
 pub use project::ProjectConfig;
 
+/// Re-exports the key-rotation API: the manager that drives the rotate
+/// workflow, the options struct (backup / force / dry-run / progress), and
+/// the reason enum used in the audit log.
+///
+/// These three types are the complete public surface of `sss::rotation`
+/// required by integration tests (`tests/rotation_security.rs`,
+/// `tests/multi_user_e2e.rs`). They were inadvertently hidden by the
+/// Phase 11-04 `pub(crate)` downgrade, which only validated the gate set
+/// `{public_api_panic_surface, lib --no-run, bench --no-run}` — neither
+/// integration-test file was in that gate. Re-exported here to restore the
+/// test surface without widening any other `rotation::` internals.
+pub use rotation::{RotationManager, RotationOptions, RotationReason};
+
 /// Re-exports the 9P-protocol filesystem server (`feature = "ninep"`).
 ///
 /// Use `SssNinepFS::new(...)` from the `sss 9p` subcommand to mount a 9P

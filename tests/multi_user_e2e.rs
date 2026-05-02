@@ -15,8 +15,7 @@ use tempfile::TempDir;
 
 use sss::crypto::{open_repository_key, seal_repository_key, KeyPair, RepositoryKey};
 use sss::processor::Processor;
-use sss::project::ProjectConfig;
-use sss::rotation::{RotationManager, RotationOptions, RotationReason};
+use sss::{ProjectConfig, RotationManager, RotationOptions, RotationReason};
 
 // ---------------------------------------------------------------------------
 // Helper: create a Processor that uses a project-specific context so that

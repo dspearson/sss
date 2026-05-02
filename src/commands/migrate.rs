@@ -310,4 +310,175 @@ mod tests {
             "find_user_by_public_key must return Some(\"alice\") when alice's classic pubkey matches"
         );
     }
+
+    // -------------------------------------------------------------------------
+    // TEST-08: Property-based migration tests (Phase 14 / Plan 14-03 / D-04)
+    //
+    // Placed inline (not in tests/cross_suite_property_test.rs) because
+    // UserConfig and ProjectConfig live in pub(crate) mod project, making
+    // them unreachable from integration-test crates. The inline mod uses
+    // `use super::*` which brings them in scope without widening any public API.
+    // -------------------------------------------------------------------------
+
+    /// Deep-copy a ProjectConfig via TOML round-trip. ProjectConfig does not
+    /// derive Clone (it has no need to outside of tests), so we serialise and
+    /// deserialise to get an independent copy. Panics on serialisation failure.
+    fn clone_project_config(cfg: &ProjectConfig) -> ProjectConfig {
+        let toml_str = crate::toml_helpers::serialize_toml(cfg, "test config")
+            .expect("serialise ProjectConfig for clone");
+        crate::toml_helpers::parse_toml(&toml_str, "test config")
+            .expect("parse ProjectConfig clone")
+    }
+
+    /// Strategy: a v1 ProjectConfig with N (1..=4) users. Each user has a fresh
+    /// classic public key and a fresh hybrid public key, so migrate_project_config
+    /// has all the material it needs to seal new hybrid entries.
+    ///
+    /// Placed outside the proptest! blocks so the Strategy trait import is
+    /// available.
+    fn v1_project_config_strategy()
+        -> impl proptest::strategy::Strategy<Value = ProjectConfig>
+    {
+        use proptest::strategy::Strategy as _;
+        (1usize..=4).prop_map(|n_users| {
+            use crate::crypto::ClassicSuite;
+            let repo_key = RepositoryKey::new();
+            let mut cfg = ProjectConfig::default();
+            cfg.version = "1.0".to_string();
+            for i in 0..n_users {
+                let classic_kp = KeyPair::generate().expect("classic kp");
+                let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp");
+                let hybrid_b64 = base64::prelude::BASE64_STANDARD
+                    .encode(hybrid_kp.public_key().as_bytes());
+                let classic_pk = classic_kp.public_key();
+                let sealed = ClassicSuite
+                    .seal_repo_key(&repo_key, &classic_pk)
+                    .expect("seal v1 key");
+                cfg.users.insert(format!("user{i}"), UserConfig {
+                    public: classic_pk.to_base64(),
+                    sealed_key: sealed,
+                    added: "2026-01-01T00:00:00Z".to_string(),
+                    hybrid_public: Some(hybrid_b64),
+                });
+            }
+            cfg
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 30,
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        })]
+
+        /// TEST-08: migration idempotency property. After running
+        /// `migrate_project_config(false)` twice on the same input vs once on a
+        /// clone, the deterministic surface (version, user set, hybrid_public per
+        /// user) is identical. Sealed_key BYTES differ across calls because the
+        /// hybrid AEAD seal uses a random nonce (src/crypto/hybrid.rs:170-176),
+        /// so the property compares structure, not bytes.
+        ///
+        /// Phase 14 / Plan 14-03 / D-04. Why: catches regressions in the
+        /// user-loop ordering, the version field mutation, or a hypothetical
+        /// "already-migrated guard" that would prevent re-migration from
+        /// working, which would surface as semantic drift across repeated runs.
+        #[test]
+        fn prop_migrate_idempotent(cfg in v1_project_config_strategy()) {
+            let repo_key = RepositoryKey::new();
+            let mut cfg1 = clone_project_config(&cfg);
+            let mut cfg2 = clone_project_config(&cfg);
+
+            // First migration on cfg1
+            migrate_project_config(&mut cfg1, &repo_key, false)
+                .expect("first migrate");
+            proptest::prop_assert_eq!(
+                cfg1.version.as_str(), "2.0",
+                "after migration, version must be 2.0"
+            );
+
+            // Second migration on the already-migrated cfg1 (re-seal allowed —
+            // validate+seal loop does not reject version=="2.0" configs;
+            // it only checks that every user has hybrid_public set).
+            migrate_project_config(&mut cfg1, &repo_key, false)
+                .expect("second migrate (re-seal allowed)");
+            proptest::prop_assert_eq!(
+                cfg1.version.as_str(), "2.0",
+                "after re-migration, version must still be 2.0"
+            );
+
+            // Reference: single migration on cfg2
+            migrate_project_config(&mut cfg2, &repo_key, false)
+                .expect("reference migrate");
+
+            // Structural equivalence: same user set, every user has a non-empty
+            // sealed_key after migration, every user's hybrid_public is preserved.
+            // Sealed_key BYTES differ (random nonce per seal — not a bug).
+            let users1: std::collections::BTreeSet<&String> =
+                cfg1.users.keys().collect();
+            let users2: std::collections::BTreeSet<&String> =
+                cfg2.users.keys().collect();
+            proptest::prop_assert_eq!(
+                users1, users2,
+                "user set must be invariant under re-migration"
+            );
+
+            for (uname, uc) in &cfg1.users {
+                proptest::prop_assert!(
+                    !uc.sealed_key.is_empty(),
+                    "user {} sealed_key must be non-empty after migration", uname
+                );
+                proptest::prop_assert!(
+                    uc.hybrid_public.is_some(),
+                    "user {} hybrid_public must be preserved after migration", uname
+                );
+            }
+        }
+
+        /// TEST-08: --dry-run determinism property. Two dry-run invocations on
+        /// the same input ProjectConfig + same RepositoryKey produce identical
+        /// (username order + count) outputs, and the input config is unchanged.
+        ///
+        /// Phase 14 / Plan 14-03 / D-04. Why: dry-run is the user-facing preview
+        /// of `sss migrate`; non-determinism in the username order would make the
+        /// preview misleading. The sealed_key BYTES differ between calls because
+        /// the hybrid AEAD seal uses a random nonce (src/crypto/hybrid.rs:170-176)
+        /// — that is the documented contract, not a bug. The property checks the
+        /// deterministic surface only: username order + count.
+        #[test]
+        fn prop_migrate_dry_run_deterministic(cfg in v1_project_config_strategy()) {
+            let repo_key = RepositoryKey::new();
+            let original_version = cfg.version.to_string();
+            let original_user_count = cfg.users.len();
+            let mut cfg_mut = clone_project_config(&cfg);
+
+            let result1 = migrate_project_config(&mut cfg_mut, &repo_key, true)
+                .expect("first dry-run");
+            let result2 = migrate_project_config(&mut cfg_mut, &repo_key, true)
+                .expect("second dry-run");
+
+            // Dry-run promise: input is unchanged.
+            proptest::prop_assert_eq!(
+                cfg_mut.version, original_version,
+                "dry-run must not mutate config.version"
+            );
+            proptest::prop_assert_eq!(
+                cfg_mut.users.len(), original_user_count,
+                "dry-run must not change user count"
+            );
+
+            // Determinism over the deterministic surface:
+            // username order (sorted at line 53) and entry count.
+            proptest::prop_assert_eq!(
+                result1.len(), result2.len(),
+                "dry-run output count must be invariant across two calls"
+            );
+            let names1: Vec<&String> = result1.iter().map(|(u, _)| u).collect();
+            let names2: Vec<&String> = result2.iter().map(|(u, _)| u).collect();
+            proptest::prop_assert_eq!(
+                names1, names2,
+                "dry-run username order must be deterministic (sorted)"
+            );
+        }
+    }
 }

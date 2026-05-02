@@ -1996,22 +1996,36 @@ fn e2e_v2_binary_reads_v1_repo_without_migration() {
 /// "hybrid feature", no panic, and no corrupting writes.
 ///
 /// Only compiled and run when the `hybrid` feature is OFF (non-hybrid = v1-equivalent build).
+// Why: the original approach wrote a hand-crafted .sss.toml with a dummy public
+// key and an invalid base64 sealed_key. Two problems:
+// 1. The sealed_key had 160 A's + "==" — invalid base64 (160 divisible by 4, no
+//    padding needed), causing ProjectConfig::validate() to emit "Invalid base64
+//    sealed key" BEFORE suite_for(Suite::Hybrid) was called.
+// 2. Even with valid base64, the public key didn't match the generated keypair, so
+//    the authorization check ("None of your keypairs are authorized") fired before
+//    suite_for() was reached.
+// Fix: use `sss init --crypto hybrid` to create a proper v2 .sss.toml that
+// (a) has version = "2.0", (b) uses the real generated public key so authorization
+// passes, and (c) has a valid ClassicSuite sealed_key (init always seals via Classic).
+// With a real authorized user, suite_for(Suite::Hybrid) is reached and emits
+// "hybrid suite requires the `hybrid` feature". TEST-06 / Phase 14 / D-01.
 #[test]
 #[cfg(not(feature = "hybrid"))]
 fn e2e_v1_binary_rejects_v2_config_with_documented_error() {
     let env = SssTestEnv::new();
     env.generate_keys(); // generate classic keys only
 
-    // Manually craft a v2 .sss.toml in the project dir (no valid sealed_key needed;
-    // the suite gate fires before any unseal attempt).
-    let v2_config = r#"version = "2.0"
-
-[testuser]
-public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
-added = "2026-01-01T00:00:00Z"
-"#;
-    env.write_file(".sss.toml", v2_config);
+    // Create a v2 .sss.toml using `sss init --crypto hybrid`.
+    // This stamps version="2.0" with the real user's public key + a valid
+    // ClassicSuite sealed_key — authorization passes, suite_for(Hybrid) fires.
+    let init_out = env.cmd().args(["init", "--crypto", "hybrid", "testuser"]).output()
+        .expect("run sss init --crypto hybrid");
+    assert!(
+        init_out.status.success(),
+        "hybrid init must succeed on non-hybrid build; stderr: {}",
+        String::from_utf8_lossy(&init_out.stderr)
+    );
+    let v2_config = env.read_file(".sss.toml");
 
     // Any command that loads the project config and dispatches suite_for must
     // fail with the documented error.  `sss seal` triggers
@@ -2056,11 +2070,13 @@ fn e2e_hybrid_binary_opens_v2_config_no_version_error() {
     // Do NOT call env.setup() — we want to check the suite gate only.
     // Write a syntactically valid v2 .sss.toml with a placeholder sealed_key.
     // The test just verifies the error is NOT about the hybrid feature.
+    // sealed_key uses the same valid 80-byte base64 placeholder fixed in the
+    // sibling non-hybrid test (TEST-06 / Phase 14 / D-01).
     let v2_config = r#"version = "2.0"
 
 [testuser]
 public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+sealed_key = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
 added = "2026-01-01T00:00:00Z"
 "#;
     env.write_file(".sss.toml", v2_config);

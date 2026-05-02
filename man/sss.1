@@ -1,4 +1,4 @@
-.TH sss 1 "2026-04-26" "sss 2.0.0" "User Commands"
+.TH sss 1 "2026-05-02" "sss 2.0.1" "User Commands"
 .SH NAME
 sss \- Secret String Substitution: transparent encryption for text files
 .SH SYNOPSIS
@@ -14,10 +14,16 @@ sss uses a hybrid cryptographic approach combining asymmetric (Ed25519) and symm
 .SH COMMANDS
 .SS Project Management
 .TP
-.B sss init \fR[\fIusername\fR]
+.B sss init \fR[\fIusername\fR] [\fB--crypto\fR \fIclassic|hybrid\fR]
 Initialise a new sss project in the current directory. Creates a
 .I .sss.toml
-configuration file and sets up the initial user. If username is not provided, uses the configured default username or prompts for one.
+configuration file and sets up the initial user. If username is not provided, uses the configured default username or prompts for one. With
+.B --crypto hybrid
+the project is created at version "2.0" with the hybrid post-quantum suite enabled (requires sss built with
+.B --features hybrid
+for subsequent operations). Default is
+.B --crypto classic
+(project version "1.0").
 .TP
 .B sss status
 Check if the current directory is within an sss project. Outputs the project root path and exits with status 0 if in a project, 1 otherwise.
@@ -69,9 +75,49 @@ Rotate the project encryption key. This generates a new symmetric key, re-encryp
 .B --dry-run
 to preview changes without applying them.
 .TP
-.B sss keygen \fR[\fB--force\fR] [\fB--no-password\fR]
+.B sss keys set-passphrase \fIkey-id\fR
+Set or change the passphrase that wraps a stored private key. Accepts a full or partial key ID. Prompts twice for the new passphrase (or reads from
+.B SSS_PASSPHRASE
+under
+.B --non-interactive\fR).
+.TP
+.B sss keys remove-passphrase \fIkey-id\fR
+Remove passphrase protection from a stored private key, leaving it unencrypted on disk. Accepts a full or partial key ID. The key remains in the keystore but is no longer wrapped under a passphrase.
+.TP
+.B sss keys show
+Display the public key fingerprint and randomart for every suite present in the current keypair (classic, hybrid, or both). Use this to obtain a hybrid public key string for
+.B sss users add-hybrid-key\fR.
+.TP
+.B sss keygen \fR[\fB--suite\fR \fIclassic|hybrid|both\fR] [\fB--force\fR] [\fB--no-password\fR]
 .I (Deprecated: use "sss keys generate" instead)
-Generate a new Ed25519 keypair.
+Generate a new keypair. Accepts the same
+.B --suite
+selector as
+.B sss keys generate
+(classic, hybrid, or both).
+.SS User Management
+The
+.B sss users
+subcommand offers a top-level alias for the project-user operations also available under
+.BR sss\ project\ users .
+The two forms are equivalent and may be used interchangeably; the top-level form is preferred when scripting against v2.0 (it is the form returned by
+.BR --help ).
+.TP
+.B sss users list
+List project users (alias of
+.BR sss\ project\ users\ list ).
+.TP
+.B sss users add \fIusername\fR \fIpubkey\fR
+Add a user to the project (alias of
+.BR sss\ project\ users\ add ).
+.TP
+.B sss users remove \fIusername\fR
+Remove a user from the project (alias of
+.BR sss\ project\ users\ remove ). Triggers automatic key rotation.
+.TP
+.B sss users info \fIusername\fR
+Show information about a project user (alias of
+.BR sss\ project\ users\ info ).
 .SS Migration (v2.0)
 .TP
 .B sss migrate \fR[\fB--dry-run\fR]
@@ -116,7 +162,7 @@ can re-wrap their entry.
 .SS User Settings
 .TP
 .B sss settings show
-Display current user settings including default username, editor, output preferences, and auto-processing settings.
+Display current user settings, including default username, editor, output preferences, secrets-file conventions, KDF level, and keyring usage.
 .TP
 .B sss settings set \fB--username\fR \fIuser\fR
 Set the default username for sss operations. Use 'none' to clear.
@@ -129,11 +175,23 @@ Use 'none' to clear and fall back to $EDITOR or system defaults.
 .B sss settings set \fB--coloured\fR \fItrue|false\fR
 Enable or disable coloured terminal output.
 .TP
-.B sss settings set \fB--auto-render-projects\fR \fItrue|false\fR
-Enable or disable automatic rendering for all projects globally.
+.B sss settings set \fB--secrets-filename\fR \fIfilename\fR
+Set the default secrets filename used by project-wide commands (e.g.
+.IR passwords ,
+.IR .secrets ).
+Use 'none' to fall back to the built-in default.
 .TP
-.B sss settings set \fB--auto-open-projects\fR \fItrue|false\fR
-Enable or disable automatic opening for all projects globally.
+.B sss settings set \fB--secrets-suffix\fR \fIsuffix\fR
+Set the default secrets file suffix (e.g.
+.IR .sealed ,
+.IR .passwords ).
+Use 'none' to fall back to the built-in default.
+.TP
+.B sss settings set \fB--kdf-level\fR \fIlevel\fR
+Set the default Argon2id security level for newly generated keys. Accepted values: sensitive (most secure, default), moderate (balanced), interactive (fastest), plus the aliases high/medium/low/fast/balanced and 'none' to clear.
+.TP
+.B sss settings set \fB--use-keyring\fR \fItrue|false\fR
+Enable or disable use of the system keyring for private-key storage (macOS Keychain, Windows Credential Manager, Linux Secret Service).
 .TP
 .B sss settings reset \fB--confirm\fR
 Reset all user settings to defaults. Requires
@@ -164,12 +222,52 @@ Disallow automatic opening for the current project.
 .TP
 .B sss project remove \fR[\fIpath\fR]
 Remove project-specific settings. Uses current directory if path not specified.
+.TP
+.B sss project \fB--render\fR
+Shortcut form: enable automatic rendering for the current project. Equivalent to
+.BR sss\ project\ enable\ render .
+.SS Project Ignore Patterns
+.TP
+.B sss project ignore add \fIpattern\fR
+Add a glob pattern to the project ignore list (e.g.
+.IR *.log ,
+.IR build/** ).
+Project-wide operations such as
+.B sss seal --project
+skip files that match any ignore pattern.
+.TP
+.B sss project ignore remove \fIpattern\fR
+Remove a glob pattern from the project ignore list. The pattern must match an existing entry exactly.
+.TP
+.B sss project ignore list
+Show all glob patterns currently in the project ignore list.
+.SS Project Secrets Filename
+.TP
+.B sss project secrets-file set \fIfilename\fR
+Set a custom secrets filename for this project (e.g.
+.IR .env ,
+.IR config ).
+Used in place of the default
+.IR secrets .
+.TP
+.B sss project secrets-file show
+Show the configured secrets filename for this project (or report the default if none is configured).
+.TP
+.B sss project secrets-file clear
+Clear the project-specific secrets filename and revert to the default
+.IR secrets .
 .SS Git Hooks Management
 .TP
-.B sss hooks install
+.B sss hooks install \fR[\fB--template\fR] [\fB--multiplex\fR]
 Install sss git hooks to the current repository's
 .I .git/hooks/
-directory. Recommended for automatic encryption/decryption during git operations.
+directory. Recommended for automatic encryption/decryption during git operations. With
+.B --template
+the hooks are installed into the user's git template directory (affecting future clones) instead of the current repository. With
+.B --multiplex
+the hooks are installed into the multiplexed
+.I hooks.d/
+structure rather than as monolithic scripts.
 .TP
 .B sss hooks export
 Export sss git hooks to
@@ -183,28 +281,28 @@ List all available git hooks embedded in the sss binary.
 Display the contents of a specific hook (e.g., pre-commit, post-merge, post-checkout).
 .SS File Operations
 .TP
-.B sss seal \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+.B sss seal \fR[\fB-x\fR] [\fB--project\fR] \fIfile\fR
 Encrypt plaintext markers (⊕{...} or o+{...}) to ciphertext markers (⊠{...}). By default, outputs to stdout. Use
 .B -x
 for in-place modification. Use
 .B --project
 to seal all files in the project (always in-place). Accepts '-' to read from stdin.
 .TP
-.B sss open \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+.B sss open \fR[\fB-x\fR] [\fB--project\fR] \fIfile\fR
 Decrypt ciphertext markers to plaintext markers. By default, outputs to stdout. Use
 .B -x
 for in-place modification. Use
 .B --project
 to open all files in the project (requires permission). Accepts '-' to read from stdin.
 .TP
-.B sss render \fR[\fB-x\fR] [\fB--project\fR] [\fB--user\fR \fIusername\fR] \fIfile\fR
+.B sss render \fR[\fB-x\fR] [\fB--project\fR] \fIfile\fR
 Decrypt ciphertext markers to raw text (removes all markers). By default, outputs to stdout. Use
 .B -x
 for in-place modification. Use
 .B --project
 to render all files in the project (requires permission). Accepts '-' to read from stdin.
 .TP
-.B sss edit \fR[\fB--user\fR \fIusername\fR] \fIfile\fR
+.B sss edit \fIfile\fR
 Edit a file with automatic encryption/decryption. Opens the file in the configured editor with markers in plaintext form, then automatically seals it on save. Always modifies in-place.
 .SH STRING PATTERNS
 sss recognises the following patterns in text files:
@@ -342,18 +440,25 @@ Configure defaults:
 .RS
 $ sss settings set --username alice
 $ sss settings set --editor vim
-$ sss settings set --auto-render-projects true
+$ sss settings set --coloured true
+$ sss settings set --kdf-level moderate
 $ sss settings show
 .RE
 .fi
 .SS Hybrid Suite Migration
-Upgrade a project from classic to hybrid:
+Create a fresh v2.0 project, or upgrade a v1.0 project from classic to hybrid:
 .PP
 .nf
 .RS
+# Fresh v2.0 project (no migration needed)
+$ sss keys generate --suite both
+Enter passphrase: ****
+$ sss init --crypto hybrid alice
+
+# Or: migrate an existing v1.0 project to v2.0
 $ sss keys generate --suite hybrid
 Enter passphrase: ****
-$ sss keys pubkey --suite hybrid > alice-hybrid.pub
+$ sss keys show > alice-hybrid.pub      # capture the hybrid public key
 $ sss users add-hybrid-key alice "$(cat alice-hybrid.pub)"
 $ sss migrate --dry-run
 Would re-wrap 3 users: alice, bob, carol
@@ -381,10 +486,36 @@ Keystore location on macOS.
 .TP
 .I %APPDATA%\\sss\\
 Keystore location on Windows.
+.SH GLOBAL OPTIONS
+The following options apply to every subcommand and may be passed either before or after the subcommand name:
+.TP
+.B --confdir \fIDIR\fR
+Override the configuration directory. Replaces the platform default (e.g.
+.IR ~/.config/sss/ )
+for the duration of the invocation. Useful for tests, multi-account workflows, and CI.
+.TP
+.B --non-interactive
+Refuse to prompt for any input. If a passphrase is required it must be supplied via the
+.B SSS_PASSPHRASE
+environment variable; otherwise the command exits non-zero.
+.TP
+.B --kdf-level \fILEVEL\fR
+Override the Argon2id security level for the current invocation. Accepted values: sensitive (default, most secure), moderate (balanced), interactive (fastest), plus the aliases high, medium, low, fast, and balanced.
+.TP
+.BR -V ", " --version
+Print the version string and exit.
+.TP
+.BR -h ", " --help
+Print help for the command being invoked and exit.
 .SH ENVIRONMENT
 .TP
 .B SSS_USER
 Override the default username for SSS operations. Takes precedence over configured default.
+.TP
+.B SSS_PASSPHRASE
+Supplies the keypair passphrase non-interactively. Required when
+.B --non-interactive
+is in effect and the operation needs to unwrap a private key. Cleared from process memory after use.
 .TP
 .B EDITOR
 Fallback text editor if not configured via

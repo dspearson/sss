@@ -66,7 +66,7 @@ fn test_user_settings_secrets_filename_fallback() -> anyhow::Result<()> {
 
 /// Test that default secrets_filename is used when neither project nor user config specifies
 #[test]
-fn test_default_secrets_filename() -> anyhow::Result<()> {
+fn default_secrets_filename_is_secrets() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("config");
     fs::create_dir_all(&config_dir)?;
@@ -147,7 +147,7 @@ fn test_user_settings_secrets_suffix_fallback() -> anyhow::Result<()> {
 
 /// Test that default secrets_suffix is used when neither project nor user config specifies
 #[test]
-fn test_default_secrets_suffix() -> anyhow::Result<()> {
+fn default_secrets_suffix_is_dot_secrets() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
     let config_dir = temp_dir.path().join("config");
     fs::create_dir_all(&config_dir)?;

@@ -2,8 +2,13 @@
 
 use sss::marker_inference::infer_markers;
 
+// Why: integration-level test exercising two concurrent marker modifications
+// through `infer_markers`. The src-inline counterpart in
+// `src/marker_inference/mod.rs::tests::test_single_marker_modification_replaces_value`
+// covers the single-marker case directly. Renamed in Phase 14 / Plan 14-04
+// (TEST-09) to disambiguate the previous duplicate `test_simple_modification`.
 #[test]
-fn test_simple_modification() {
+fn marker_inference_infers_two_markers_modified_in_one_edit() {
     let source = "A o+{strange day} for a o+{walk}";
     let edited = "A nasty day for a stroll outside";
 

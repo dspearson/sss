@@ -180,8 +180,13 @@ pub fn infer_markers(source_text: &str, edited_text: &str) -> Result<MarkerInfer
 mod tests {
     use super::*;
 
+    // Why: unit-level test for the single-marker modification case. The
+    // integration counterpart at
+    // `tests/marker_inference/integration.rs::marker_inference_infers_two_markers_modified_in_one_edit`
+    // covers two concurrent modifications. Renamed in Phase 14 / Plan 14-04
+    // (TEST-09) to disambiguate the previous duplicate `test_simple_modification`.
     #[test]
-    fn test_simple_modification() {
+    fn test_single_marker_modification_replaces_value() {
         let source = "password: o+{secret123}";
         let edited = "password: newsecret456";
 

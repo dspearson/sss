@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_replacement() {
+    fn test_disjoint_strings_replacement_returns_single_change() {
         // Use strings with no common characters to ensure single change
         let changes = compute_diff("abc", "xyz").unwrap();
         assert_eq!(changes.len(), 1);

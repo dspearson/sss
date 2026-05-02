@@ -66,8 +66,11 @@ fn test_double_escape() {
 // Section 9.2: Nesting and Recursion
 // ============================================================================
 
+// Why: nested `o+{...o+{...}}` source produces an escaped outer marker
+// (`o+\{`) in the inferred output — verifies the parser does not treat the
+// inner marker as a recursion boundary. Phase 14 / Plan 14-04 (TEST-09).
 #[test]
-fn test_simple_nesting() {
+fn nested_marker_outer_escaped_during_parsing() {
     let source = "o+{a o+{b}}";
     let edited = "a o+\\{b}";
     let result = infer_markers(source, edited).unwrap();

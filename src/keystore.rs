@@ -1192,4 +1192,130 @@ mod tests {
 
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // TEST-08: Property-based round-trip tests (Phase 14 / Plan 14-03 / D-04)
+    //
+    // Placed inline (not in tests/keystore_integration_tests.rs) because
+    // KdfParams is pub(crate) after CLEAN-03 (Plan 11-04), making it unreachable
+    // from integration-test crates. The inline mod uses `use super::*` which
+    // brings KdfParams into scope without widening any public API.
+    // -------------------------------------------------------------------------
+
+    /// Faster temp keystore for property tests — uses KdfParams::interactive()
+    /// (N=32768) rather than the sensitive default to keep per-case latency low.
+    fn create_temp_keystore_interactive() -> Result<(Keystore, TempDir)> {
+        let temp_dir = TempDir::new()?;
+        let keys_dir = temp_dir.path().to_path_buf();
+        let keystore = Keystore {
+            keys_dir,
+            kdf_params: KdfParams::interactive(),
+            use_keyring: false,
+        };
+        Ok((keystore, temp_dir))
+    }
+
+    /// Strategy: optional non-empty printable-ASCII password (1-31 chars) or None.
+    /// None exercises the passwordless path. 0-length passwords are excluded
+    /// because the API maps them the same as None but proptest can't infer that.
+    fn keystore_password_strategy()
+        -> impl proptest::strategy::Strategy<Value = Option<String>>
+    {
+        use proptest::strategy::Strategy as _;
+        proptest::option::of(
+            proptest::collection::vec(proptest::char::range(' ', '~'), 1..32usize)
+                .prop_map(|v: Vec<char>| v.into_iter().collect::<String>()),
+        )
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 50,
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        })]
+
+        /// TEST-08: keystore round-trip property — for any classic KeyPair and any
+        /// password (or no password), storing and loading must recover bit-identical
+        /// public-key and secret-key bytes.
+        ///
+        /// Phase 14 / Plan 14-03 / D-04. Why: regressions in keystore serialisation
+        /// (e.g. nonce drift, salt re-use, format-version mismatch) surface as
+        /// non-equality in the round-trip; the property catches them before the
+        /// shipping binary touches a real keystore.
+        #[test]
+        fn prop_keystore_classic_roundtrip(password in keystore_password_strategy()) {
+            let (keystore, _temp_dir) =
+                create_temp_keystore_interactive().expect("temp keystore");
+            let keypair = KeyPair::generate().expect("classic keypair generate");
+            let pw_ref = password.as_deref();
+
+            let key_id = keystore
+                .store_keypair(&keypair, pw_ref)
+                .expect("store classic keypair");
+            let retrieved = keystore
+                .load_keypair(&key_id, pw_ref)
+                .expect("load classic keypair");
+
+            proptest::prop_assert_eq!(
+                keypair.public_key().to_base64(),
+                retrieved.public_key().to_base64(),
+                "public key round-trip must be byte-identical"
+            );
+            proptest::prop_assert_eq!(
+                keypair.secret_key().unwrap().to_base64(),
+                retrieved.secret_key().unwrap().to_base64(),
+                "secret key round-trip must be byte-identical"
+            );
+        }
+    }
+
+    #[cfg(feature = "hybrid")]
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            cases: 30,
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        })]
+
+        /// TEST-08: hybrid keystore round-trip property — for any dual-suite
+        /// (ClassicKeyPair + HybridKeyPair) identity and any password, storing
+        /// via store_dual_keypair and loading via load_hybrid_keypair must recover
+        /// bit-identical hybrid public-key bytes.
+        ///
+        /// Phase 14 / Plan 14-03 / D-04. Why: regressions in the dual-store path
+        /// (e.g. wrong AEAD offset for hybrid_encrypted_secret_key, or public-key
+        /// serialisation drift) would silently produce unloadable identity files
+        /// only on the hybrid path; the property catches them pre-shipping.
+        ///
+        /// Note: store_keypair does not accept KeyPair::Hybrid (the Phase 3
+        /// "dual-suite keystore support" note in its error message). The correct
+        /// store API for hybrid material is store_dual_keypair.
+        #[test]
+        fn prop_keystore_hybrid_roundtrip(password in keystore_password_strategy()) {
+            use crate::crypto::hybrid::HybridKeyPair;
+
+            let (keystore, _temp_dir) =
+                create_temp_keystore_interactive().expect("temp keystore");
+
+            let classic_kp = ClassicKeyPair::generate().expect("classic kp generate");
+            let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp generate");
+            let expected_pub_bytes = hybrid_kp.public_key().as_bytes().to_vec();
+            let pw_ref = password.as_deref();
+
+            let key_id = keystore
+                .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), pw_ref)
+                .expect("store dual keypair");
+            let loaded_hybrid = keystore
+                .load_hybrid_keypair(&key_id, pw_ref)
+                .expect("load hybrid keypair");
+
+            let loaded_pub_bytes = loaded_hybrid.public_key().as_bytes().to_vec();
+            proptest::prop_assert_eq!(
+                loaded_pub_bytes,
+                expected_pub_bytes,
+                "hybrid public key bytes must be bit-identical after round-trip"
+            );
+        }
+    }
 }

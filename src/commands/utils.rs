@@ -303,7 +303,12 @@ mod tests {
         assert_eq!(result.unwrap(), "");
     }
 
+    // Why: this test mutates USER and SSS_USER env vars; without #[serial], a
+    // sibling test reading or writing the same vars under `cargo test -j auto`
+    // produces a race condition (TEST-06 / Phase 14 / D-01). The save/restore
+    // block below is correct as-is; the missing isolation primitive is #[serial].
     #[test]
+    #[serial]
     fn test_get_system_username_with_user_env() {
         // Save original values
         let original = env::var("USER").ok();
@@ -336,7 +341,13 @@ mod tests {
         }
     }
 
+    // Why: this test mutates USER, USERNAME, and SSS_USER env vars; without
+    // #[serial], a concurrent sibling test reading or writing the same vars
+    // under `cargo test -j auto` produces a race condition (TEST-06 / Phase
+    // 14 / D-01). Serialises relative to test_get_system_username_with_user_env
+    // and the existing #[serial] test_load_project_config_or_fail_* siblings.
     #[test]
+    #[serial]
     fn test_get_system_username_with_username_env() {
         // Save original values
         let original_user = env::var("USER").ok();

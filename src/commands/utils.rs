@@ -438,6 +438,14 @@ added = "2025-01-01T00:00:00Z"
         // DirGuard will restore directory on drop
     }
 
+    // Why: this test is already #[serial] and uses DirGuard for cwd isolation;
+    // the historical flake mechanism is a cwd race with
+    // src/commands/users.rs::test_add_hybrid_key_correct_length_sets_field
+    // (hybrid-only), which mutated cwd without #[serial], allowing it to run
+    // concurrently with this test under `cargo test -j auto`. Fixed by adding
+    // #[serial] to that sibling in users.rs so all cwd-mutating lib tests join
+    // the same serial group (TEST-06 / Phase 14 / D-01). No change to this
+    // test body is required; the isolation primitive was already correct here.
     #[test]
     #[serial]
     fn test_load_project_config_or_fail_with_invalid_config() {

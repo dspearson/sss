@@ -337,6 +337,7 @@ fn handle_users_add_hybrid_key(_sub_matches: &ArgMatches) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Command;
+    use serial_test::serial;
 
     #[test]
     fn test_handle_users_requires_subcommand() {
@@ -399,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     #[cfg(feature = "hybrid")]
     fn test_add_hybrid_key_correct_length_sets_field() {
         use base64::Engine as _;

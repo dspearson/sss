@@ -8,7 +8,7 @@
 //! - Marker preservation under various edit patterns
 
 use anyhow::Result;
-use sss::merge::smart_reconstruct;
+use sss::smart_reconstruct;
 
 #[test]
 fn test_reconstruct_no_changes() -> Result<()> {

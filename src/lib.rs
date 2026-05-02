@@ -154,7 +154,7 @@ pub mod config;
 /// failed because `SystemSettings.max_file_size` would be flagged dead.
 pub mod config_manager;
 
-pub(crate) mod constants;
+pub mod constants;
 
 /// Cryptographic primitives — Classic (libsodium-backed) and Hybrid
 /// post-quantum suites; FFI surface fully audited under HARDEN-03 (see
@@ -194,7 +194,12 @@ pub(crate) mod fuse;
 pub(crate) mod winfsp_fs;
 #[cfg(feature = "ninep")]
 pub(crate) mod ninep_fs;
-pub(crate) mod kdf;
+// Restored to `pub mod` after the Phase 11-04 visibility downgrade left
+// integration tests silently uncompilable. The CLEAN-03 gate set
+// (cargo check + build --bins + public_api_panic_surface + lib --no-run +
+// bench --no-run) did not include `cargo build --tests`, so consumers in
+// `tests/` were not seen. Phase 14 restores the modules used by those tests.
+pub mod kdf;
 pub(crate) mod keyring_manager;
 pub(crate) mod keyring_support;
 
@@ -224,6 +229,7 @@ pub mod keystore;
 pub mod marker_inference;
 
 pub(crate) mod merge;
+pub use merge::smart_reconstruct;
 
 /// Marker detection and transformation pipeline — the canonical
 /// encrypt/decrypt entry point for in-content secret substitution.
@@ -241,13 +247,13 @@ pub(crate) mod merge;
 /// at `src/commands/process.rs:21`.
 pub mod processor;
 
-pub(crate) mod project;
-pub(crate) mod rate_limiter;
-pub(crate) mod rotation;
-pub(crate) mod scanner;
-pub(crate) mod secrets;
-pub(crate) mod secure_memory;
-pub(crate) mod validation;
+pub mod project;
+pub mod rate_limiter;
+pub mod rotation;
+pub mod scanner;
+pub mod secrets;
+pub mod secure_memory;
+pub mod validation;
 
 /// Re-exports the user-facing configuration entry points — the parsed
 /// `.sss.toml` struct (`Config`) plus the two passphrase-aware key-load

@@ -7,7 +7,7 @@
 //! - Error propagation
 //! - Error matching and recovery
 
-use sss::error::SssError;
+use sss::SssError;
 use std::error::Error;
 use std::io;
 

@@ -102,3 +102,8 @@ harness = false
 [[bench]]
 name = "fuse_read_latency"
 harness = false
+
+[[test]]
+name = "migrate_e2e"
+path = "tests/migrate_e2e.rs"
+required-features = ["hybrid"]

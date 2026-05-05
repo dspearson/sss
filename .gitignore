@@ -56,7 +56,6 @@ release-*/
 
 # Container build artifacts
 *.tar.gz.asc
-vendor/
 
 # Phase 10 / DEPS-01 — project-local cargo install root for cargo-audit/deny/machete
 # (sandbox keeps ~/.cargo/bin read-only; tools live here for the audit run)

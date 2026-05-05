@@ -223,6 +223,21 @@ curl -sI https://technoanimal.net/sss/latest/sss-<VER>-linux-aarch64
 
 The `latest.json` manifest is the source of truth for "what is current" — auto-updaters and CI consumers should read it rather than parsing directory listings.
 
+## Vendored Dependencies
+
+The `rs9p` dependency (`Cargo.toml` § `[dependencies]`) is vendored at
+`vendor/rust-9p/` rather than consumed from crates.io. The upstream
+`rust-9p` crate has no published release suitable for the project's
+`ninep` feature, and a path-dep against a committed tree is the
+simplest reproducible build for fresh clones. The tree is committed
+directly (not gitignored) so `cargo build --features ninep` succeeds
+on a fresh `git clone` without manual vendor setup.
+
+Refresh procedure: drop new sources into `vendor/rust-9p/`, run
+`cargo build --features ninep` to confirm the tree compiles, and
+commit the change as a single atomic commit. There is no upstream
+pin to bump — the project owns the vendored copy.
+
 ## Post-Release Checklist
 
 - [ ] `git tag -s v<VER>` signed with the release GPG key

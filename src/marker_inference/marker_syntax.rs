@@ -40,6 +40,9 @@ impl MarkerFormat {
     }
 
     /// Length of the escaped form in bytes
+    // Why: paired companion to MarkerFormat::escaped, used as the byte-budget
+    // helper by inference passes that need to compute output buffer size before
+    // running the escape. External invariant: escaped_len(f) >= escaped(f).len().
     #[allow(dead_code)]
     pub fn escaped_len(self) -> usize {
         match self {

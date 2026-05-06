@@ -47,6 +47,9 @@ impl Drop for EnvVarGuard {
 struct TestEnv {
     _temp_dir: TempDir,
     project_dir: PathBuf,
+    // Why: holds the test's resolved config dir for assertions in tests that
+    // probe ConfigManager paths; the field is read by name in subsequent test
+    // additions (Phase 16 coverage raise will exercise it directly).
     #[allow(dead_code)]
     config_dir: PathBuf,
     config_manager: ConfigManager,

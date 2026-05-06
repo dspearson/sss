@@ -19,6 +19,9 @@ struct MultiUserProject {
 struct UserContext {
     username: String,
     keypair: KeyPair,
+    // Why: RAII anchor — keeps the per-user Keystore alive for the duration of
+    // the multi-user workflow test so that the keypair handles above remain
+    // valid; dropping the field would close the underlying keystore mid-test.
     #[allow(dead_code)]
     keystore: Keystore,
 }

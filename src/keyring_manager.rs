@@ -34,45 +34,8 @@ impl OldConfig {
 }
 use crate::crypto::Key;
 
-/// A type-safe wrapper for user profile names
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UserProfile(String);
-
-impl UserProfile {
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
-    #[must_use] 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for UserProfile {
-    fn from(name: &str) -> Self {
-        Self::new(name)
-    }
-}
-
-impl From<String> for UserProfile {
-    fn from(name: String) -> Self {
-        Self(name)
-    }
-}
-
 const SERVICE_NAME: &str = "sss";
 const DEFAULT_USER: &str = "default";
-
-impl UserProfile {
-    pub const DEFAULT: UserProfile = UserProfile(String::new());
-}
-
-impl Default for UserProfile {
-    fn default() -> Self {
-        Self::new(DEFAULT_USER)
-    }
-}
 
 pub struct KeyringManager {
     service_name: String,

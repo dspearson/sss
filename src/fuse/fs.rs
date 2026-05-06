@@ -992,6 +992,9 @@ impl SssFS {
     }
 
     /// Check if a file exists using source_fd (works even if mounted over source)
+    // Why: file existence probe via source_fd that survives mount-over-source.
+    // Kept as an internal API for future passthrough invariant checks; deleting
+    // it would force a re-implementation when the next FUSE invariant test lands.
     #[allow(dead_code)]
     fn file_exists_via_fd(&self, rel_path: &Path) -> bool {
         let path_bytes = rel_path.as_os_str().as_bytes();

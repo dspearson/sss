@@ -311,6 +311,90 @@ mod tests {
         );
     }
 
+    /// TEST-11 / 16-03: regression anchor for the base64-decode error arm in
+    /// `migrate_project_config` (src/commands/migrate.rs:64-66). Verifies that a
+    /// malformed base64 `hybrid_public` value produces a user-named anyhow error
+    /// containing the substring "invalid base64 hybrid public key for user
+    /// '<username>'" verbatim from the `anyhow!` call at line 66.
+    ///
+    /// Note: the survey in 16-01-SUMMARY.md classifies the targeted line range
+    /// (64-66) as already green — the existing tests
+    /// (`test_migrate_errors_without_hybrid_public_key`,
+    /// `test_migrate_rewrites_sealed_keys_and_version`, the proptest blocks)
+    /// transitively exercise the success path through this `?`. This test is
+    /// retained as a documentation-grade regression anchor that pins the user-
+    /// named error message format so a future refactor cannot accidentally
+    /// silently widen this arm.
+    #[test]
+    fn test_migrate_errors_on_invalid_base64_hybrid_public_key() {
+        let repo_key = RepositoryKey::new();
+        let hkp = HybridKeyPair::generate().unwrap();
+        let mut cfg = make_config_with_hybrid(&[("alice", &hkp)], &repo_key);
+
+        // Inject a deliberately malformed base64 value. The "!!!" / spaces
+        // characters fail base64 decoding before `HybridPublicKey::from_bytes`
+        // is ever called, isolating the FIRST error arm (lines 64-66).
+        cfg.users
+            .get_mut("alice")
+            .unwrap()
+            .hybrid_public = Some("!!! not valid base64 !!!".to_string());
+
+        let err = migrate_project_config(&mut cfg, &repo_key, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("invalid base64 hybrid public key for user 'alice'"),
+            "must surface the verbatim base64-decode error message: {err}"
+        );
+        assert!(
+            err.contains("alice"),
+            "must name the failing user for diagnosability: {err}"
+        );
+    }
+
+    /// TEST-11 / 16-03: regression anchor for the `HybridPublicKey::from_bytes`
+    /// length-check error arm in `migrate_project_config`
+    /// (src/commands/migrate.rs:68-69). Verifies that a well-formed-but-wrong-
+    /// length input produces a user-named anyhow error containing the
+    /// substring "invalid hybrid public key for user '<username>'" verbatim
+    /// from the `anyhow!` call at line 69.
+    ///
+    /// Note: the survey in 16-01-SUMMARY.md classifies the targeted line range
+    /// (68-69) as already green. This test is retained as a documentation-grade
+    /// regression anchor; the NOT-contains assertion on "invalid base64" proves
+    /// we hit the SECOND error arm (length check) and not the first
+    /// (base64 decode), which is the discriminator a future refactor could
+    /// accidentally lose.
+    #[test]
+    fn test_migrate_errors_on_wrong_length_hybrid_public_key() {
+        let repo_key = RepositoryKey::new();
+        let hkp = HybridKeyPair::generate().unwrap();
+        let mut cfg = make_config_with_hybrid(&[("alice", &hkp)], &repo_key);
+
+        // Inject a well-formed-but-too-short base64 payload. `b"too-short"`
+        // is 9 bytes — the base64 encoding decodes cleanly but is far shorter
+        // than the real concatenated classic+ML-KEM-768 public-key length, so
+        // `HybridPublicKey::from_bytes` rejects it. This isolates the SECOND
+        // error arm (lines 68-69) cleanly from the first.
+        cfg.users
+            .get_mut("alice")
+            .unwrap()
+            .hybrid_public = Some(base64::prelude::BASE64_STANDARD.encode(b"too-short"));
+
+        let err = migrate_project_config(&mut cfg, &repo_key, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("invalid hybrid public key for user 'alice'"),
+            "must surface the verbatim hybrid-public-key error message: {err}"
+        );
+        assert!(
+            !err.contains("invalid base64"),
+            "must NOT surface the base64-decode message — that would mean the \
+             test is hitting the first arm instead of the second: {err}"
+        );
+    }
+
     // -------------------------------------------------------------------------
     // TEST-08: Property-based migration tests (Phase 14 / Plan 14-03 / D-04)
     //

@@ -459,3 +459,290 @@ fn test_load_hybrid_no_hybrid_key_errors() -> Result<()> {
 
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 16-02: KEYSTORE-05..12 branch coverage tests
+//
+// Lift `src/keystore.rs` line coverage by exercising previously-uncovered
+// branches in `Keystore::store_dual_keypair` (Cases A-passwordless, B-already-
+// present-guard, B-passwordless, C, D) and `Keystore::load_hybrid_keypair`
+// (file-not-found, password-required, passwordless-roundtrip).
+//
+// Per 16-01-SUMMARY.md §Lift Targets §1, 5 of 8 candidates are
+// EXPECTED-COVERED (KEYSTORE-05/07/09/10/11) and 3 are LIKELY-ALREADY-COVERED
+// (KEYSTORE-06/08/12). All 8 tests are landed as branch-logic regression
+// anchors per the orchestrator's guidance — the LIKELY-ALREADY-COVERED tests
+// remain valid passing tests; they just don't add net coverage lift.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// KEYSTORE-05: Case C delegates to store_keypair — `store_dual_keypair(Some(classic), None, Some(pw))`
+/// returns Ok(key_id), and the stored classic keypair byte-identically round-trips
+/// through `load_keypair`. Targets src/keystore.rs:657-659 (Case C delegation arm).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_store_dual_keypair_case_c_delegates_to_store_keypair() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let classic_pub_b64 = KeyPair::Classic(classic.clone()).public_key().to_base64();
+    let classic_sk_b64 = KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+
+    // Case C: classic-only via store_dual_keypair — should delegate to store_keypair
+    let key_id = keystore.store_dual_keypair(Some(&classic), None, Some("case_c_pw"))?;
+    assert!(!key_id.is_empty(), "Case C must return non-empty key_id");
+
+    // Round-trip via load_keypair (Case C wraps in KeyPair::Classic)
+    let loaded = keystore.load_keypair(&key_id, Some("case_c_pw"))?;
+    assert_eq!(
+        loaded.public_key().to_base64(),
+        classic_pub_b64,
+        "Case C: loaded classic public key must match stored"
+    );
+    assert_eq!(
+        loaded.secret_key()?.to_base64(),
+        classic_sk_b64,
+        "Case C: loaded classic secret key must match stored byte-identically"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-06: Case A passwordless round-trip — `store_dual_keypair(Some(classic), Some(hybrid), None)`
+/// returns Ok(key_id); both `load_hybrid_keypair` and `load_keypair` recover
+/// byte-identically. Targets src/keystore.rs:692-701 (Case A passwordless else arm).
+/// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
+/// regression anchor for branch logic (lines 692-701 already green per survey).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_store_dual_keypair_case_a_passwordless_roundtrip() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+
+    let classic_pub_b64 = KeyPair::Classic(classic.clone()).public_key().to_base64();
+    let classic_sk_b64 = KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+    let hybrid_pub_bytes: Vec<u8> = hybrid.public_key().as_bytes().to_vec();
+
+    // Case A passwordless: both keys, no password
+    let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), None)?;
+    assert!(!key_id.is_empty(), "Case A passwordless must return non-empty key_id");
+
+    // Hybrid recovers byte-identically (passwordless raw base64 path, line 700)
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    assert_eq!(
+        loaded_hybrid.public_key().as_bytes(),
+        hybrid_pub_bytes.as_slice(),
+        "Case A passwordless: hybrid public key must match byte-identically"
+    );
+
+    // Classic recovers byte-identically
+    let loaded_classic = keystore.load_keypair(&key_id, None)?;
+    assert_eq!(
+        loaded_classic.public_key().to_base64(),
+        classic_pub_b64,
+        "Case A passwordless: classic public key must match"
+    );
+    assert_eq!(
+        loaded_classic.secret_key()?.to_base64(),
+        classic_sk_b64,
+        "Case A passwordless: classic secret key must match byte-identically"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-07: Case B refuses to overwrite already-present hybrid material —
+/// first `store_dual_keypair(Some(classic), Some(hybrid), Some(pw))` succeeds; second
+/// `store_dual_keypair(None, Some(hybrid2), Some(pw))` returns Err with a message
+/// containing "already present". Targets src/keystore.rs:752-758 (T-03-03 guard).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_store_dual_keypair_case_b_rejects_already_present_hybrid() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+    let hybrid2 = HybridKeyPair::generate()?;
+
+    // First: Case A — store dual identity with hybrid material
+    let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("guard_pw"))?;
+    assert!(!key_id.is_empty(), "first store must succeed");
+
+    // Second: Case B — try to add another hybrid; guard MUST refuse
+    let result = keystore.store_dual_keypair(None, Some(&hybrid2), Some("guard_pw"));
+    assert!(
+        result.is_err(),
+        "Case B must reject when hybrid material is already present"
+    );
+
+    let err_msg = result.unwrap_err().to_string();
+    // Error message at src/keystore.rs:754-757:
+    // "hybrid keypair already present in this identity; use --suite both to replace"
+    assert!(
+        err_msg.contains("already present"),
+        "error must contain 'already present', got: {err_msg}"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-08: Case B passwordless upgrade — store classic-only passwordless first,
+/// then upgrade by adding hybrid via `store_dual_keypair(None, Some(hybrid), None)`,
+/// assert Ok(key_id) and both classic + hybrid load back byte-identically.
+/// Targets src/keystore.rs:783-786 (Case B passwordless else arm).
+/// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
+/// regression anchor (lines 783-786 already green per survey).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_store_dual_keypair_case_b_passwordless_upgrade() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+
+    let classic_pub_b64 = KeyPair::Classic(classic.clone()).public_key().to_base64();
+    let hybrid_pub_bytes: Vec<u8> = hybrid.public_key().as_bytes().to_vec();
+
+    // Step 1: store classic-only passwordless via store_keypair
+    let key_id =
+        keystore.store_keypair(&KeyPair::Classic(classic.clone()), None)?;
+    assert!(!key_id.is_empty(), "passwordless classic store must succeed");
+
+    // Step 2: Case B passwordless — upgrade by adding hybrid material with password=None
+    let upgraded_key_id = keystore.store_dual_keypair(None, Some(&hybrid), None)?;
+    assert_eq!(
+        upgraded_key_id, key_id,
+        "Case B passwordless upgrade must keep the same key_id"
+    );
+
+    // Classic remains loadable passwordless
+    let loaded_classic = keystore.load_keypair(&key_id, None)?;
+    assert_eq!(
+        loaded_classic.public_key().to_base64(),
+        classic_pub_b64,
+        "Case B passwordless: classic must remain byte-identical after upgrade"
+    );
+
+    // Hybrid is now loadable passwordless
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    assert_eq!(
+        loaded_hybrid.public_key().as_bytes(),
+        hybrid_pub_bytes.as_slice(),
+        "Case B passwordless: hybrid must round-trip byte-identically after upgrade"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-09: Case D defensive error — `store_dual_keypair(None, None, None)` must
+/// return Err containing the substring from src/keystore.rs:813-815.
+/// Targets src/keystore.rs:812-815 (Case D `(None, None)` defensive arm).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_store_dual_keypair_neither_key_errors() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let result = keystore.store_dual_keypair(None, None, None);
+    assert!(
+        result.is_err(),
+        "Case D (None, None) must return Err"
+    );
+
+    let err_msg = result.unwrap_err().to_string();
+    // Error message at src/keystore.rs:813-815:
+    // "store_dual_keypair called with neither classic nor hybrid keypair"
+    assert!(
+        err_msg.contains("neither classic nor hybrid keypair"),
+        "error must contain 'neither classic nor hybrid keypair', got: {err_msg}"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-10: load_hybrid_keypair on a non-existent key_id returns Err with
+/// "Key file not found" (src/keystore.rs:834-836). Targets the file-not-found arm.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_load_hybrid_keypair_nonexistent_key_id_errors() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let result = keystore.load_hybrid_keypair("nonexistent_key_id_abc123", None);
+    assert!(
+        result.is_err(),
+        "load_hybrid_keypair on missing file must return Err"
+    );
+
+    let err_msg = result.unwrap_err().to_string();
+    // Error message at src/keystore.rs:835: "Key file not found: {key_id}"
+    assert!(
+        err_msg.contains("Key file not found"),
+        "error must contain 'Key file not found', got: {err_msg}"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-11: load_hybrid_keypair on a password-protected dual identity with
+/// `password=None` returns Err containing "Password required". Targets
+/// src/keystore.rs:857-859 (password-required ok_or_else arm on protected key).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_load_hybrid_keypair_password_required_errors() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+
+    // Store dual identity password-protected
+    let key_id = keystore.store_dual_keypair(
+        Some(&classic),
+        Some(&hybrid),
+        Some("protected_pw"),
+    )?;
+
+    // Load hybrid with password=None on protected identity — must fail
+    let result = keystore.load_hybrid_keypair(&key_id, None);
+    assert!(
+        result.is_err(),
+        "load_hybrid_keypair with password=None on protected identity must Err"
+    );
+
+    let err_msg = result.unwrap_err().to_string();
+    // Error message at src/keystore.rs:858: "Password required for encrypted key"
+    assert!(
+        err_msg.contains("Password required"),
+        "error must contain 'Password required', got: {err_msg}"
+    );
+
+    Ok(())
+}
+
+/// KEYSTORE-12: load_hybrid_keypair passwordless round-trip — store dual identity
+/// without password; load_hybrid_keypair returns Ok with public_key bytes matching
+/// the stored hybrid byte-identically. Targets src/keystore.rs:880-882
+/// (passwordless-load else arm).
+/// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
+/// regression anchor (lines 880-882 already green per survey).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_load_hybrid_keypair_passwordless_roundtrip() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+    let hybrid_pub_bytes: Vec<u8> = hybrid.public_key().as_bytes().to_vec();
+
+    // Store dual identity passwordless
+    let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), None)?;
+
+    // Load hybrid passwordless — exercises lines 880-882
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    assert_eq!(
+        loaded_hybrid.public_key().as_bytes(),
+        hybrid_pub_bytes.as_slice(),
+        "passwordless round-trip: hybrid public_key must match byte-identically"
+    );
+
+    Ok(())
+}

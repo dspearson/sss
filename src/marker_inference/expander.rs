@@ -474,8 +474,33 @@ fn apply_multi_marker_rule(
 /// This is a convenience function that applies both delimiter and whitespace adjustments
 /// in the correct order, as required by the marker inference specification.
 fn apply_boundary_adjustments(text: &str, start: usize, end: usize) -> (usize, usize) {
+    // Floor inputs to UTF-8 char boundaries: upstream byte arithmetic in
+    // rendered_to_edited can produce mid-codepoint indices, which would
+    // panic both shrink_to_exclude_trailing_whitespace's str slice and the
+    // post-adjustment slice in apply_marker_rule.
+    let start = floor_char_boundary(text, start);
+    let end = floor_char_boundary(text, end);
+
     let (start, end) = shrink_to_exclude_delimiters(text, start, end);
     shrink_to_exclude_trailing_whitespace(text, start, end)
+}
+
+/// Floor a byte index to the nearest preceding UTF-8 char boundary.
+///
+/// For idx >= text.len(), pass through unchanged: callers (e.g.,
+/// `apply_marker_rule`) treat `new_end > edited_text.len()` as a signal that
+/// the marked region was deleted and suppress marker creation. Clamping to
+/// text.len() would erase that signal and incorrectly resurrect markers on
+/// pure-deletion edits.
+fn floor_char_boundary(text: &str, idx: usize) -> usize {
+    if idx >= text.len() {
+        return idx;
+    }
+    let mut idx = idx;
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
 }
 
 /// Adjust boundaries to exclude paired delimiters per spec section 8

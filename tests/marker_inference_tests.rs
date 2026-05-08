@@ -273,3 +273,18 @@ fn test_section_7_3_content_propagation() {
         result.output
     );
 }
+
+// Regression: infer_markers must not panic on inputs where upstream byte
+// arithmetic produces byte indices that land mid-codepoint. Discovered by
+// the marker_scanner libFuzzer harness in plan 17-02 (artifact
+// crash-6a3af57c0d74ab29f9f62afed8a24b8f56d1cbd3). The crash hit
+// src/marker_inference/expander.rs:575 — str slice with end=14 falling
+// inside the 3-byte ⊕ glyph at bytes 13..16. Fixed in 17-02a by flooring
+// start/end to char boundaries in apply_boundary_adjustments.
+#[test]
+fn test_infer_markers_no_panic_on_mid_codepoint_byte_index() {
+    let input: &[u8] = b"prefix o+{abc} mi\xe2\x8a\x95\x10prr\x01\x11\x00\x00erfecx\nix\n";
+    let s = std::str::from_utf8(input).expect("crash artifact is valid UTF-8");
+    // Both Ok and Err are acceptable; only a panic would be a regression.
+    let _ = infer_markers(s, s);
+}

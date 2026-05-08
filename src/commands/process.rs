@@ -885,4 +885,265 @@ mod tests {
     // - merge module (smart reconstruction)
     // - scanner module (file discovery)
     // - Integration tests (full command workflows)
+
+    // -----------------------------------------------------------------------
+    // 16b-03 lift tests (TEST-11). Helper-level coverage: pure logic only.
+    // FUSE arm intentionally skipped per D-08 (untestable without real mount).
+    // -----------------------------------------------------------------------
+
+    use crate::project::ProjectConfig;
+    use anyhow::Result;
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use tempfile::TempDir;
+
+    // ---- has_sss_markers ---------------------------------------------------
+
+    #[test]
+    fn test_has_sss_markers_sealed_marker_returns_true() {
+        assert!(has_sss_markers("password=\u{22a0}{abcdef}"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_plaintext_oplus_marker_returns_true() {
+        assert!(has_sss_markers("token=\u{2295}{secret}"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_ascii_oplus_marker_returns_true() {
+        assert!(has_sss_markers("api_key=o+{my-secret}"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_secrets_ref_unicode_returns_true() {
+        assert!(has_sss_markers("ref=\u{22b2}{name}"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_secrets_ref_ascii_returns_true() {
+        assert!(has_sss_markers("ref=<{name}"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_no_markers_returns_false() {
+        assert!(!has_sss_markers("plain text without any sss markers"));
+    }
+
+    #[test]
+    fn test_has_sss_markers_empty_returns_false() {
+        assert!(!has_sss_markers(""));
+    }
+
+    // ---- is_binary_file ----------------------------------------------------
+
+    #[test]
+    fn test_is_binary_file_text_returns_false() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let path = tmp.path().join("plain.txt");
+        fs::write(&path, "hello world\nthis is text\n")?;
+        assert!(!is_binary_file(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_binary_file_with_null_byte_returns_true() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let path = tmp.path().join("bin.bin");
+        fs::write(&path, b"prefix\x00suffix")?;
+        assert!(is_binary_file(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_binary_file_empty_file_returns_false() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let path = tmp.path().join("empty.txt");
+        fs::write(&path, b"")?;
+        assert!(!is_binary_file(&path)?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_binary_file_missing_path_errors() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("does-not-exist.bin");
+        assert!(is_binary_file(&missing).is_err());
+    }
+
+    // ---- build_ignore_globset ---------------------------------------------
+
+    #[test]
+    fn test_build_ignore_globset_empty_returns_none() {
+        let cfg = ProjectConfig::default();
+        assert!(build_ignore_globset(&cfg).is_none());
+    }
+
+    #[test]
+    fn test_build_ignore_globset_single_pattern_matches() {
+        let mut cfg = ProjectConfig::default();
+        cfg.ignore = Some("*.log".to_string());
+        let gs = build_ignore_globset(&cfg).expect("globset built");
+        assert!(gs.is_match("server.log"));
+        assert!(!gs.is_match("server.txt"));
+    }
+
+    #[test]
+    fn test_build_ignore_globset_multiple_patterns_match() {
+        let mut cfg = ProjectConfig::default();
+        cfg.ignore = Some("*.log build/*".to_string());
+        let gs = build_ignore_globset(&cfg).expect("globset built");
+        assert!(gs.is_match("a.log"));
+        assert!(gs.is_match("build/foo"));
+        assert!(!gs.is_match("src/main.rs"));
+    }
+
+    #[test]
+    fn test_build_ignore_globset_invalid_pattern_logs_and_continues() {
+        let mut cfg = ProjectConfig::default();
+        // Mix one valid and one invalid pattern. The invalid one should be
+        // skipped (warning emitted) without aborting the whole build.
+        cfg.ignore = Some("*.log [unterminated".to_string());
+        let gs = build_ignore_globset(&cfg).expect("globset built despite invalid entry");
+        assert!(gs.is_match("foo.log"));
+    }
+
+    // ---- find_project_for_path --------------------------------------------
+
+    #[test]
+    fn test_find_project_for_path_no_match_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let leaf = tmp.path().join("a/b/c.txt");
+        let projects: HashMap<PathBuf, (Processor, Option<globset::GlobSet>)> = HashMap::new();
+        let passthrough: HashSet<PathBuf> = HashSet::new();
+        assert!(find_project_for_path(&leaf, &projects, &passthrough).is_none());
+    }
+
+    #[test]
+    fn test_find_project_for_path_passthrough_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let leaf = root.join("inner/file.txt");
+        let projects: HashMap<PathBuf, (Processor, Option<globset::GlobSet>)> = HashMap::new();
+        let mut passthrough: HashSet<PathBuf> = HashSet::new();
+        passthrough.insert(root.join("inner"));
+        assert!(find_project_for_path(&leaf, &projects, &passthrough).is_none());
+    }
+
+    // ---- create_secure_temp_path ------------------------------------------
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn test_create_secure_temp_path_contains_filename_and_pid() {
+        let p = PathBuf::from("/tmp/example_target.txt");
+        let temp = create_secure_temp_path(&p).expect("path");
+        assert!(temp.contains("example_target.txt"), "missing filename: {temp}");
+        assert!(temp.contains(&std::process::id().to_string()), "missing pid: {temp}");
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn test_create_secure_temp_path_uses_known_prefix() {
+        let p = PathBuf::from("/tmp/anything.txt");
+        let temp = create_secure_temp_path(&p).expect("path");
+        assert!(
+            temp.starts_with("/dev/shm/.sss-edit-") || temp.starts_with("/tmp/.sss-edit-"),
+            "unexpected prefix: {temp}"
+        );
+    }
+
+    // ---- write_temp_file_secure -------------------------------------------
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_temp_file_secure_writes_content_and_mode_0600() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new()?;
+        let target = tmp.path().join("secure.tmp");
+        let target_str = target.to_str().expect("utf8 path");
+        write_temp_file_secure(target_str, "secret-payload")?;
+        let read_back = fs::read_to_string(&target)?;
+        assert_eq!(read_back, "secret-payload");
+        let mode = fs::metadata(&target)?.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0o600, got {mode:o}");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_temp_file_secure_truncates_existing() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let target = tmp.path().join("existing.tmp");
+        let target_str = target.to_str().expect("utf8 path");
+        fs::write(&target, "old longer content that must be truncated")?;
+        write_temp_file_secure(target_str, "new")?;
+        assert_eq!(fs::read_to_string(&target)?, "new");
+        Ok(())
+    }
+
+    // ---- process_file_in_place --------------------------------------------
+
+    #[test]
+    fn test_process_file_in_place_no_markers_returns_false_unchanged() -> Result<()> {
+        use crate::crypto::RepositoryKey;
+        let tmp = TempDir::new()?;
+        let target = tmp.path().join("plain.txt");
+        let original = "no markers here\njust text\n";
+        fs::write(&target, original)?;
+
+        let processor = Processor::new(RepositoryKey::new())?;
+        let changed = process_file_in_place(&target, &processor, "seal")?;
+        assert!(!changed, "file with no markers should report unchanged");
+        assert_eq!(fs::read_to_string(&target)?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_file_in_place_unknown_operation_errors() -> Result<()> {
+        use crate::crypto::RepositoryKey;
+        let tmp = TempDir::new()?;
+        let target = tmp.path().join("plain.txt");
+        fs::write(&target, "anything")?;
+
+        let processor = Processor::new(RepositoryKey::new())?;
+        let result = process_file_in_place(&target, &processor, "bogus");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown operation"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_file_in_place_seal_with_plaintext_marker_writes_back() -> Result<()> {
+        use crate::crypto::RepositoryKey;
+        let tmp = TempDir::new()?;
+        let target = tmp.path().join("doc.txt");
+        let original = "key=\u{2295}{plaintext-secret}\n";
+        fs::write(&target, original)?;
+
+        let processor = Processor::new(RepositoryKey::new())?;
+        let changed = process_file_in_place(&target, &processor, "seal")?;
+        assert!(changed, "sealing a plaintext marker should mutate the file");
+        let after = fs::read_to_string(&target)?;
+        assert!(after.contains("\u{22a0}{"), "sealed output missing \u{22a0} marker: {after}");
+        Ok(())
+    }
+
+    // ---- error-path regressions (constants) -------------------------------
+
+    #[test]
+    fn test_constants_err_stdin_in_place_message_stable() {
+        // Regression guard: handle_stdin_process / process_file_or_stdin
+        // both reuse this exact message; integration scripts grep for it.
+        assert_eq!(
+            crate::constants::ERR_STDIN_IN_PLACE,
+            "Cannot use --in-place with stdin"
+        );
+    }
+
+    #[test]
+    fn test_constants_err_stdin_edit_message_stable() {
+        assert_eq!(
+            crate::constants::ERR_STDIN_EDIT,
+            "Cannot use edit mode with stdin"
+        );
+    }
 }

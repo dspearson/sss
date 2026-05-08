@@ -135,6 +135,7 @@ fn test_username_resolution_with_hostname_suffix() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_config_manager_persists_username() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let config_dir = temp_dir.path().join("config");
@@ -227,6 +228,7 @@ fn test_sss_user_env_var_precedence() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_clear_default_username() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 
@@ -322,6 +324,7 @@ fn test_multiple_config_managers_independent() {
 }
 
 #[test]
+#[serial_test::serial]
 fn test_username_with_special_chars() {
     let (mut manager, _temp_dir) = create_test_config_manager();
 

@@ -82,12 +82,7 @@ fn handle_keys_generate_command_with_prompt(
     // Feature-absent guard: hybrid and both require the hybrid feature flag.
     // clap still parses the value; this runtime gate fires immediately.
     match suite {
-        Some("hybrid") | Some("both") => {
-            #[cfg(not(feature = "hybrid"))]
-            return Err(anyhow!(
-                "hybrid suite requires a --features hybrid build"
-            ));
-        }
+        Some("hybrid") | Some("both") => {}
         _ => {}
     }
 

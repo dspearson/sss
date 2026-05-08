@@ -489,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_find_git_dir_in_repo() {
         // When this test runs, it should be inside a git repository
         // (the sss project itself is a git repo)

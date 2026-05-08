@@ -19,6 +19,7 @@ fn create_test_config() -> Result<ProjectConfig> {
 
 /// Test that load_project_config() finds config in current directory
 #[test]
+#[serial_test::serial]
 fn test_load_project_config_current_dir() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
@@ -51,6 +52,7 @@ fn test_load_project_config_current_dir() -> Result<()> {
 
 /// Test that load_project_config() searches upward
 #[test]
+#[serial_test::serial]
 fn test_load_project_config_searches_upward() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
@@ -81,6 +83,7 @@ fn test_load_project_config_searches_upward() -> Result<()> {
 
 /// Test that load_project_config() returns helpful error when no config found
 #[test]
+#[serial_test::serial]
 fn test_load_project_config_no_config_error() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path().to_path_buf();
@@ -161,6 +164,7 @@ fn test_load_project_config_from_searches_upward() -> Result<()> {
 
 /// Test that both helpers return same config for same directory
 #[test]
+#[serial_test::serial]
 fn test_helpers_consistency() -> Result<()> {
     let temp_dir = TempDir::new()?;
 

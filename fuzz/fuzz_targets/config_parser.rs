@@ -1,8 +1,11 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
+use sss::project::ProjectConfig;
 
-// Wave 2 (17-02-01) replaces this body with the ProjectConfig TOML deser harness.
-// The stub returns immediately so the binary builds; libFuzzer is not yet exercised.
-fuzz_target!(|_data: &[u8]| {
-    // Stub — see plan 17-02 for the populated body.
+// Fuzz target: ProjectConfig TOML deser must not panic on arbitrary bytes.
+// Errors are expected and acceptable; only panics indicate a fuzz finding.
+fuzz_target!(|data: &[u8]| {
+    if let Ok(s) = std::str::from_utf8(data) {
+        let _ = toml::from_str::<ProjectConfig>(s);
+    }
 });

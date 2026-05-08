@@ -2,9 +2,14 @@
 /target/
 Cargo.lock
 
-# Per-harness corpus runtime state — KEEP corpus/<harness>/ seed files (committed in Wave 2)
+# Per-harness corpus runtime state — KEEP corpus/<harness>/seed_* files (committed in Wave 2)
 corpus/*/queue/
 corpus/*/.tmp/
+
+# libFuzzer-generated corpus entries (hex-named SHA-1 of the input). Coverage is
+# preserved on disk but not committed — only hand-crafted seed_* files go in git.
+corpus/*/*
+!corpus/*/seed_*
 
 # Crash artifacts (libFuzzer dumps minimised reproducers here)
 artifacts/

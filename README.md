@@ -558,6 +558,8 @@ cargo test --lib                             # Unit tests only
 cargo clippy -- -D warnings                  # Linting
 ```
 
+See [docs/TESTING.md](docs/TESTING.md) for the full four-tier testing guide (default / coverage / slow-tests / fuzz).
+
 **Binaries produced:**
 
 | Binary | Description |

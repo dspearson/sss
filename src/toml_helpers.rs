@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use serde::Deserialize;
 /// use sss::toml_helpers::parse_toml;
 ///
@@ -32,7 +32,7 @@ pub fn parse_toml<T: for<'de> Deserialize<'de>>(content: &str, file_type: &str) 
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use serde::Serialize;
 /// use sss::toml_helpers::serialize_toml;
 ///

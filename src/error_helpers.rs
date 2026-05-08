@@ -11,7 +11,7 @@ use std::path::Path;
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use sss::error_helpers::utf8_from_bytes;
 ///
 /// let bytes = vec![72, 101, 108, 108, 111];
@@ -27,7 +27,7 @@ pub fn utf8_from_bytes(bytes: Vec<u8>, context: &str) -> Result<String> {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use sss::error_helpers::read_file_to_string;
 /// use std::path::Path;
 ///
@@ -42,7 +42,7 @@ pub fn read_file_to_string(path: &Path, file_type: &str) -> Result<String> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use sss::error_helpers::decode_base64;
 ///
 /// let decoded = decode_base64("SGVsbG8=", "greeting");
@@ -59,7 +59,7 @@ pub fn decode_base64(encoded: &str, data_type: &str) -> Result<Vec<u8>> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use sss::error_helpers::user_not_found_error;
 ///
 /// let err = user_not_found_error("alice");

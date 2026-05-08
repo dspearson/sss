@@ -274,8 +274,10 @@ fn get_policy_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_get_policy_path_requires_home() {
         // Save original HOME
         let original_home = std::env::var("HOME").ok();
@@ -294,6 +296,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_get_policy_path_with_home() {
         // This should succeed when HOME is set (which it normally is)
         if std::env::var("HOME").is_ok() {

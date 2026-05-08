@@ -17,12 +17,64 @@ use crate::{
     commands::utils::create_keystore,
     constants::KEY_ID_DISPLAY_LENGTH,
     crypto::KeyPair,
-    secure_memory::password,
+    secure_memory::{password, SecureString},
 };
 #[cfg(feature = "hybrid")]
 use crate::crypto::ClassicKeyPair;
 
+/// Test seam (Phase 16b D-19) — abstracts the two prompt primitives used by the
+/// `handle_keys_*` family so unit tests can substitute canned answers without
+/// touching a real TTY/`rpassword`.
+///
+/// Production code routes through `RealPromptReader`, which is a thin wrapper
+/// over `password::read_password_with_confirmation` and `io::stdin().read_line`.
+/// Tests in `#[cfg(test)] mod tests` may inject a `MockPromptReader` (defined
+/// inside the test module) returning predetermined values.
+pub(super) trait PromptReader {
+    /// Wraps `password::read_password_with_confirmation`.
+    fn read_password_with_confirmation(
+        &self,
+        prompt: &str,
+        confirm_prompt: &str,
+    ) -> Result<SecureString>;
+
+    /// Print `prompt`, flush stdout, read one line from stdin, return the raw
+    /// (un-trimmed) string — matches the existing handler bodies which call
+    /// `.trim()` on the result themselves.
+    fn read_line(&self, prompt: &str) -> Result<String>;
+}
+
+/// Default production implementation of [`PromptReader`].
+pub(super) struct RealPromptReader;
+
+impl PromptReader for RealPromptReader {
+    fn read_password_with_confirmation(
+        &self,
+        prompt: &str,
+        confirm_prompt: &str,
+    ) -> Result<SecureString> {
+        password::read_password_with_confirmation(prompt, confirm_prompt)
+            .map_err(|e| anyhow!(e))
+    }
+
+    fn read_line(&self, prompt: &str) -> Result<String> {
+        print!("{prompt}");
+        io::stdout().flush()?;
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf)?;
+        Ok(buf)
+    }
+}
+
 fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
+    handle_keys_generate_command_with_prompt(main_matches, matches, &RealPromptReader)
+}
+
+fn handle_keys_generate_command_with_prompt(
+    main_matches: &ArgMatches,
+    matches: &ArgMatches,
+    prompt: &dyn PromptReader,
+) -> Result<()> {
     let force = matches.get_flag("force");
     let no_password = matches.get_flag("no-password");
     let suite = matches.get_one::<String>("suite").map(String::as_str);
@@ -53,7 +105,7 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
             let password_option = if no_password {
                 None
             } else {
-                let passphrase = password::read_password_with_confirmation(
+                let passphrase = prompt.read_password_with_confirmation(
                     "Enter passphrase for new keypair: ",
                     "Confirm passphrase: ",
                 )?;
@@ -105,7 +157,7 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
             let password_option = if no_password {
                 None
             } else {
-                let passphrase = password::read_password_with_confirmation(
+                let passphrase = prompt.read_password_with_confirmation(
                     "Enter passphrase for keypair: ",
                     "Confirm passphrase: ",
                 )?;
@@ -144,7 +196,7 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
             let password_option = if no_password {
                 None
             } else {
-                let passphrase = password::read_password_with_confirmation(
+                let passphrase = prompt.read_password_with_confirmation(
                     "Enter passphrase for new keypair: ",
                     "Confirm passphrase: ",
                 )?;
@@ -353,18 +405,22 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
 }
 
 fn handle_keys_delete(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    handle_keys_delete_with_prompt(main_matches, sub_matches, &RealPromptReader)
+}
+
+fn handle_keys_delete_with_prompt(
+    main_matches: &ArgMatches,
+    sub_matches: &ArgMatches,
+    prompt: &dyn PromptReader,
+) -> Result<()> {
     let keystore = create_keystore(main_matches)?;
     // INVARIANT: clap declares `name` as required(true) for the delete
     // subcommand. HARDEN-01 / 08-01.
     let key_name = sub_matches.get_one::<String>("name").unwrap();
 
-    print!(
+    let input = prompt.read_line(&format!(
         "Are you sure you want to delete keypair '{key_name}'? [y/N]: "
-    );
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
+    ))?;
 
     if input.trim().to_lowercase() == "y" {
         keystore.delete_keypair(key_name)?;
@@ -476,8 +532,16 @@ fn handle_keys_rotate_command(_main_matches: &ArgMatches, matches: &ArgMatches) 
     Ok(())
 }
 
-#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
 fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    handle_keys_set_passphrase_with_prompt(main_matches, sub_matches, &RealPromptReader)
+}
+
+#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
+fn handle_keys_set_passphrase_with_prompt(
+    main_matches: &ArgMatches,
+    sub_matches: &ArgMatches,
+    prompt: &dyn PromptReader,
+) -> Result<()> {
     let key_id_partial = sub_matches.get_one::<String>("key-id")
         .ok_or_else(|| anyhow!("Key ID is required"))?;
 
@@ -519,7 +583,7 @@ fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatche
     };
 
     // Get new password
-    let new_password = password::read_password_with_confirmation(
+    let new_password = prompt.read_password_with_confirmation(
         "Enter new passphrase: ",
         "Confirm new passphrase: ",
     )?;
@@ -546,8 +610,16 @@ fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatche
     Ok(())
 }
 
-#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
 fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    handle_keys_remove_passphrase_with_prompt(main_matches, sub_matches, &RealPromptReader)
+}
+
+#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
+fn handle_keys_remove_passphrase_with_prompt(
+    main_matches: &ArgMatches,
+    sub_matches: &ArgMatches,
+    prompt: &dyn PromptReader,
+) -> Result<()> {
     let key_id_partial = sub_matches.get_one::<String>("key-id")
         .ok_or_else(|| anyhow!("Key ID is required"))?;
 
@@ -588,11 +660,7 @@ fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMat
     // Warn user about security implications
     println!("⚠️  WARNING: This will store your private key unencrypted (only base64 encoded)!");
     println!("Anyone with access to your keystore files will be able to read this key.");
-    print!("Type 'yes' to continue: ");
-    io::stdout().flush()?;
-
-    let mut confirmation = String::new();
-    io::stdin().read_line(&mut confirmation)?;
+    let confirmation = prompt.read_line("Type 'yes' to continue: ")?;
 
     if confirmation.trim() != "yes" {
         println!("Cancelled");
@@ -1218,5 +1286,722 @@ mod tests {
             assert_eq!(result.len(), 1);
             assert_eq!(result.chars().next().unwrap(), ch);
         }
+    }
+
+    // ====================================================================
+    // Phase 16b-02 — coverage lift via D-19 PromptReader seam
+    // ====================================================================
+    //
+    // Test taxonomy:
+    //   * helper-direct (≥8): exercise pure helpers with no external state
+    //   * Mock-driven (≥8): drive `_with_prompt` variants via `MockPromptReader`,
+    //     against a tempdir keystore at `KdfParams::interactive` speed
+    //   * error-message regression (≥4): pin the exact `anyhow!()` text the CLI
+    //     emits when callers misuse the surface
+    //
+    // Discipline notes:
+    //   - All FS-touching tests use `tempfile::TempDir`; no `tempdir()` macro.
+    //   - All keystores are constructed via `Keystore::new_with_config_dir_and_kdf`
+    //     with `KdfParams::interactive()` (≈10× faster than `sensitive()`).
+    //   - Tests do not mutate `std::env::current_dir`, so no `serial_test` cwd
+    //     scope guards are needed (Phase 16 R-03 lesson).
+    //   - Tests that mutate `SSS_PASSPHRASE` env state are gated behind
+    //     `#[serial]` to avoid concurrent contamination.
+    use clap::{Arg, Command as ClapCommand};
+    use std::cell::RefCell;
+    use tempfile::TempDir;
+
+    /// Test double for [`PromptReader`].
+    ///
+    /// Stores two FIFO queues — one for password-with-confirmation answers and
+    /// one for line-read answers — and pops one entry per call.  Panics with a
+    /// loud message if the queue is empty (catches test bugs early).
+    struct MockPromptReader {
+        passwords: RefCell<Vec<String>>,
+        lines: RefCell<Vec<String>>,
+    }
+
+    impl MockPromptReader {
+        fn new() -> Self {
+            Self {
+                passwords: RefCell::new(Vec::new()),
+                lines: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn with_password(self, pw: &str) -> Self {
+            self.passwords.borrow_mut().push(pw.to_string());
+            self
+        }
+
+        fn with_line(self, line: &str) -> Self {
+            self.lines.borrow_mut().push(line.to_string());
+            self
+        }
+    }
+
+    impl PromptReader for MockPromptReader {
+        fn read_password_with_confirmation(
+            &self,
+            _prompt: &str,
+            _confirm_prompt: &str,
+        ) -> Result<SecureString> {
+            let mut q = self.passwords.borrow_mut();
+            assert!(
+                !q.is_empty(),
+                "MockPromptReader: read_password_with_confirmation called but no password queued"
+            );
+            let pw = q.remove(0);
+            Ok(SecureString::new(&pw))
+        }
+
+        fn read_line(&self, _prompt: &str) -> Result<String> {
+            let mut q = self.lines.borrow_mut();
+            assert!(
+                !q.is_empty(),
+                "MockPromptReader: read_line called but no line queued"
+            );
+            Ok(q.remove(0))
+        }
+    }
+
+    /// Build a clap command tree mirroring `src/main.rs:273-376` for the `keys`
+    /// subcommand surface.  Used by the in-source `_with_prompt` tests so they
+    /// can construct realistic `ArgMatches` without spawning a subprocess.
+    fn build_keys_app() -> ClapCommand {
+        ClapCommand::new("sss")
+            .arg(Arg::new("confdir").long("confdir").value_name("DIR").global(true))
+            .arg(
+                Arg::new("non-interactive")
+                    .long("non-interactive")
+                    .action(clap::ArgAction::SetTrue)
+                    .global(true),
+            )
+            .arg(
+                Arg::new("kdf-level")
+                    .long("kdf-level")
+                    .value_name("LEVEL")
+                    .global(true),
+            )
+            .subcommand(
+                ClapCommand::new("keys")
+                    .subcommand(
+                        ClapCommand::new("generate")
+                            .arg(Arg::new("force").long("force").action(clap::ArgAction::SetTrue))
+                            .arg(
+                                Arg::new("no-password")
+                                    .long("no-password")
+                                    .action(clap::ArgAction::SetTrue),
+                            )
+                            .arg(
+                                Arg::new("suite")
+                                    .long("suite")
+                                    .value_name("SUITE")
+                                    .value_parser(["classic", "hybrid", "both"])
+                                    .default_value(if cfg!(feature = "hybrid") {
+                                        "both"
+                                    } else {
+                                        "classic"
+                                    }),
+                            ),
+                    )
+                    .subcommand(ClapCommand::new("list"))
+                    .subcommand(
+                        ClapCommand::new("pubkey")
+                            .arg(
+                                Arg::new("fingerprint")
+                                    .long("fingerprint")
+                                    .action(clap::ArgAction::SetTrue),
+                            )
+                            .arg(Arg::new("user").short('u').long("user").value_name("USERNAME")),
+                    )
+                    .subcommand(
+                        ClapCommand::new("delete")
+                            .arg(Arg::new("name").required(true)),
+                    )
+                    .subcommand(
+                        ClapCommand::new("current")
+                            .arg(Arg::new("name").required(false)),
+                    )
+                    .subcommand(
+                        ClapCommand::new("rotate")
+                            .arg(Arg::new("force").long("force").action(clap::ArgAction::SetTrue))
+                            .arg(
+                                Arg::new("no-backup")
+                                    .long("no-backup")
+                                    .action(clap::ArgAction::SetTrue),
+                            )
+                            .arg(
+                                Arg::new("dry-run")
+                                    .long("dry-run")
+                                    .action(clap::ArgAction::SetTrue),
+                            ),
+                    )
+                    .subcommand(
+                        ClapCommand::new("set-passphrase")
+                            .arg(Arg::new("key-id").required(true)),
+                    )
+                    .subcommand(
+                        ClapCommand::new("remove-passphrase")
+                            .arg(Arg::new("key-id").required(true)),
+                    )
+                    .subcommand(ClapCommand::new("show")),
+            )
+    }
+
+    /// Drive arg vector through the test clap app, return the global +
+    /// the named subcommand's matches.
+    fn parse_keys_args(argv: &[&str]) -> (clap::ArgMatches, clap::ArgMatches) {
+        let matches = build_keys_app().try_get_matches_from(argv).expect("clap parse");
+        let (sub_name, sub_m) = matches.subcommand().expect("subcommand present");
+        assert_eq!(sub_name, "keys");
+        let inner = sub_m.clone();
+        (matches, inner)
+    }
+
+    /// Convenience: build a fast keystore at `dir` and seed an unprotected
+    /// classic keypair.  Returns the freshly-stored key id.
+    fn seed_unprotected_classic(dir: &std::path::Path) -> String {
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            dir.to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let kp = KeyPair::generate().unwrap();
+        ks.store_keypair(&kp, None).unwrap()
+    }
+
+    // -------- helper-direct tests (Tier 1) --------
+
+    #[test]
+    fn test_real_prompt_reader_is_unit_struct() {
+        // RealPromptReader is the production seam target; ensure we can
+        // instantiate it without arguments.  Trivial but pins the type shape.
+        let _r = RealPromptReader;
+    }
+
+    #[test]
+    fn test_mock_prompt_reader_password_queue_pops_in_order() {
+        let mock = MockPromptReader::new()
+            .with_password("first")
+            .with_password("second");
+        let one = mock
+            .read_password_with_confirmation("p1: ", "c: ")
+            .unwrap();
+        let two = mock
+            .read_password_with_confirmation("p2: ", "c: ")
+            .unwrap();
+        assert_eq!(one.as_str().unwrap(), "first");
+        assert_eq!(two.as_str().unwrap(), "second");
+    }
+
+    #[test]
+    fn test_mock_prompt_reader_line_queue_pops_in_order() {
+        let mock = MockPromptReader::new().with_line("yes\n").with_line("no\n");
+        assert_eq!(mock.read_line("? ").unwrap(), "yes\n");
+        assert_eq!(mock.read_line("? ").unwrap(), "no\n");
+    }
+
+    #[test]
+    #[should_panic(expected = "no password queued")]
+    fn test_mock_prompt_reader_panics_when_password_underflow() {
+        let mock = MockPromptReader::new();
+        let _ = mock.read_password_with_confirmation("p: ", "c: ");
+    }
+
+    #[test]
+    #[should_panic(expected = "no line queued")]
+    fn test_mock_prompt_reader_panics_when_line_underflow() {
+        let mock = MockPromptReader::new();
+        let _ = mock.read_line("? ");
+    }
+
+    #[test]
+    fn test_build_keys_app_parses_generate_with_no_password() {
+        let argv = &[
+            "sss", "--confdir", "/tmp/x", "keys", "generate", "--no-password", "--suite", "classic",
+        ];
+        let (_g, sub) = parse_keys_args(argv);
+        let (name, gen_m) = sub.subcommand().expect("subcmd");
+        assert_eq!(name, "generate");
+        assert!(gen_m.get_flag("no-password"));
+        assert_eq!(gen_m.get_one::<String>("suite").map(String::as_str), Some("classic"));
+    }
+
+    #[test]
+    fn test_build_keys_app_parses_delete_name() {
+        let argv = &["sss", "--confdir", "/tmp/x", "keys", "delete", "abc123"];
+        let (_g, sub) = parse_keys_args(argv);
+        let (name, del_m) = sub.subcommand().expect("subcmd");
+        assert_eq!(name, "delete");
+        assert_eq!(
+            del_m.get_one::<String>("name").map(String::as_str),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn test_build_keys_app_parses_rotate_force_dry_run() {
+        let argv = &[
+            "sss", "--confdir", "/tmp/x", "keys", "rotate", "--force", "--dry-run",
+        ];
+        let (_g, sub) = parse_keys_args(argv);
+        let (name, rot_m) = sub.subcommand().expect("subcmd");
+        assert_eq!(name, "rotate");
+        assert!(rot_m.get_flag("force"));
+        assert!(rot_m.get_flag("dry-run"));
+        assert!(!rot_m.get_flag("no-backup"));
+    }
+
+    #[test]
+    fn test_build_keys_app_parses_set_passphrase_key_id() {
+        let argv = &[
+            "sss", "--confdir", "/tmp/x", "keys", "set-passphrase", "deadbeef",
+        ];
+        let (_g, sub) = parse_keys_args(argv);
+        let (name, sp_m) = sub.subcommand().expect("subcmd");
+        assert_eq!(name, "set-passphrase");
+        assert_eq!(
+            sp_m.get_one::<String>("key-id").map(String::as_str),
+            Some("deadbeef")
+        );
+    }
+
+    // -------- Mock-driven prompt path tests (Tier 1) --------
+
+    #[test]
+    fn test_generate_classic_no_password_writes_keystore_entry() {
+        // --no-password path: prompt should not be consulted.
+        let tmp = TempDir::new().unwrap();
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "generate",
+            "--no-password",
+            "--suite",
+            "classic",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, gen_m) = sub.subcommand().expect("subcmd");
+
+        // Empty mock — prompt must not be called.
+        let mock = MockPromptReader::new();
+        handle_keys_generate_command_with_prompt(&g, gen_m, &mock).unwrap();
+
+        // Verify keystore now has exactly one key.
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let keys = ks.list_key_ids().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(!keys[0].1.is_password_protected);
+    }
+
+    #[test]
+    fn test_generate_classic_with_passphrase_uses_mock() {
+        // Passphrase path: mock returns "supersecret".
+        let tmp = TempDir::new().unwrap();
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "generate",
+            "--suite",
+            "classic",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, gen_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_password("supersecret");
+        handle_keys_generate_command_with_prompt(&g, gen_m, &mock).unwrap();
+
+        // Key should be password-protected.
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let keys = ks.list_key_ids().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].1.is_password_protected);
+    }
+
+    #[test]
+    fn test_generate_classic_empty_passphrase_errors() {
+        // Empty passphrase must hit the explicit error branch.
+        let tmp = TempDir::new().unwrap();
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "generate",
+            "--suite",
+            "classic",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, gen_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_password("");
+        let err = handle_keys_generate_command_with_prompt(&g, gen_m, &mock).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Passphrase cannot be empty"),
+            "expected empty-passphrase error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_generate_classic_existing_keypair_without_force_errors() {
+        let tmp = TempDir::new().unwrap();
+        seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "generate",
+            "--no-password",
+            "--suite",
+            "classic",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, gen_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new();
+        let err = handle_keys_generate_command_with_prompt(&g, gen_m, &mock).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("A keypair already exists") && msg.contains("--force"),
+            "expected duplicate-keypair error, got: {msg}"
+        );
+    }
+
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn test_generate_both_with_passphrase_uses_mock() {
+        let tmp = TempDir::new().unwrap();
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "generate",
+            "--suite",
+            "both",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, gen_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_password("dualpass");
+        handle_keys_generate_command_with_prompt(&g, gen_m, &mock).unwrap();
+
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let raw = ks.get_current_stored_raw().unwrap();
+        assert!(raw.is_password_protected);
+        assert!(raw.hybrid_public_key.is_some());
+    }
+
+    #[test]
+    fn test_delete_with_y_input_removes_keypair() {
+        let tmp = TempDir::new().unwrap();
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "delete",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, del_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_line("y\n");
+        handle_keys_delete_with_prompt(&g, del_m, &mock).unwrap();
+
+        // Keystore should now be empty.
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        assert!(ks.list_key_ids().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_delete_with_n_input_keeps_keypair() {
+        let tmp = TempDir::new().unwrap();
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "delete",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, del_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_line("n\n");
+        handle_keys_delete_with_prompt(&g, del_m, &mock).unwrap();
+
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(ks.list_key_ids().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_set_passphrase_adds_protection_to_unprotected_key() {
+        let tmp = TempDir::new().unwrap();
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "set-passphrase",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, sp_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_password("freshpass");
+        handle_keys_set_passphrase_with_prompt(&g, sp_m, &mock).unwrap();
+
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let keys = ks.list_key_ids().unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].1.is_password_protected);
+    }
+
+    #[test]
+    fn test_set_passphrase_empty_passphrase_errors() {
+        let tmp = TempDir::new().unwrap();
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "set-passphrase",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, sp_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new().with_password("");
+        let err = handle_keys_set_passphrase_with_prompt(&g, sp_m, &mock).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Passphrase cannot be empty"),
+            "expected empty-passphrase error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_set_passphrase_unknown_key_returns_listing_error() {
+        let tmp = TempDir::new().unwrap();
+        let _existing = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "set-passphrase",
+            "no-such-id",
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, sp_m) = sub.subcommand().expect("subcmd");
+
+        // No mock interaction expected — error fires before prompt.
+        let mock = MockPromptReader::new();
+        let err = handle_keys_set_passphrase_with_prompt(&g, sp_m, &mock).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("Key not found") && msg.contains("no-such-id"),
+            "expected key-not-found error, got: {msg}"
+        );
+        assert!(
+            msg.contains("Available keys"),
+            "expected listing in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_remove_passphrase_with_no_yes_input_cancels() {
+        // When the user types something other than "yes", we abort early —
+        // and importantly the prompt for the *passphrase itself* is never
+        // consulted (so the empty mock must not panic).
+        let tmp = TempDir::new().unwrap();
+
+        // Seed a protected keypair so remove-passphrase has work to do.
+        use crate::kdf::KdfParams;
+        let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+            tmp.path().to_path_buf(),
+            KdfParams::interactive(),
+            false,
+        )
+        .unwrap();
+        let kp = KeyPair::generate().unwrap();
+        let key_id = ks.store_keypair(&kp, Some("startingpass")).unwrap();
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "remove-passphrase",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, rp_m) = sub.subcommand().expect("subcmd");
+
+        // Type "no" instead of "yes" — should short-circuit "Cancelled".
+        let mock = MockPromptReader::new().with_line("no\n");
+        handle_keys_remove_passphrase_with_prompt(&g, rp_m, &mock).unwrap();
+
+        // Key should still be protected.
+        let stored = ks.list_key_ids().unwrap();
+        assert!(stored[0].1.is_password_protected);
+    }
+
+    #[test]
+    fn test_remove_passphrase_unprotected_key_errors() {
+        let tmp = TempDir::new().unwrap();
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        let argv = &[
+            "sss",
+            "--confdir",
+            tmp.path().to_str().unwrap(),
+            "--kdf-level",
+            "interactive",
+            "keys",
+            "remove-passphrase",
+            &key_id,
+        ];
+        let (g, sub) = parse_keys_args(argv);
+        let (_n, rp_m) = sub.subcommand().expect("subcmd");
+
+        let mock = MockPromptReader::new();
+        let err = handle_keys_remove_passphrase_with_prompt(&g, rp_m, &mock).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("not password protected"),
+            "expected not-protected error, got: {msg}"
+        );
+    }
+
+    // -------- Error-message regression tests (Tier 1) --------
+
+    #[test]
+    fn test_set_passphrase_missing_key_id_errors() {
+        // Run set-passphrase without a key-id — handler returns
+        // "Key ID is required".  We can't pass an empty argv through clap
+        // (it rejects), so we manually construct sub_matches from a zero-arg
+        // shape.
+        let app = ClapCommand::new("sub").arg(Arg::new("key-id").required(false));
+        let m = app.try_get_matches_from(vec!["sub"]).unwrap();
+        // Top-level matches just need to expose confdir/kdf-level shape.
+        let g_app = ClapCommand::new("sss")
+            .arg(Arg::new("confdir").long("confdir").value_name("DIR"))
+            .arg(Arg::new("kdf-level").long("kdf-level").value_name("LEVEL"));
+        let g = g_app.try_get_matches_from(vec!["sss"]).unwrap();
+
+        let mock = MockPromptReader::new();
+        let err = handle_keys_set_passphrase_with_prompt(&g, &m, &mock).unwrap_err();
+        assert!(format!("{err}").contains("Key ID is required"));
+    }
+
+    #[test]
+    fn test_remove_passphrase_missing_key_id_errors() {
+        let app = ClapCommand::new("sub").arg(Arg::new("key-id").required(false));
+        let m = app.try_get_matches_from(vec!["sub"]).unwrap();
+        let g_app = ClapCommand::new("sss")
+            .arg(Arg::new("confdir").long("confdir").value_name("DIR"))
+            .arg(Arg::new("kdf-level").long("kdf-level").value_name("LEVEL"));
+        let g = g_app.try_get_matches_from(vec!["sss"]).unwrap();
+
+        let mock = MockPromptReader::new();
+        let err = handle_keys_remove_passphrase_with_prompt(&g, &m, &mock).unwrap_err();
+        assert!(format!("{err}").contains("Key ID is required"));
+    }
+
+    #[test]
+    fn test_generate_unknown_suite_value_errors() {
+        // clap rejects unknown values via its value_parser — confirm.
+        let res = build_keys_app().try_get_matches_from(vec![
+            "sss", "keys", "generate", "--suite", "bogus",
+        ]);
+        let err = res.unwrap_err().to_string();
+        assert!(err.contains("invalid value"), "got: {err}");
+    }
+
+    #[test]
+    fn test_real_prompt_reader_error_propagation_via_trait_object() {
+        // Confirm `RealPromptReader` is dyn-compatible (object-safe) — if this
+        // ever regresses the production wiring breaks.
+        fn takes_dyn(_p: &dyn PromptReader) {}
+        takes_dyn(&RealPromptReader);
     }
 }

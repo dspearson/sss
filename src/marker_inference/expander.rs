@@ -226,6 +226,17 @@ fn process_grouped_changes(
             let edited_start = rendered_to_edited(original_marker.rendered_start, all_changes);
             let edited_end = rendered_to_edited(original_marker.rendered_end, all_changes);
 
+            // Floor to UTF-8 char boundaries: rendered_to_edited does byte
+            // arithmetic that can land mid-codepoint when changes split a
+            // multi-byte UTF-8 sequence (e.g. the 3-byte ⊕ glyph). The slice
+            // at line 237 below would then panic. floor_char_boundary passes
+            // OOB indices through unchanged so the bounds check that follows
+            // still catches deleted-region cases. Discovered by the
+            // marker_scanner libFuzzer harness in plan 17-02 (artifact
+            // crash-dfaf916089fead0109ef7fc7b8900e91b87e0703).
+            let edited_start = floor_char_boundary(edited_text, edited_start);
+            let edited_end = floor_char_boundary(edited_text, edited_end);
+
             // Don't preserve marker if its position is now invalid (content was deleted)
             if edited_start >= edited_end || edited_start >= edited_text.len() || edited_end > edited_text.len() {
                 continue;

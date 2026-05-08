@@ -303,3 +303,19 @@ fn test_infer_markers_no_panic_on_marker_source_start_oob() {
     // Both Ok and Err are acceptable; only a panic would be a regression.
     let _ = infer_markers(s, s);
 }
+
+// Regression: the original-marker preservation pass in expander.rs must not
+// panic when rendered_to_edited produces mid-codepoint byte indices for an
+// unaffected marker. Discovered by the marker_scanner libFuzzer harness in
+// plan 17-02 (artifact crash-dfaf916089fead0109ef7fc7b8900e91b87e0703). The
+// crash hit src/marker_inference/expander.rs:237 — str slice into edited_text
+// where rendered_to_edited had landed inside a multi-byte ⊕ sequence. Fixed
+// in 17-02c by flooring edited_start/edited_end to char boundaries before the
+// bounds check.
+#[test]
+fn test_infer_markers_no_panic_on_unaffected_marker_mid_codepoint() {
+    let input: &[u8] = b"{{+{{\x07\x07\x07}\xe2\x8a\x95{cx}+o+{{}\xe2\x8a\x95{{ixu.\xe2\x8a\x95\\{cx}+c.\xe2\x8a\x95\\.";
+    let s = std::str::from_utf8(input).expect("crash artifact is valid UTF-8");
+    // Both Ok and Err are acceptable; only a panic would be a regression.
+    let _ = infer_markers(s, s);
+}

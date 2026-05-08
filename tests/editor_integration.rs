@@ -1,30 +1,17 @@
 use anyhow::{anyhow, Result};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use tempfile::tempdir;
 
-/// Get the project root directory
-fn get_project_root() -> PathBuf {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir)
-}
-
-/// Build the binaries once before running tests
-fn ensure_binaries_built() -> Result<()> {
-    let mut cmd = Command::new("cargo");
-    cmd.args(["build", "--bins"]);
-    cmd.current_dir(get_project_root());
-    let output = cmd.output()?;
-
-    if !output.status.success() {
-        return Err(anyhow::anyhow!(
-            "Failed to build binaries: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    Ok(())
+// Why: Use the canonical `env!("CARGO_BIN_EXE_sss")` (see tests/migrate_e2e.rs:14
+// and tests/keys_suite_flag.rs:13) to locate the test-runtime sss binary.
+// Cargo guarantees the bin is built (with the test's own feature set) before
+// the integration test runs, so an explicit `cargo build --bins` sub-process
+// is unnecessary and harmful — the sub-cargo inherits no feature flags and
+// overwrote target/debug/sss with a non-hybrid bin during workspace test runs.
+fn sss_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_sss")
 }
 
 #[test]
@@ -67,8 +54,7 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
 
     // Test ssse symlink behavior by calling with ssse in args[0]
     // This simulates how ssse would be called
-    let binary_path = get_project_root().join("target/debug/sss");
-    let mut cmd = Command::new(&binary_path);
+    let mut cmd = Command::new(sss_bin());
 
     // The key is that argv[0] should contain "ssse"
     // We simulate this by using a symlink-like approach
@@ -101,10 +87,7 @@ fn run_sss_in_dir(
     work_dir: &std::path::Path,
     config_dir: &std::path::Path,
 ) -> Result<std::process::Output> {
-    ensure_binaries_built()?;
-
-    let binary_path = get_project_root().join("target/debug/sss");
-    let mut cmd = Command::new(binary_path);
+    let mut cmd = Command::new(sss_bin());
 
     // Add --confdir argument first
     cmd.arg("--confdir");

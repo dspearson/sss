@@ -28,16 +28,26 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
     sorted_markers.sort_by_key(|m| m.source_start);
 
     for marker in sorted_markers {
+        // Clamp marker indices to text.len() and floor to UTF-8 char boundary.
+        // Defends against upstream marker-construction bugs (in apply_marker_rule
+        // / rendered_to_edited) that can produce OOB or mid-codepoint indices
+        // when fuzz inputs combine multi-byte UTF-8 with unbalanced delimiters.
+        // Discovered by the marker_scanner libFuzzer harness in plan 17-02
+        // (artifact crash-0895563c...): a marker arrived with source_start=25
+        // against a 24-byte rendered text, panicking the slice at this site.
+        let source_start = clamp_to_char_boundary(text, marker.source_start);
+        let source_end = clamp_to_char_boundary(text, marker.source_end);
+
         // Add any text before this marker
-        if pos < marker.source_start {
-            output.push_str(&text[pos..marker.source_start]);
+        if pos < source_start {
+            output.push_str(&text[pos..source_start]);
         }
 
         // Extract content from text if not already set
         let content = if !marker.content.is_empty() {
             marker.content.clone()
-        } else if marker.source_start < text.len() && marker.source_end <= text.len() {
-            text[marker.source_start..marker.source_end].to_string()
+        } else if source_start < source_end {
+            text[source_start..source_end].to_string()
         } else {
             String::new()
         };
@@ -45,7 +55,7 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
         // Skip empty markers (but preserve whitespace-only markers per spec)
         // Empty markers should be removed entirely, but whitespace is meaningful
         if content.is_empty() {
-            pos = marker.source_end;
+            pos = source_end;
             continue;
         }
 
@@ -56,7 +66,7 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
         output.push_str(&content);
         output.push(close);
 
-        pos = marker.source_end;
+        pos = source_end;
     }
 
     // Add any remaining text after last marker
@@ -65,6 +75,22 @@ pub fn reconstruct_with_markers(text: &str, markers: &[Marker]) -> String {
     }
 
     output
+}
+
+/// Clamp a byte index to `text.len()` and floor to the nearest preceding UTF-8
+/// char boundary.
+///
+/// Distinct from `expander.rs::floor_char_boundary`, which passes OOB indices
+/// through unchanged because `apply_marker_rule` relies on
+/// `new_end > edited_text.len()` as a deletion-detection signal. The
+/// reconstructor only consumes indices for str slicing, with no deletion
+/// signal — so clamping to `text.len()` is the safe choice here.
+fn clamp_to_char_boundary(text: &str, idx: usize) -> usize {
+    let mut idx = idx.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
 }
 
 #[cfg(test)]

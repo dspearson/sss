@@ -288,3 +288,18 @@ fn test_infer_markers_no_panic_on_mid_codepoint_byte_index() {
     // Both Ok and Err are acceptable; only a panic would be a regression.
     let _ = infer_markers(s, s);
 }
+
+// Regression: reconstruct_with_markers must not panic when upstream marker
+// construction produces OOB or mid-codepoint source_start/source_end byte
+// indices. Discovered by the marker_scanner libFuzzer harness in plan 17-02
+// (artifact crash-0895563c5d1471c8db6910f8ff7e7d4e43997419). The crash hit
+// src/marker_inference/reconstructor.rs:33 — text[pos..marker.source_start]
+// with source_start=25 against a 24-byte text. Fixed in 17-02b by clamping
+// marker indices to text.len() and flooring to char boundaries before slicing.
+#[test]
+fn test_infer_markers_no_panic_on_marker_source_start_oob() {
+    let input: &[u8] = b"_key: \xe2\x8a\x95{myl\x00\x00\x00ecret}o+{unte+{}#";
+    let s = std::str::from_utf8(input).expect("crash artifact is valid UTF-8");
+    // Both Ok and Err are acceptable; only a panic would be a regression.
+    let _ = infer_markers(s, s);
+}

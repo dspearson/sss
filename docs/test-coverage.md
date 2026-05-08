@@ -44,9 +44,9 @@ Source file: `src/crypto/hybrid.rs` (97.25% line coverage, 106/109). Direct unit
 
 ## Per-file Baseline
 
-Captured on `arm64-builder` (Linux aarch64) at 2026-05-02 with `cargo tarpaulin --features hybrid`. Refresh by re-running the Quick Reference invocation; commit the new numbers in a follow-up.
+Captured on `arm64-builder` (Linux aarch64) at 2026-05-08 with `cargo tarpaulin --workspace --features hybrid --all-targets --skip-clean`. Refresh by re-running the Quick Reference invocation; commit the new numbers in a follow-up.
 
-**Workspace overall: 70.46% (5047/7163 lines covered)**
+**Workspace overall: 75.48% (5333/7065 lines covered)**
 
 Top files (by descending percentage):
 
@@ -68,31 +68,32 @@ Top files (by descending percentage):
 | `src/processor/marker_parser.rs`   | 44   | 46   | 95.65%  |
 | `src/marker_inference/marker_syntax.rs`| 80| 84   | 95.24%  |
 | `src/marker_inference/expander.rs` | 295  | 311  | 94.86%  |
-| `src/project.rs`                   | 182  | 199  | 91.46%  |
-| `src/processor/core.rs`            | 370  | 409  | 90.46%  |
-| `src/secrets.rs`                   | 153  | 170  | 90.00%  |
+| `src/secrets.rs`                   | 152  | 168  | 90.48%  |
+| `src/project.rs`                   | 180  | 199  | 90.45%  |
+| `src/processor/core.rs`            | 367  | 406  | 90.39%  |
+| `src/crypto/classic.rs`            | 252  | 280  | 90.00%  |
+| `src/merge.rs`                     | 130  | 145  | 89.66%  |
 | `src/scanner.rs`                   | 129  | 144  | 89.58%  |
-| `src/crypto/classic.rs`            | 248  | 280  | 88.57%  |
 | `src/main.rs`                      | 446  | 507  | 87.97%  |
-| `src/merge.rs`                     | 127  | 145  | 87.59%  |
-| `src/keystore.rs`                  | 368  | 458  | 80.35%  |
-| `src/commands/migrate.rs`          | 87   | 107  | 81.31%  |
+| `src/commands/migrate.rs`          | 87   | 104  | 83.65%  |
+| `src/keystore.rs`                  | 375  | 456  | 82.24%  |
+| `src/commands/hooks.rs`            | 173  | 234  | 73.93%  |
+| `src/commands/keys.rs`             | 369  | 504  | 73.21%  |
+| `src/commands/users.rs`            | 114  | 160  | 71.25%  |
+| `src/commands/process.rs`          | 238  | 360  | 66.11%  |
 
 Files below 50% (intentional gaps — UI, daemon, FUSE/9p):
 
 | File | Lines covered | Total lines | Percentage | Why low |
 |------|---------------|-------------|------------|---------|
-| `src/secure_memory.rs`     | 82  | 185 | 44.32% | Platform-conditional mlock/munlock paths; tested via panic-surface tests |
 | `src/filesystem_common.rs` | 14  | 42  | 33.33% | FUSE/9p shared paths; cross-platform stubs |
-| `src/editor.rs`            | 14  | 53  | 26.42% | Spawns `$EDITOR`; integration-tested manually |
 | `src/agent/client.rs`      | 14  | 54  | 25.93% | sss-agent IPC; covered by panic-surface + manual e2e |
 | `src/askpass.rs`           | 12  | 79  | 15.19% | TTY/GUI prompts; manually exercised |
 | `src/bin/sss-askpass-gui.rs`| 6  | 47  | 12.77% | GTK GUI binary; not unit-tested |
 | `src/bin/sss-askpass-tty.rs`| 8  | 78  | 10.26% | TTY prompt binary; manually tested |
 | `src/commands/agent.rs`    | 6   | 133 | 4.51%  | Agent CLI dispatcher; covered by manual e2e |
-| `src/bin/sss-agent.rs`     | 0   | 156 | 0.00%  | Daemon binary; integration-tested manually |
+| `src/bin/sss-agent.rs`     | 0   | 152 | 0.00%  | Daemon binary; integration-tested manually |
 | `src/fuse/fs.rs`           | 0   | 26  | 0.00%  | FUSE filesystem ops; feature-gated, manual mount tests |
-| `src/fuse/file_cache.rs`   | 0   | 4   | 0.00%  | FUSE cache; feature-gated |
 | `src/ninep_fs.rs`          | 0   | 2   | 0.00%  | 9p filesystem entry; feature-gated |
 | `src/constants.rs`         | 0   | 2   | 0.00%  | Constants only; no executable lines |
 

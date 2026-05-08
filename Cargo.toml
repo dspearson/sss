@@ -11,6 +11,7 @@ fuse = ["dep:fuser", "dep:parking_lot"]
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
 ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
 hybrid = ["dep:trelis-hybrid", "dep:trelis-primitives"]
+slow-tests = []
 
 [[bin]]
 name = "sss"
@@ -107,3 +108,8 @@ harness = false
 name = "migrate_e2e"
 path = "tests/migrate_e2e.rs"
 required-features = ["hybrid"]
+
+[[test]]
+name = "soak_agent"
+path = "tests/soak_agent.rs"
+required-features = ["hybrid", "slow-tests"]

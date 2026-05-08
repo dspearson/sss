@@ -1,0 +1,10 @@
+# cargo-fuzz build artifacts (separate workspace; root /target/ does not cover this)
+/target/
+Cargo.lock
+
+# Per-harness corpus runtime state — KEEP corpus/<harness>/ seed files (committed in Wave 2)
+corpus/*/queue/
+corpus/*/.tmp/
+
+# Crash artifacts (libFuzzer dumps minimised reproducers here)
+artifacts/

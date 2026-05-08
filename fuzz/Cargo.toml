@@ -1,0 +1,37 @@
+[package]
+name = "sss-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sss = { path = "..", features = ["hybrid"] }
+toml = "0.9"
+serde_json = "1"
+
+# DO NOT inherit root [workspace] — fuzz/ is a SEPARATE workspace by virtue
+# of (a) cargo-fuzz convention, and (b) root Cargo.toml not declaring fuzz/
+# as a workspace member. Root Cargo.toml has NO [workspace] block (verified
+# via PATTERNS.md), so no exclude line is needed in the root manifest.
+
+[[bin]]
+name = "config_parser"
+path = "fuzz_targets/config_parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "marker_scanner"
+path = "fuzz_targets/marker_scanner.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "keystore_deser"
+path = "fuzz_targets/keystore_deser.rs"
+test = false
+doc = false

@@ -113,3 +113,8 @@ required-features = ["hybrid"]
 name = "soak_agent"
 path = "tests/soak_agent.rs"
 required-features = ["hybrid", "slow-tests"]
+
+[[test]]
+name = "stress_render"
+path = "tests/stress_render.rs"
+required-features = ["hybrid", "slow-tests"]

@@ -448,4 +448,263 @@ mod tests {
     // - create_keystore() (tested in utils)
     // - PublicKey::from_base64() (tested in crypto)
     // Integration tests verify the full user management workflow
+
+    // ====================================================================
+    // 16b-04 Tier 1: handle_users_list / add / remove / info coverage
+    // ====================================================================
+
+    /// Drop-restoring cwd guard so tests never leak the working directory.
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+    impl CwdGuard {
+        fn new() -> std::io::Result<Self> {
+            Ok(Self { original: std::env::current_dir()? })
+        }
+    }
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
+
+    /// Build a TempDir-rooted .sss.toml seeded with one classic user.
+    /// Returns (TempDir, KeyPair) — the TempDir must outlive the test body.
+    fn setup_users_fixture(seed_user: &str) -> (tempfile::TempDir, crate::crypto::KeyPair) {
+        let tmp = tempfile::tempdir().expect("tempdir create");
+        let kp = crate::crypto::KeyPair::generate().expect("keypair generate");
+        let cfg = ProjectConfig::new(seed_user, &kp.public_key()).expect("config new");
+        cfg.save_to_file(tmp.path().join(".sss.toml")).expect("save config");
+        (tmp, kp)
+    }
+
+    fn build_add_matches(username: &str, public_key: &str) -> ArgMatches {
+        use clap::{Arg, Command};
+        Command::new("add")
+            .arg(Arg::new("username").required(true))
+            .arg(Arg::new("public-key").required(true))
+            .get_matches_from(["add", username, public_key])
+    }
+
+    fn build_remove_matches(username: &str) -> ArgMatches {
+        use clap::{Arg, Command};
+        Command::new("remove")
+            .arg(Arg::new("username").required(true))
+            .get_matches_from(["remove", username])
+    }
+
+    fn build_info_matches(username: &str) -> ArgMatches {
+        use clap::{Arg, Command};
+        Command::new("info")
+            .arg(Arg::new("username").required(true))
+            .get_matches_from(["info", username])
+    }
+
+    fn build_main_matches() -> ArgMatches {
+        use clap::{Arg, Command};
+        Command::new("sss")
+            .arg(Arg::new("confdir").long("confdir"))
+            .get_matches_from(["sss"])
+    }
+
+    // ---- handle_users_list ----
+
+    #[test]
+    #[serial]
+    fn test_handle_users_list_lists_seeded_user() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        // Should print without error against a valid config.
+        handle_users_list()?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_list_errors_without_project_config() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let tmp = tempfile::tempdir()?;
+        std::env::set_current_dir(tmp.path())?;
+        let err = handle_users_list().unwrap_err().to_string();
+        assert!(
+            err.contains("project") || err.contains("No project"),
+            "expected no-project-config error; got: {err}"
+        );
+        Ok(())
+    }
+
+    // ---- handle_users_info ----
+
+    #[test]
+    #[serial]
+    fn test_handle_users_info_known_user_succeeds() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let matches = build_info_matches("alice");
+        handle_users_info(&matches)?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_info_unknown_user_errors_with_not_found() -> Result<()> {
+        // Error-message regression: must say "not found in project".
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let matches = build_info_matches("ghost");
+        let err = handle_users_info(&matches).unwrap_err().to_string();
+        assert!(
+            err.contains("'ghost'") && err.contains("not found"),
+            "error must call out missing user; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_info_errors_when_config_missing() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let tmp = tempfile::tempdir()?;
+        std::env::set_current_dir(tmp.path())?;
+        let matches = build_info_matches("alice");
+        let err = handle_users_info(&matches).unwrap_err().to_string();
+        assert!(
+            err.contains("No project") || err.contains("project"),
+            "expected no-project error; got: {err}"
+        );
+        Ok(())
+    }
+
+    // ---- handle_users_add ----
+
+    #[test]
+    #[serial]
+    fn test_handle_users_add_invalid_base64_errors() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let main = build_main_matches();
+        // Provide a string that is neither a path nor valid base64.
+        let matches = build_add_matches("bob", "@@@not_base64@@@");
+        let err = handle_users_add(&main, &matches).unwrap_err().to_string();
+        assert!(
+            err.contains("invalid base64"),
+            "error must call out invalid base64; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_add_unrecognised_length_errors() -> Result<()> {
+        use base64::Engine as _;
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let main = build_main_matches();
+        // 17 bytes — neither classic (32) nor hybrid (1214).
+        let bad = base64::prelude::BASE64_STANDARD.encode([0u8; 17]);
+        let matches = build_add_matches("bob", &bad);
+        let err = handle_users_add(&main, &matches).unwrap_err().to_string();
+        assert!(
+            err.contains("unrecognised public key length"),
+            "expected length error; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    #[cfg(feature = "hybrid")]
+    fn test_handle_users_add_hybrid_key_into_classic_project_errors() -> Result<()> {
+        use base64::Engine as _;
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let main = build_main_matches();
+        // 1214 zero bytes will fail HybridPublicKey::from_bytes; we want the
+        // mismatch error to fire first if possible. The shape of the error
+        // message just has to indicate failure.
+        let raw = vec![0u8; crate::constants::HYBRID_PUBLIC_KEY_SIZE];
+        let b64 = base64::prelude::BASE64_STANDARD.encode(&raw);
+        let matches = build_add_matches("bob", &b64);
+        let err = handle_users_add(&main, &matches).unwrap_err().to_string();
+        // Either the length is rejected because from_bytes rejects all-zero,
+        // or the mismatch with the v1 project fires.
+        assert!(
+            !err.is_empty(),
+            "must error rather than silently succeed"
+        );
+        Ok(())
+    }
+
+    // ---- handle_users_remove ----
+
+    #[test]
+    #[serial]
+    fn test_handle_users_remove_unknown_user_errors() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let main = build_main_matches();
+        let matches = build_remove_matches("ghost");
+        let err = handle_users_remove(&main, &matches).unwrap_err().to_string();
+        assert!(
+            err.contains("'ghost'") && err.contains("not found"),
+            "error must mention missing user; got: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_remove_last_user_errors() -> Result<()> {
+        // Error-message regression: cannot remove last user.
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let main = build_main_matches();
+        let matches = build_remove_matches("alice");
+        let err = handle_users_remove(&main, &matches).unwrap_err().to_string();
+        assert!(
+            err.contains("Cannot remove the last user"),
+            "expected last-user guard message; got: {err}"
+        );
+        Ok(())
+    }
+
+    // ---- handle_users dispatcher ----
+
+    #[test]
+    #[serial]
+    fn test_handle_users_dispatches_list_subcommand() -> Result<()> {
+        use clap::{Arg, Command};
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let users_app = Command::new("users")
+            .subcommand(Command::new("list"))
+            .subcommand(Command::new("info").arg(Arg::new("username").required(true)))
+            .subcommand(Command::new("remove").arg(Arg::new("username").required(true)));
+        let users_matches = users_app.get_matches_from(["users", "list"]);
+        handle_users(&build_main_matches(), &users_matches)?;
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_handle_users_dispatches_info_subcommand() -> Result<()> {
+        use clap::{Arg, Command};
+        let _g = CwdGuard::new()?;
+        let (tmp, _kp) = setup_users_fixture("alice");
+        std::env::set_current_dir(tmp.path())?;
+        let users_app = Command::new("users")
+            .subcommand(Command::new("info").arg(Arg::new("username").required(true)));
+        let users_matches = users_app.get_matches_from(["users", "info", "alice"]);
+        handle_users(&build_main_matches(), &users_matches)?;
+        Ok(())
+    }
 }

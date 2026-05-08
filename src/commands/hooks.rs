@@ -465,6 +465,28 @@ fn find_git_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    // RAII guard to restore cwd after a test that mutates it.
+    // Phase 16 R-03 cwd-race lesson: every cwd-mutating test must restore.
+    struct CwdGuard {
+        original: std::path::PathBuf,
+    }
+
+    impl CwdGuard {
+        fn new() -> std::io::Result<Self> {
+            Ok(Self {
+                original: std::env::current_dir()?,
+            })
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            let _ = std::env::set_current_dir(&self.original);
+        }
+    }
 
     #[test]
     fn test_find_git_dir_in_repo() {
@@ -494,9 +516,340 @@ mod tests {
         }
     }
 
-    // Note: Most of handle_hooks() involves:
-    // - File I/O to write hooks to .git/hooks/
-    // - Setting executable permissions
-    // - Reading embedded hook content
-    // Integration tests verify the full hook installation workflow
+    // ---- 16b-04 Tier 1 in-source tests for hooks.rs helpers ----
+
+    // generate_hook_wrapper coverage
+
+    #[test]
+    fn test_generate_hook_wrapper_pre_commit_includes_shebang() {
+        let out = generate_hook_wrapper("pre-commit");
+        assert!(
+            out.starts_with("#!/bin/bash\n"),
+            "wrapper must begin with bash shebang; got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_generate_hook_wrapper_post_merge_includes_correct_hook_name() {
+        let out = generate_hook_wrapper("post-merge");
+        assert!(out.contains("post-merge"), "wrapper must mention post-merge");
+        assert!(
+            out.contains("post-merge.d"),
+            "wrapper must reference the .d directory; got: {out}"
+        );
+    }
+
+    #[test]
+    fn test_generate_hook_wrapper_post_checkout_dispatches_dotd_dir() {
+        let out = generate_hook_wrapper("post-checkout");
+        // The dispatcher pattern executes every executable inside post-checkout.d/
+        assert!(out.contains("hook_dir=\"$(dirname \"$0\")/post-checkout.d\""));
+        assert!(out.contains("for hook in \"$hook_dir\"/*"));
+        assert!(out.contains("if [ -x \"$hook\" ]"));
+    }
+
+    #[test]
+    fn test_generate_hook_wrapper_arbitrary_name_substitutes_into_dispatch() {
+        // generate_hook_wrapper is a pure formatter — any string flows through.
+        let out = generate_hook_wrapper("custom-hook");
+        assert!(out.contains("custom-hook"));
+        assert!(out.contains("custom-hook.d"));
+    }
+
+    // is_multiplexed coverage
+
+    #[test]
+    fn test_is_multiplexed_returns_false_on_empty_dir() -> Result<()> {
+        let tmp = TempDir::new()?;
+        assert!(!is_multiplexed(tmp.path()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_multiplexed_returns_true_when_dotd_directory_present() -> Result<()> {
+        let tmp = TempDir::new()?;
+        // Marker is the existence of a `<hook>.d` directory for any known hook.
+        std::fs::create_dir(tmp.path().join("pre-commit.d"))?;
+        assert!(is_multiplexed(tmp.path()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_multiplexed_ignores_unrelated_dotd_directories() -> Result<()> {
+        let tmp = TempDir::new()?;
+        // A .d directory whose name does NOT match a known hook must not flip
+        // the multiplex flag.
+        std::fs::create_dir(tmp.path().join("unrelated.d"))?;
+        assert!(!is_multiplexed(tmp.path()));
+        Ok(())
+    }
+
+    // install_hooks_to_directory coverage
+
+    #[test]
+    fn test_install_hooks_to_directory_flat_writes_all_hooks() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let hooks_dir = tmp.path().join("hooks");
+        let (installed, skipped) =
+            install_hooks_to_directory(&hooks_dir, false, false)?;
+        assert_eq!(installed, 3);
+        assert_eq!(skipped, 0);
+        for hook in HOOKS {
+            let p = hooks_dir.join(hook.name);
+            assert!(p.exists(), "missing hook file: {}", hook.name);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_install_hooks_to_directory_flat_skips_existing_when_check_set() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let hooks_dir = tmp.path().join("hooks");
+        // Pre-create a colliding file in the hooks dir.
+        std::fs::create_dir_all(&hooks_dir)?;
+        std::fs::write(hooks_dir.join("pre-commit"), "existing\n")?;
+        let (installed, skipped) =
+            install_hooks_to_directory(&hooks_dir, false, true)?;
+        // pre-commit should be skipped; the other two installed.
+        assert_eq!(installed, 2);
+        assert_eq!(skipped, 1);
+        let preserved = std::fs::read_to_string(hooks_dir.join("pre-commit"))?;
+        assert_eq!(preserved, "existing\n", "pre-existing hook must be preserved");
+        Ok(())
+    }
+
+    #[test]
+    fn test_install_hooks_to_directory_multiplex_creates_dotd_layout() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let hooks_dir = tmp.path().join("hooks");
+        let (installed, skipped) =
+            install_hooks_to_directory(&hooks_dir, true, false)?;
+        assert_eq!(installed, 3);
+        assert_eq!(skipped, 0);
+        for hook in HOOKS {
+            let dotd = hooks_dir.join(format!("{}.d", hook.name));
+            let wrapper = hooks_dir.join(hook.name);
+            let inner = dotd.join("50-sss");
+            assert!(dotd.is_dir(), "missing .d dir for {}", hook.name);
+            assert!(inner.exists(), "missing 50-sss for {}", hook.name);
+            assert!(wrapper.exists(), "missing wrapper for {}", hook.name);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_install_hooks_to_directory_multiplex_skips_existing_50_sss() -> Result<()> {
+        let tmp = TempDir::new()?;
+        let hooks_dir = tmp.path().join("hooks");
+        // Pre-create the multiplex layout for pre-commit with a 50-sss collision.
+        let dotd = hooks_dir.join("pre-commit.d");
+        std::fs::create_dir_all(&dotd)?;
+        std::fs::write(dotd.join("50-sss"), "existing-script\n")?;
+        let (installed, skipped) =
+            install_hooks_to_directory(&hooks_dir, true, true)?;
+        // pre-commit.d/50-sss should be skipped; the other two installed.
+        assert_eq!(installed, 2);
+        assert_eq!(skipped, 1);
+        let preserved = std::fs::read_to_string(dotd.join("50-sss"))?;
+        assert_eq!(preserved, "existing-script\n");
+        Ok(())
+    }
+
+    #[test]
+    fn test_install_hooks_to_directory_auto_detects_existing_multiplex() -> Result<()> {
+        // When use_multiplex=false but the dir is already multiplexed, the
+        // function must respect that layout (should_multiplex = false || true).
+        let tmp = TempDir::new()?;
+        let hooks_dir = tmp.path().join("hooks");
+        std::fs::create_dir_all(hooks_dir.join("pre-commit.d"))?;
+        let (installed, skipped) =
+            install_hooks_to_directory(&hooks_dir, false, false)?;
+        assert_eq!(installed, 3);
+        assert_eq!(skipped, 0);
+        // Because layout was already multiplex, files land under `.d/`.
+        assert!(hooks_dir.join("pre-commit.d/50-sss").exists());
+        Ok(())
+    }
+
+    // export_hooks_to_config coverage — covered indirectly by the existing
+    // baseline (the function is fully covered per the audit).  Add a smoke
+    // test that exercises the public-byte content of the embedded hooks
+    // (regression on hook-content drift).
+
+    #[test]
+    fn test_embedded_hook_contents_start_with_shebang() {
+        // Every embedded hook must ship with a #! shebang line.  Pre-commit
+        // is perl; post-merge and post-checkout are bash.  This regression
+        // test guards against accidental binary inclusion or shebang drift.
+        for hook in HOOKS {
+            let first_line = hook
+                .content
+                .lines()
+                .next()
+                .expect("hook must have at least one line");
+            assert!(
+                first_line.starts_with("#!"),
+                "{} must start with a shebang; got: {}",
+                hook.name,
+                first_line
+            );
+        }
+    }
+
+    // find_git_dir coverage
+
+    #[test]
+    #[serial]
+    fn test_find_git_dir_in_temp_repo_finds_dotgit_directory() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let tmp = TempDir::new()?;
+        std::fs::create_dir(tmp.path().join(".git"))?;
+        std::env::set_current_dir(tmp.path())?;
+        let result = find_git_dir()?;
+        // canonicalise both sides so symlink-resolution differences (e.g. /var
+        // → /private/var on macOS) don't cause spurious mismatches.
+        let got = result.canonicalize()?;
+        let want = tmp.path().join(".git").canonicalize()?;
+        assert_eq!(got, want);
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_git_dir_handles_dotgit_file_pointer_for_worktree() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        let tmp = TempDir::new()?;
+        // Where the real .git lives.
+        let real_git = tmp.path().join("real-git");
+        std::fs::create_dir(&real_git)?;
+        // Worktree directory with a .git *file* pointing at real_git.
+        let worktree = tmp.path().join("worktree");
+        std::fs::create_dir(&worktree)?;
+        let pointer = format!("gitdir: {}\n", real_git.display());
+        std::fs::write(worktree.join(".git"), pointer)?;
+        std::env::set_current_dir(&worktree)?;
+        let result = find_git_dir()?;
+        // The resolved path joins the worktree with the gitdir line value
+        // verbatim — assert the gitdir component shows up.
+        assert!(
+            result.to_string_lossy().contains(real_git.to_string_lossy().as_ref()),
+            "result should contain real_git path; got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_git_dir_errors_outside_any_repo() -> Result<()> {
+        let _g = CwdGuard::new()?;
+        // A TempDir under /tmp has no .git in any ancestor (verified at plan
+        // time: `/`, `/tmp`, `/var/tmp` have no `.git`).
+        let tmp = TempDir::new()?;
+        std::env::set_current_dir(tmp.path())?;
+        let result = find_git_dir();
+        assert!(result.is_err(), "expected error outside repo, got: {result:?}");
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("Not in a git repository"),
+            "error must mention 'Not in a git repository'; got: {err_str}"
+        );
+        Ok(())
+    }
+
+    // show_hook coverage — error path on unknown hook name.
+
+    #[test]
+    fn test_show_hook_unknown_returns_not_found_error() {
+        let result = show_hook("absolutely-not-a-real-hook");
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("not found"),
+            "error must mention 'not found'; got: {err_str}"
+        );
+    }
+
+    #[test]
+    fn test_show_hook_known_hook_returns_ok() {
+        // pre-commit is a known hook from the embedded HOOKS table; show_hook
+        // writes to stdout and returns Ok.  We assert only that it succeeds —
+        // stdout content isn't worth capturing here since the embedded text
+        // is already covered by the test_hook_list_returns_all_hooks check.
+        let result = show_hook("pre-commit");
+        assert!(result.is_ok());
+    }
+
+    // list_hooks / show_hooks_info coverage — no inputs, no failure modes.
+
+    #[test]
+    fn test_list_hooks_returns_ok() {
+        let result = list_hooks();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_show_hooks_info_returns_ok() {
+        let result = show_hooks_info();
+        assert!(result.is_ok());
+    }
+
+    // ---- 16b-04 Tier 1: handle_hooks dispatcher routing ----
+
+    /// Build ArgMatches matching the real `sss hooks <subcommand>` clap tree.
+    fn build_hooks_matches(args: &[&str]) -> ArgMatches {
+        use clap::{Arg, Command};
+        let app = Command::new("hooks")
+            .subcommand(
+                Command::new("install")
+                    .arg(Arg::new("template").long("template").action(clap::ArgAction::SetTrue))
+                    .arg(Arg::new("multiplex").long("multiplex").action(clap::ArgAction::SetTrue)),
+            )
+            .subcommand(Command::new("export"))
+            .subcommand(
+                Command::new("show").arg(Arg::new("hook").required(false)),
+            )
+            .subcommand(Command::new("list"));
+        app.get_matches_from(args)
+    }
+
+    fn empty_main_matches() -> ArgMatches {
+        use clap::Command;
+        Command::new("sss").get_matches_from(["sss"])
+    }
+
+    #[test]
+    fn test_handle_hooks_no_subcommand_prints_info() {
+        let main = empty_main_matches();
+        let matches = build_hooks_matches(&["hooks"]);
+        let result = handle_hooks(&main, &matches);
+        // show_hooks_info() returns Ok — dispatcher must too.
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_hooks_list_routes_to_list_hooks() {
+        let main = empty_main_matches();
+        let matches = build_hooks_matches(&["hooks", "list"]);
+        let result = handle_hooks(&main, &matches);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_handle_hooks_show_with_unknown_hook_returns_error() {
+        let main = empty_main_matches();
+        let matches = build_hooks_matches(&["hooks", "show", "absolutely-not-real"]);
+        let result = handle_hooks(&main, &matches);
+        assert!(result.is_err());
+        let err_str = result.unwrap_err().to_string();
+        assert!(err_str.contains("not found"), "got: {err_str}");
+    }
+
+    #[test]
+    fn test_handle_hooks_show_without_hook_arg_lists() {
+        // When `hook` arg is absent, dispatcher falls back to list_hooks.
+        let main = empty_main_matches();
+        let matches = build_hooks_matches(&["hooks", "show"]);
+        let result = handle_hooks(&main, &matches);
+        assert!(result.is_ok());
+    }
 }

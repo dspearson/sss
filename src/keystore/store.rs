@@ -40,7 +40,60 @@ pub struct StoredKeyPair {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(not(feature = "hybrid"), serde(skip))]
     pub hybrid_encrypted_secret_key: Option<String>,
+
+    // ── new in v2 (Phase 18, PQSIG-03) ─────────────────────────────────────
+    /// On-disk schema version. `1` = legacy unsigned (no `[signature]` table);
+    /// `2` = signed (has `[signature]`); `≥3` = future, current builds reject.
+    /// MUST always be present in deser output regardless of feature flags so
+    /// non-hybrid builds can detect a v2 entry and refuse cleanly (T-18-02-04).
+    /// Pitfall 5: `#[serde(default = "default_format_version")]` is REQUIRED —
+    /// a bare `#[serde(default)]` would call `Default::default()` returning 0
+    /// for `u32`, breaking legacy-file dispatch (D-10).
+    #[serde(default = "default_format_version")]
+    pub format_version: u32,
+
+    /// Per-entry Ed448 signing public key (base64). Present only on v2 entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_ed448_public_key: Option<String>,
+
+    /// Per-entry Ed448 signing secret key, encrypted under the same KDF-derived
+    /// KEK as `encrypted_secret_key` (D-07). Base64-encoded ciphertext.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_ed448_encrypted_secret_key: Option<String>,
+
+    /// Per-entry ML-DSA-65 signing public key (base64).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_mldsa65_public_key: Option<String>,
+
+    /// Per-entry ML-DSA-65 signing secret key, encrypted (D-07).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_mldsa65_encrypted_secret_key: Option<String>,
+
+    /// AND-composition signature (Ed448 + ML-DSA-65) over the canonical payload
+    /// from `keystore::sig::build_signed_payload`. Stored as a TOML sub-table
+    /// `[signature]` with `ed448` and `mldsa65` string fields (D-09).
+    ///
+    /// Source-level `#[cfg(feature = "hybrid")]` (not just `cfg_attr(serde(skip))`)
+    /// because `KeystoreEntrySig` is itself gated behind the `hybrid` feature
+    /// (sig.rs has `#![cfg(feature = "hybrid")]`); referencing it from a
+    /// non-hybrid build would fail to compile. A non-hybrid build that reads a
+    /// v2 TOML entry will see `format_version=2` and reject in 18-03 dispatch
+    /// before any sig field is consulted.
+    #[cfg(feature = "hybrid")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<crate::keystore::sig::KeystoreEntrySig>,
 }
+
+/// Default format version for legacy keystore entries.
+/// Pre-Phase-18 entries omit the `format_version` TOML key entirely;
+/// serde calls this fn to populate the field as `1`.
+/// Pitfall 5: must be a free function reference for `#[serde(default = "...")]`,
+/// not `#[serde(default)]` (which would call `u32::default()` and yield 0).
+fn default_format_version() -> u32 { 1 }
 
 /// Simple file-based keystore using ~/.config/sss/keys/
 pub struct Keystore {
@@ -184,6 +237,16 @@ impl Keystore {
             in_keyring,
             hybrid_public_key: None,
             hybrid_encrypted_secret_key: None,
+            // Phase 18 / PQSIG-03 schema fields. classic-only `store_keypair`
+            // emits `format_version: 1` (legacy unsigned); 18-03 will introduce
+            // a v2-emitting path on the dual-suite branch.
+            format_version: 1,
+            sig_ed448_public_key: None,
+            sig_ed448_encrypted_secret_key: None,
+            sig_mldsa65_public_key: None,
+            sig_mldsa65_encrypted_secret_key: None,
+            #[cfg(feature = "hybrid")]
+            signature: None,
         };
 
         // Write keypair to file
@@ -713,6 +776,15 @@ impl Keystore {
                         BASE64_STANDARD.encode(&hybrid.public_bytes),
                     ),
                     hybrid_encrypted_secret_key: Some(enc_hybrid),
+                    // Phase 18 / PQSIG-03 schema fields. This dual-suite path
+                    // currently emits `format_version: 1` (legacy unsigned);
+                    // 18-03 will overwrite these with v2 sign-on-write values.
+                    format_version: 1,
+                    sig_ed448_public_key: None,
+                    sig_ed448_encrypted_secret_key: None,
+                    sig_mldsa65_public_key: None,
+                    sig_mldsa65_encrypted_secret_key: None,
+                    signature: None,
                 };
 
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
@@ -1317,5 +1389,215 @@ mod tests {
                 "hybrid public key bytes must be bit-identical after round-trip"
             );
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 18 / PQSIG-03 — backward-compatibility deserialization tests for
+    // the extended `StoredKeyPair` schema (format_version + 4 sig fields +
+    // signature). v1 (legacy unsigned) and v2.0/v2.1 (hybrid-but-unsigned)
+    // TOML files MUST continue to deserialize without error as
+    // format_version=1 / signature=None. See plan 18-02 success criteria.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// v1 minimal TOML (no `format_version`, no hybrid_*, no sig_*) deserializes
+    /// with `format_version == 1` (default fn) and all sig-related fields absent.
+    /// Closes T-18-02-02 (format_version-absent must default to 1, NOT 0).
+    #[test]
+    fn deser_v1_minimal_no_format_version() {
+        let toml_str = r#"
+uuid = "test-uuid-v1"
+public_key = "abc123"
+encrypted_secret_key = "encrypted-blob"
+salt = "salt-blob"
+created_at = "2026-01-01T00:00:00Z"
+is_password_protected = true
+"#;
+        let stored: StoredKeyPair =
+            toml::from_str(toml_str).expect("v1 minimal deser must succeed");
+        assert_eq!(
+            stored.format_version, 1,
+            "missing format_version must default to 1 (Pitfall 5 / T-18-02-02)"
+        );
+        #[cfg(feature = "hybrid")]
+        {
+            assert!(stored.signature.is_none(), "v1 has no signature");
+            assert!(stored.sig_ed448_public_key.is_none());
+            assert!(stored.sig_ed448_encrypted_secret_key.is_none());
+            assert!(stored.sig_mldsa65_public_key.is_none());
+            assert!(stored.sig_mldsa65_encrypted_secret_key.is_none());
+        }
+    }
+
+    /// Phase 7+ hybrid entry pre-Phase-18 (v2.0/v2.1): has `hybrid_public_key`
+    /// and `hybrid_encrypted_secret_key` but NO `format_version` and NO sig_*
+    /// fields. Must deserialize as `format_version=1` (legacy unsigned) with
+    /// hybrid fields populated and signature absent.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn deser_v2_0_hybrid_no_signature() {
+        let toml_str = r#"
+uuid = "test-uuid-v20"
+public_key = "abc123"
+encrypted_secret_key = "encrypted-blob"
+salt = "salt-blob"
+created_at = "2026-01-01T00:00:00Z"
+is_password_protected = true
+hybrid_public_key = "hybrid-pk-b64"
+hybrid_encrypted_secret_key = "hybrid-sk-encrypted"
+"#;
+        let stored: StoredKeyPair = toml::from_str(toml_str)
+            .expect("v2.0 hybrid (pre-Phase-18) deser must succeed");
+        assert_eq!(
+            stored.format_version, 1,
+            "v2.0 hybrid pre-Phase-18 entries are legacy unsigned (D-10)"
+        );
+        assert!(stored.hybrid_public_key.is_some());
+        assert!(stored.hybrid_encrypted_secret_key.is_some());
+        assert!(stored.signature.is_none());
+        assert!(stored.sig_ed448_public_key.is_none());
+        assert!(stored.sig_mldsa65_public_key.is_none());
+    }
+
+    /// Round-trip a `format_version=1, signature=None` StoredKeyPair through
+    /// serde and assert the serialized form contains NO `[signature]` table
+    /// and NO `sig_*` field lines. Closes T-18-02-03 (no phantom fields).
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn ser_v1_omits_signature_table() {
+        let v1 = StoredKeyPair {
+            uuid: "u".into(),
+            public_key: "p".into(),
+            encrypted_secret_key: "e".into(),
+            salt: Some("s".into()),
+            created_at: chrono::Utc::now(),
+            is_password_protected: false,
+            in_keyring: false,
+            hybrid_public_key: None,
+            hybrid_encrypted_secret_key: None,
+            format_version: 1,
+            sig_ed448_public_key: None,
+            sig_ed448_encrypted_secret_key: None,
+            sig_mldsa65_public_key: None,
+            sig_mldsa65_encrypted_secret_key: None,
+            signature: None,
+        };
+        let toml_str = toml::to_string(&v1).expect("v1 serialise must succeed");
+        assert!(
+            !toml_str.contains("[signature]"),
+            "v1 serialised form must not contain [signature] table; got: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("sig_ed448"),
+            "v1 must not emit sig_ed448_* fields; got: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("sig_mldsa65"),
+            "v1 must not emit sig_mldsa65_* fields; got: {toml_str}"
+        );
+    }
+
+    /// Construct a fully-populated v2 entry, serialize → contains
+    /// `format_version = 2`, `[signature]` table, and the 4 sig field lines;
+    /// deserialize → byte-identical recovery.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn round_trip_v2_full() {
+        let v2 = StoredKeyPair {
+            uuid: "u".into(),
+            public_key: "p".into(),
+            encrypted_secret_key: "e".into(),
+            salt: Some("s".into()),
+            created_at: chrono::Utc::now(),
+            is_password_protected: true,
+            in_keyring: false,
+            hybrid_public_key: Some("hpk".into()),
+            hybrid_encrypted_secret_key: Some("hsk".into()),
+            format_version: 2,
+            sig_ed448_public_key: Some("ed-pk".into()),
+            sig_ed448_encrypted_secret_key: Some("ed-sk-enc".into()),
+            sig_mldsa65_public_key: Some("ml-pk".into()),
+            sig_mldsa65_encrypted_secret_key: Some("ml-sk-enc".into()),
+            signature: Some(crate::keystore::sig::KeystoreEntrySig {
+                ed448: "ed-sig-b64".into(),
+                mldsa65: "ml-sig-b64".into(),
+            }),
+        };
+        let toml_str = toml::to_string(&v2).expect("v2 serialise must succeed");
+        assert!(
+            toml_str.contains("format_version = 2"),
+            "v2 must emit format_version = 2; got: {toml_str}"
+        );
+        assert!(
+            toml_str.contains("[signature]"),
+            "v2 must emit [signature] table; got: {toml_str}"
+        );
+        assert!(
+            toml_str.contains("sig_ed448_public_key"),
+            "v2 must emit sig_ed448_public_key; got: {toml_str}"
+        );
+        assert!(
+            toml_str.contains("sig_mldsa65_public_key"),
+            "v2 must emit sig_mldsa65_public_key; got: {toml_str}"
+        );
+
+        let round_tripped: StoredKeyPair =
+            toml::from_str(&toml_str).expect("v2 round-trip deser must succeed");
+        assert_eq!(round_tripped.format_version, 2);
+        assert!(round_tripped.signature.is_some());
+        assert_eq!(
+            round_tripped.signature.as_ref().unwrap().ed448,
+            "ed-sig-b64"
+        );
+        assert_eq!(
+            round_tripped.signature.as_ref().unwrap().mldsa65,
+            "ml-sig-b64"
+        );
+        assert_eq!(
+            round_tripped.sig_ed448_public_key.as_deref(),
+            Some("ed-pk")
+        );
+        assert_eq!(
+            round_tripped.sig_mldsa65_public_key.as_deref(),
+            Some("ml-pk")
+        );
+    }
+
+    /// Explicit `format_version = 2` TOML (signed entry shape) deserializes
+    /// with all sig fields populated. Confirms forward-compatibility when
+    /// 18-03 wires the actual sign-on-write path.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn deser_explicit_format_version_2() {
+        let toml_str = r#"
+uuid = "test"
+public_key = "p"
+encrypted_secret_key = "e"
+salt = "s"
+created_at = "2026-01-01T00:00:00Z"
+is_password_protected = false
+format_version = 2
+sig_ed448_public_key = "ed-pk"
+sig_ed448_encrypted_secret_key = "ed-sk-enc"
+sig_mldsa65_public_key = "ml-pk"
+sig_mldsa65_encrypted_secret_key = "ml-sk-enc"
+
+[signature]
+ed448 = "ed-sig"
+mldsa65 = "ml-sig"
+"#;
+        let stored: StoredKeyPair =
+            toml::from_str(toml_str).expect("v2 explicit deser must succeed");
+        assert_eq!(stored.format_version, 2);
+        assert!(stored.signature.is_some());
+        assert_eq!(stored.signature.as_ref().unwrap().ed448, "ed-sig");
+        assert_eq!(stored.signature.as_ref().unwrap().mldsa65, "ml-sig");
+        assert_eq!(stored.sig_ed448_public_key.as_deref(), Some("ed-pk"));
+    }
+
+    /// `default_format_version()` returns 1 (the legacy-unsigned schema marker).
+    /// Drift-detector for any accidental change to the default value.
+    #[test]
+    fn default_format_version_is_one() {
+        assert_eq!(default_format_version(), 1);
     }
 }

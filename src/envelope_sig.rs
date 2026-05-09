@@ -233,6 +233,85 @@ mod tests {
         assert_eq!(&p1[4..7], b"2.0");
     }
 
+    /// Test: verify_envelope_signature iterates users in sorted order (alice → bob → zelda),
+    /// skips users without sig pubkeys, tries wrong pubkeys and continues, then succeeds on
+    /// the first user whose pubkey matches (zelda). Validates D-05 / Pitfall 4.
+    #[test]
+    fn verify_envelope_signature_iterates_users() {
+        use crate::project::{EnvelopeMeta, ProjectConfig, UserConfig};
+        use std::collections::HashMap;
+
+        // Generate one real signing keypair (used to sign).
+        let real_ed = Ed448Standard::generate().unwrap();
+        let real_ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
+            &Ed448Standard::verifying_key(&real_ed),
+        );
+        let real_pq = MlDsa65Fips204::generate().unwrap();
+        let real_pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
+            &MlDsa65Fips204::verifying_key(&real_pq),
+        );
+        let real_ed_pk_b64 = BASE64_STANDARD.encode(&real_ed_pk_bytes);
+        let real_pq_pk_b64 = BASE64_STANDARD.encode(&real_pq_pk_bytes);
+
+        // Generate one wrong keypair (advertised by user "bob" — won't verify).
+        let wrong_ed = Ed448Standard::generate().unwrap();
+        let wrong_ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
+            &Ed448Standard::verifying_key(&wrong_ed),
+        );
+        let wrong_pq = MlDsa65Fips204::generate().unwrap();
+        let wrong_pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
+            &MlDsa65Fips204::verifying_key(&wrong_pq),
+        );
+
+        // 3 users sorted alphabetically:
+        //   alice — legacy (no sig pubkey) → skipped
+        //   bob   — wrong sig pubkey → verify fails, continue
+        //   zelda — real sig pubkey → verify succeeds
+        let mut users = HashMap::new();
+        users.insert("alice".to_string(), UserConfig {
+            public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            added: "2026-05-09T00:00:00Z".to_string(),
+            hybrid_public: None,
+            sig_ed448_public: None,    // ← skipped (legacy)
+            sig_mldsa65_public: None,
+        });
+        users.insert("bob".to_string(), UserConfig {
+            public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            added: "2026-05-09T00:00:00Z".to_string(),
+            hybrid_public: None,
+            sig_ed448_public: Some(BASE64_STANDARD.encode(&wrong_ed_pk_bytes)),  // ← wrong
+            sig_mldsa65_public: Some(BASE64_STANDARD.encode(&wrong_pq_pk_bytes)),
+        });
+        users.insert("zelda".to_string(), UserConfig {
+            public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            added: "2026-05-09T00:00:00Z".to_string(),
+            hybrid_public: None,
+            sig_ed448_public: Some(real_ed_pk_b64.clone()),  // ← correct
+            sig_mldsa65_public: Some(real_pq_pk_b64.clone()),
+        });
+
+        let mut cfg = ProjectConfig {
+            version: "2.0".to_string(),
+            format_version: 2,
+            created: "2026-05-09T00:00:00Z".to_string(),
+            users,
+            envelope: None,
+            ..ProjectConfig::default()
+        };
+        let payload = build_envelope_payload(&cfg);
+        let sig = sign_envelope(&real_ed, &real_pq, &payload).unwrap();
+        cfg.envelope = Some(EnvelopeMeta { sig: Some(sig) });
+
+        // Sorted iteration:
+        //   alice → skipped (no sig pubkey)
+        //   bob   → continues (wrong sig pubkey, verify_envelope returns Err)
+        //   zelda → succeeds (first match wins)
+        verify_envelope_signature(&cfg, std::path::Path::new("/dev/null")).unwrap();
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig {
             cases: 50,

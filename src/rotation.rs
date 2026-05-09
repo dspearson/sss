@@ -335,6 +335,8 @@ impl RotationManager {
                 sealed_key,
                 added: user_config.added.clone(),
                 hybrid_public: user_config.hybrid_public.clone(),
+                sig_ed448_public: user_config.sig_ed448_public.clone(),
+                sig_mldsa65_public: user_config.sig_mldsa65_public.clone(),
             };
 
             updated_users.insert(username.clone(), updated_user_config);

@@ -217,6 +217,18 @@ pub(crate) mod keyring_support;
 /// (`get_passphrase_or_prompt`, `Keystore`).
 pub mod keystore;
 
+/// Hybrid AND-composition signing/verification primitives for the `.sss.toml`
+/// envelope (Phase 19, PQSIG-04).
+///
+/// Exposes `ENVELOPE_SIG_CONTEXT`, `build_envelope_payload`, `sign_envelope`,
+/// `verify_envelope`, and `verify_envelope_signature`. Consumed by
+/// `ProjectConfig::load_from_file` (verify-on-read, plan 19-03) and the four
+/// envelope-mutating commands (sign-on-write, plan 19-02).
+///
+/// Gated on `hybrid` feature (`#![cfg(feature = "hybrid")]` at module top).
+#[cfg(feature = "hybrid")]
+pub mod envelope_sig;
+
 /// Marker-inference helpers — heuristic resolution of placeholder markers
 /// (`⊕{...}` / `O+{...}`) in mixed-content files.
 ///

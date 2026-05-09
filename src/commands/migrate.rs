@@ -198,6 +198,8 @@ mod tests {
                 sealed_key: sealed,
                 added: "2026-01-01T00:00:00Z".to_string(),
                 hybrid_public: Some(hybrid_b64),
+                sig_ed448_public: None,
+                sig_mldsa65_public: None,
             });
         }
         cfg
@@ -215,6 +217,8 @@ mod tests {
             sealed_key: ClassicSuite.seal_repo_key(&repo_key, &classic_kp.public_key()).unwrap(),
             added: "2026-01-01T00:00:00Z".to_string(),
             hybrid_public: None,
+            sig_ed448_public: None,
+            sig_mldsa65_public: None,
         });
 
         let err = migrate_project_config(&mut cfg, &repo_key, false)
@@ -302,6 +306,8 @@ mod tests {
             sealed_key: ClassicSuite.seal_repo_key(&repo_key, &alice_kp.public_key()).unwrap(),
             added: "2026-01-01T00:00:00Z".to_string(),
             hybrid_public: None,
+            sig_ed448_public: None,
+            sig_mldsa65_public: None,
         });
 
         assert_eq!(
@@ -443,6 +449,8 @@ mod tests {
                     sealed_key: sealed,
                     added: "2026-01-01T00:00:00Z".to_string(),
                     hybrid_public: Some(hybrid_b64),
+                    sig_ed448_public: None,
+                    sig_mldsa65_public: None,
                 });
             }
             cfg

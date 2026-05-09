@@ -25,6 +25,34 @@ pub struct UserConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(not(feature = "hybrid"), serde(skip))]
     pub hybrid_public: Option<String>,
+    /// Ed448 signing public key (base64) for envelope signature verification (D-06).
+    /// None on classic repos and on users who have not yet upgraded their sig keypair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_ed448_public: Option<String>,
+    /// ML-DSA-65 signing public key (base64) for envelope signature verification (D-06).
+    /// None on classic repos and on users who have not yet upgraded their sig keypair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub sig_mldsa65_public: Option<String>,
+}
+
+/// Top-level envelope signature container; present iff format_version=2 (D-07).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EnvelopeMeta {
+    /// Envelope AND-composition signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<EnvelopeSig>,
+}
+
+/// AND-composition envelope signature: BOTH legs must verify (D-07).
+///
+/// `ed448`   = base64 of 114-byte Ed448 signature.
+/// `mldsa65` = base64 of 3309-byte ML-DSA-65 signature.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EnvelopeSig {
+    pub ed448: String,
+    pub mldsa65: String,
 }
 
 /// Project-level configuration (safe for git)
@@ -37,6 +65,18 @@ pub struct ProjectConfig {
     /// Project creation timestamp
     #[serde(default = "default_created")]
     pub created: String,
+
+    /// Envelope signing-format version (D-07/D-09).
+    /// 1 (default if absent) = legacy unsigned; 2 = signed; >=3 = hard-reject.
+    /// Orthogonal to `version` (crypto suite). Only emitted when promoted to 2.
+    #[serde(default = "default_envelope_format_version", skip_serializing_if = "is_default_format_version")]
+    pub format_version: u32,
+
+    /// Top-level envelope signature container; present iff format_version=2 (D-07).
+    /// Gated on `hybrid` feature — non-hybrid builds never read or write this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
+    pub envelope: Option<EnvelopeMeta>,
 
     /// Users who can decrypt/encrypt in this project
     /// Flattened to appear as `[username]` sections in TOML
@@ -71,6 +111,14 @@ pub struct ProjectConfig {
     pub key: Option<String>,
 }
 
+fn default_envelope_format_version() -> u32 {
+    1
+}
+
+fn is_default_format_version(v: &u32) -> bool {
+    *v == 1
+}
+
 fn default_version() -> String {
     "1.0".to_string()
 }
@@ -103,6 +151,8 @@ impl Default for ProjectConfig {
         Self {
             version: default_version(),
             created: default_created(),
+            format_version: default_envelope_format_version(),
+            envelope: None,
             users: HashMap::new(),
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
@@ -166,6 +216,8 @@ impl ProjectConfig {
             sealed_key,
             added: default_created(),
             hybrid_public: None,
+            sig_ed448_public: None,
+            sig_mldsa65_public: None,
         };
 
         let mut users = HashMap::new();
@@ -174,6 +226,8 @@ impl ProjectConfig {
         Ok(Self {
             version: default_version(),
             created: default_created(),
+            format_version: default_envelope_format_version(),
+            envelope: None,
             users,
             hooks: HooksConfig::default(),
             rotation: RotationMetadata::default(),
@@ -245,6 +299,8 @@ impl ProjectConfig {
             sealed_key,
             added: default_created(),
             hybrid_public: None,
+            sig_ed448_public: None,
+            sig_mldsa65_public: None,
         };
 
         self.users.insert(username.to_string(), user_config);

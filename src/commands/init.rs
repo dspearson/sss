@@ -44,14 +44,14 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         }
     };
 
-    // Map the --crypto arg (defaulted to "classic" by clap) into a Suite.
+    // Map the --crypto arg (defaulted to "hybrid" by clap as of v2.2) into a Suite.
     // clap's value_parser restricts this to classic|hybrid, so the default
     // arm is defensive only — it surfaces any future misconfig as an
     // actionable error rather than a panic.
     let crypto = match matches
         .get_one::<String>("crypto")
         .map(String::as_str)
-        .unwrap_or("classic")
+        .unwrap_or("hybrid")
     {
         "classic" => crate::crypto::Suite::Classic,
         "hybrid" => crate::crypto::Suite::Hybrid,

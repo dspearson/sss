@@ -242,9 +242,9 @@ fn create_cli_app() -> Command {
                     Arg::new("crypto")
                         .long("crypto")
                         .value_name("SUITE")
-                        .help("Crypto suite for key wrap: classic (default, libsodium) or hybrid (v2.0 post-quantum; requires a hybrid-capable sss binary for subsequent operations)")
+                        .help("Crypto suite for key wrap: hybrid (default, v2.0 post-quantum) or classic (v1.0, libsodium-only); v2.0 envelopes require a hybrid-capable sss binary for subsequent operations")
                         .value_parser(["classic", "hybrid"])
-                        .default_value("classic"),
+                        .default_value("hybrid"),
                 ),
         )
         .subcommand(

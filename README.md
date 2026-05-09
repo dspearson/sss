@@ -8,7 +8,7 @@ Transparent encryption of secrets within files using XChaCha20-Poly1305, with mu
 - **Multi-user architecture** -- hybrid X25519 + XChaCha20-Poly1305 encryption; each user holds their own keypair
 - **Git integration** -- pre-commit, post-merge, and post-checkout hooks maintain sealed state automatically
 - **Key derivation** -- Argon2id with configurable security levels (sensitive / moderate / interactive)
-- **Post-quantum hybrid suite** -- opt-in hybrid KEM (X448 + sntrup761 via trelis); file ciphertexts are byte-identical across suites; trelis is experimental and unaudited
+- **Post-quantum hybrid suite** -- default in v2.2; opt out with `--crypto classic`. Hybrid KEM (X448 + sntrup761 via trelis); file ciphertexts are byte-identical across suites; trelis is experimental and unaudited
 - **Deterministic nonces** -- BLAKE2b-derived nonces produce clean git diffs
 - **Marker inference** -- intelligent marker preservation when editing rendered files
 - **Secrets files** -- interpolation from `.secrets` files with YAML-style multi-line values
@@ -123,6 +123,8 @@ See [docs/INSTALLATION.md](docs/INSTALLATION.md) for platform-specific instructi
    ```
 
    This creates `.sss.toml` in the current directory and adds you as the first user.
+
+   v2.2: this creates a v2.0 hybrid repo by default; pass `--crypto classic` for v1.0 behaviour.
 
 3. **Mark secrets in a file**
 
@@ -354,6 +356,14 @@ cargo build --features hybrid --release
 ```
 
 The default build does not include `trelis`. Binary packages that ship hybrid support will be labelled accordingly.
+
+**v2.2 default flip:** As of v2.2, `sss init` defaults to `--crypto hybrid`.
+Following the internal audit and the v2.2 hardening work (signed envelope,
+keystore entry signatures, fuzz/soak coverage), hybrid is the default for new
+repositories. Pass `--crypto classic` to opt back into v1.0 behaviour. The
+trelis-unaudited WARNING above still applies — pin the trelis-hybrid /
+trelis-primitives git revs and treat the post-quantum suite as
+internal-audit-only until a third-party audit (AUDIT-01) lands.
 
 ## Secrets Files
 

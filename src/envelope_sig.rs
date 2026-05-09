@@ -161,27 +161,50 @@ pub fn verify_envelope_signature(config: &ProjectConfig, _path: &Path) -> Result
         config.users.iter().collect();
     sorted_users.sort_by_key(|(name, _)| name.as_str());
 
-    let mut attempted: Vec<&str> = Vec::new();
+    // Collect per-user errors so the final "all-fail" message names which leg
+    // failed for each user (NEG-01/NEG-02 assert the leg name appears in the
+    // error; T-19-06 mitigation: AND-composition is visible in error output).
+    let mut attempted: Vec<(&str, String)> = Vec::new();
     for (username, user) in sorted_users {
-        attempted.push(username.as_str());
         let (Some(ed_pk_b64), Some(ml_pk_b64)) =
             (user.sig_ed448_public.as_deref(), user.sig_mldsa65_public.as_deref())
         else {
+            attempted.push((username.as_str(), "no sig pubkeys".to_string()));
             continue;
         };
-        let Ok(ed_pk_bytes) = BASE64_STANDARD.decode(ed_pk_b64.as_bytes()) else { continue };
-        let Ok(ml_pk_bytes) = BASE64_STANDARD.decode(ml_pk_b64.as_bytes()) else { continue };
-        let Ok(ed_pk) = Ed448Standard::verifying_key_from_bytes(&ed_pk_bytes) else { continue };
-        let Ok(ml_pk) = MlDsa65Fips204::verifying_key_from_bytes(&ml_pk_bytes) else { continue };
+        let Ok(ed_pk_bytes) = BASE64_STANDARD.decode(ed_pk_b64.as_bytes()) else {
+            attempted.push((username.as_str(), "Ed448 pubkey base64 decode failed".to_string()));
+            continue;
+        };
+        let Ok(ml_pk_bytes) = BASE64_STANDARD.decode(ml_pk_b64.as_bytes()) else {
+            attempted.push((username.as_str(), "ML-DSA-65 pubkey base64 decode failed".to_string()));
+            continue;
+        };
+        let Ok(ed_pk) = Ed448Standard::verifying_key_from_bytes(&ed_pk_bytes) else {
+            attempted.push((username.as_str(), "Ed448 pubkey parse failed".to_string()));
+            continue;
+        };
+        let Ok(ml_pk) = MlDsa65Fips204::verifying_key_from_bytes(&ml_pk_bytes) else {
+            attempted.push((username.as_str(), "ML-DSA-65 pubkey parse failed".to_string()));
+            continue;
+        };
 
-        if verify_envelope(&ed_pk, &ml_pk, &payload, sig).is_ok() {
-            return Ok(());
+        match verify_envelope(&ed_pk, &ml_pk, &payload, sig) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                attempted.push((username.as_str(), e.to_string()));
+            }
         }
     }
 
+    let detail = attempted
+        .iter()
+        .map(|(name, reason)| format!("{name}: {reason}"))
+        .collect::<Vec<_>>()
+        .join("; ");
     Err(anyhow!(
         "envelope: signature verification failed for all attempted users: {}",
-        attempted.join(", ")
+        detail
     ))
 }
 

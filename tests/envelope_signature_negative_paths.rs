@@ -409,6 +409,78 @@ fn upgrade_sig_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 19-04-02 — upgrade_sig_idempotent: re-running on a v2 envelope is a no-op
+// ---------------------------------------------------------------------------
+
+/// Init with --crypto hybrid (format_version=2, signed). Snapshot bytes. Re-run
+/// upgrade-sig. Assert:
+/// 1. Exit code 0 (clean).
+/// 2. On-disk .sss.toml bytes unchanged (no re-sign, no whitespace shuffle).
+/// This validates the "no-op skip" idempotency semantic chosen in envelope.rs:
+/// format_version >= 2 → print "already signed" and return Ok without file touch.
+/// mtime is preserved because we never call write_atomic on already-signed envelopes.
+#[test]
+fn upgrade_sig_idempotent() {
+    let project_dir = TempDir::new().expect("project tempdir");
+    let env = UserEnv::new();
+
+    // Generate both suites.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["keys", "generate", "--suite", "both", "--no-password"])
+        .output()
+        .expect("dual-suite keygen");
+    assert!(
+        out.status.success(),
+        "keygen failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Init with hybrid → produces format_version=2 signed envelope directly.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["init", "--crypto", "hybrid", "alice"])
+        .output()
+        .expect("sss init hybrid");
+    assert!(
+        out.status.success(),
+        "sss init hybrid failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Snapshot the signed envelope bytes.
+    let before = std::fs::read(project_dir.path().join(".sss.toml"))
+        .expect("read .sss.toml before re-run");
+
+    // Re-run upgrade-sig on an already-signed envelope — must be a no-op.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["envelope", "upgrade-sig"])
+        .output()
+        .expect("sss envelope upgrade-sig (re-run)");
+    assert!(
+        out.status.success(),
+        "upgrade-sig re-run must exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Byte-exact check: file must not have been rewritten.
+    let after = std::fs::read(project_dir.path().join(".sss.toml"))
+        .expect("read .sss.toml after re-run");
+    assert_eq!(
+        before, after,
+        "upgrade-sig on an already-signed envelope must not modify the file"
+    );
+
+    // Stdout must contain "already signed".
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("already signed"),
+        "upgrade-sig re-run must print 'already signed'; got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 19-02-04 — sss migrate produces a signed v2 envelope
 // ---------------------------------------------------------------------------
 

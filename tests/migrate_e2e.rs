@@ -181,7 +181,7 @@ fn e2e_migrate_three_user_repo_all_users_can_render() {
     // Step 2: Init project as alice (creates v1.0 .sss.toml)
     // -----------------------------------------------------------------------
     let out = alice.cmd(project_path)
-        .args(["init", "alice"])
+        .args(["init", "--crypto", "classic", "alice"])
         .output()
         .expect("init alice");
     assert!(

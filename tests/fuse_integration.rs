@@ -47,9 +47,15 @@ impl TestProject {
             );
         }
 
-        // Initialize the SSS project
+        // Initialize the SSS project. Explicit `--crypto classic` keeps this
+        // FUSE fixture pinned to v1.0 init semantics across the v2.2 default
+        // flip (D-09 sweep); the FUSE filesystem-marker tests don't depend on
+        // suite, so explicit-classic preserves stability without shifting any
+        // assertions.
         let output = Command::new(env!("CARGO_BIN_EXE_sss"))
             .arg("init")
+            .arg("--crypto")
+            .arg("classic")
             .arg("testuser")
             .env("HOME", home_dir.path())
             .current_dir(source_dir.path())

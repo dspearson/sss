@@ -193,12 +193,12 @@ fn sign_on_write_user_add() {
     // Alice adds Bob with his hybrid pubkey.
     let out = alice_env
         .cmd(project_dir.path())
-        .args(["user", "add", "bob", &bob_hybrid_pk])
+        .args(["users", "add", "bob", &bob_hybrid_pk])
         .output()
-        .expect("sss user add bob");
+        .expect("sss users add bob");
     assert!(
         out.status.success(),
-        "sss user add bob failed: {}",
+        "sss users add bob failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 
@@ -260,15 +260,15 @@ fn sign_on_write_user_remove() {
 
     let out = alice_env
         .cmd(project_dir.path())
-        .args(["user", "add", "bob", &bob_hybrid_pk])
+        .args(["users", "add", "bob", &bob_hybrid_pk])
         .output()
-        .expect("sss user add bob");
-    assert!(out.status.success(), "sss user add bob failed: {}", String::from_utf8_lossy(&out.stderr));
+        .expect("sss users add bob");
+    assert!(out.status.success(), "sss users add bob failed: {}", String::from_utf8_lossy(&out.stderr));
 
     // Alice removes Bob (triggers RotationManager + re-sign).
     let out = alice_env
         .cmd(project_dir.path())
-        .args(["user", "remove", "bob"])
+        .args(["users", "remove", "bob"])
         .output()
         .expect("sss user remove bob");
     assert!(

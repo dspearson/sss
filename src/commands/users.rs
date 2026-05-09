@@ -163,6 +163,40 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // add_user dispatches sealing via config.suite() internally.
     config.add_user(username, &new_pub, &repository_key)?;
+
+    // Sign-on-write (PQSIG-05 / D-14): hybrid projects re-sign the envelope
+    // before atomic write so the new user entry is covered by the signature.
+    #[cfg(feature = "hybrid")]
+    if suite == Suite::Hybrid {
+        use crate::envelope_sig::{build_envelope_payload, sign_envelope};
+        use crate::project::EnvelopeMeta;
+        use base64::Engine as _;
+
+        let (ed_sk, pq_sk) = keystore.load_sig_keypair(&current_user, password_str.as_deref())?;
+        // Populate sig pubkeys in the writer's user entry if absent.
+        if let Some(u) = config.users.get_mut(&current_user) {
+            if u.sig_ed448_public.is_none() {
+                u.sig_ed448_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(ed_sk.verifying_key().as_bytes()),
+                );
+            }
+            if u.sig_mldsa65_public.is_none() {
+                u.sig_mldsa65_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(pq_sk.verifying_key().as_bytes()),
+                );
+            }
+        }
+        config.format_version = 2;
+        let payload = build_envelope_payload(&config);
+        let sig = sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        config.envelope.get_or_insert_with(EnvelopeMeta::default).sig = Some(sig);
+        crate::config::write_atomic(&config, &config_path)?;
+    }
+    #[cfg(feature = "hybrid")]
+    if suite != Suite::Hybrid {
+        config.save_to_file(&config_path)?;
+    }
+    #[cfg(not(feature = "hybrid"))]
     config.save_to_file(&config_path)?;
 
     println!("Added user '{username}' to project");

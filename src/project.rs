@@ -208,9 +208,19 @@ impl ProjectConfig {
         // Generate a new repository key
         let repository_key = RepositoryKey::new();
 
-        // Seal the repository key for this user via the CryptoSuite trait
-        // (ClassicSuite is the only concrete suite in Phase 1; Phase 2 will
-        // route this through `config.suite()?` once HybridSuite lands).
+        // Dispatch sealing on the key variant.  Classic keys → ClassicSuite;
+        // hybrid keys → HybridSuite (via the `hybrid` feature gate so the
+        // code is unreachable in non-hybrid builds and the compiler can
+        // elide the branch).  This wires the Phase-2 TODO that was deferred
+        // in the original comment (Rule 1 fix, 19-02).
+        #[cfg(feature = "hybrid")]
+        let sealed_key = match user_public_key {
+            PublicKey::Classic(_) => ClassicSuite.seal_repo_key(&repository_key, user_public_key)?,
+            PublicKey::Hybrid(_) => {
+                crate::crypto::HybridCryptoSuite.seal_repo_key(&repository_key, user_public_key)?
+            }
+        };
+        #[cfg(not(feature = "hybrid"))]
         let sealed_key = ClassicSuite.seal_repo_key(&repository_key, user_public_key)?;
 
         let user_config = UserConfig {

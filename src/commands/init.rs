@@ -62,8 +62,26 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         }
     };
 
+    // For hybrid projects, seal the initial repository key with the hybrid
+    // public key rather than the classic one.  The classic keypair is still
+    // required (checked above via get_keypair_with_optional_password), but the
+    // hybrid KEM encapsulation must use the X448+sntrup761 public key so that
+    // subsequent operations (user add, etc.) can open the sealed key.
+    // Rule 1 auto-fix: pre-existing bug where hybrid init silently sealed with
+    // the classic key, causing "wrong length" errors on every subsequent verb.
+    #[cfg(feature = "hybrid")]
+    let init_pubkey: crate::crypto::PublicKey = if crypto == crate::crypto::Suite::Hybrid {
+        let id = keystore.get_current_key_id()?;
+        let hkp = keystore.load_hybrid_keypair(&id, None, false)?;
+        crate::crypto::PublicKey::Hybrid(hkp.public_key())
+    } else {
+        keypair.public_key()
+    };
+    #[cfg(not(feature = "hybrid"))]
+    let init_pubkey = keypair.public_key();
+
     // Initialize project (pass keystore for hybrid sign-on-write, PQSIG-05).
-    init_project_config(config_path, &username, &keypair.public_key(), crypto, Some(&keystore))?;
+    init_project_config(config_path, &username, &init_pubkey, crypto, Some(&keystore))?;
 
     println!("Project initialized successfully!");
     println!("Username: {username}");

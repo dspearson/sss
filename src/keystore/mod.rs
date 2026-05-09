@@ -7,3 +7,8 @@
 
 mod store;
 pub use self::store::*;
+
+#[cfg(feature = "hybrid")]
+mod sig;
+#[cfg(feature = "hybrid")]
+pub use self::sig::*;

@@ -314,7 +314,7 @@ fn load_keypair(key_id: Option<&str>) -> Result<KeyPair> {
     let passphrase = get_passphrase_or_prompt("Enter passphrase for SSS key: ")?;
 
     let keypair = if let Some(id) = key_id {
-        keystore.load_keypair(id, Some(&passphrase))?
+        keystore.load_keypair(id, Some(&passphrase), false)?
     } else {
         keystore.get_current_keypair(Some(&passphrase))?
     };

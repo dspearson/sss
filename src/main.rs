@@ -296,7 +296,51 @@ fn create_cli_app() -> Command {
                                 .default_value(if cfg!(feature = "hybrid") { "both" } else { "classic" }),
                         ),
                 )
-                .subcommand(Command::new("list").about("List your private keys"))
+                .subcommand(
+                    Command::new("list")
+                        .about("List your private keys")
+                        .arg(
+                            Arg::new("allow-unsigned")
+                                .long("allow-unsigned")
+                                .help("Permit listing of unsigned legacy (format_version=1) entries")
+                                .action(clap::ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("import")
+                        .about("Import a keystore TOML entry from a file")
+                        .arg(
+                            Arg::new("file")
+                                .help("Path to the keystore TOML entry to import")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("allow-unsigned")
+                                .long("allow-unsigned")
+                                .help("Permit importing unsigned legacy (format_version=1) entries")
+                                .action(clap::ArgAction::SetTrue),
+                        ),
+                )
+                .subcommand(
+                    Command::new("export")
+                        .about("Export a keystore TOML entry to a file")
+                        .arg(
+                            Arg::new("uuid")
+                                .help("UUID (or unique prefix) of the keystore entry to export")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("file")
+                                .help("Destination path for the exported TOML")
+                                .required(true),
+                        )
+                        .arg(
+                            Arg::new("allow-unsigned")
+                                .long("allow-unsigned")
+                                .help("Permit exporting unsigned legacy (format_version=1) entries")
+                                .action(clap::ArgAction::SetTrue),
+                        ),
+                )
                 .subcommand(
                     Command::new("pubkey")
                         .about("Show your public key")

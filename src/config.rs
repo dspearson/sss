@@ -307,7 +307,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
             #[cfg(feature = "hybrid")]
             let resolved_keypair: crate::crypto::KeyPair = if suite_enum == crate::crypto::Suite::Hybrid {
                 let current_id = keystore.get_current_key_id()?;
-                let hybrid_kp = keystore.load_hybrid_keypair(&current_id, password.as_deref())?;
+                let hybrid_kp = keystore.load_hybrid_keypair(&current_id, password.as_deref(), false)?;
                 crate::crypto::KeyPair::Hybrid(hybrid_kp)
             } else {
                 user_keypair.clone()

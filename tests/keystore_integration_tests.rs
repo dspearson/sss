@@ -39,7 +39,7 @@ fn test_store_and_retrieve_password_protected_keypair() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, Some(password))?;
 
     // Retrieve with password
-    let retrieved = keystore.load_keypair(&key_id, Some(password))?;
+    let retrieved = keystore.load_keypair(&key_id, Some(password), true)?;
 
     // Keys should match
     assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
@@ -57,7 +57,7 @@ fn test_store_and_retrieve_passwordless_keypair() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, None)?;
 
     // Retrieve without password
-    let retrieved = keystore.load_keypair(&key_id, None)?;
+    let retrieved = keystore.load_keypair(&key_id, None, true)?;
 
     // Keys should match
     assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
@@ -75,7 +75,7 @@ fn test_wrong_password_fails() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, Some(password))?;
 
     // Try to retrieve with wrong password
-    let result = keystore.load_keypair(&key_id, Some("wrong_password"));
+    let result = keystore.load_keypair(&key_id, Some("wrong_password"), true);
     assert!(result.is_err(), "Should fail with wrong password");
 
     Ok(())
@@ -90,7 +90,7 @@ fn test_missing_password_fails_for_protected_key() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, Some(password))?;
 
     // Try to retrieve without password
-    let result = keystore.load_keypair(&key_id, None);
+    let result = keystore.load_keypair(&key_id, None, true);
     assert!(result.is_err(), "Should fail when password is missing");
 
     Ok(())
@@ -109,10 +109,10 @@ fn test_change_passphrase() -> Result<()> {
     keystore.set_passphrase(&key_id, Some(old_password), new_password)?;
 
     // Old password should no longer work
-    assert!(keystore.load_keypair(&key_id, Some(old_password)).is_err());
+    assert!(keystore.load_keypair(&key_id, Some(old_password), true).is_err());
 
     // New password should work
-    let retrieved = keystore.load_keypair(&key_id, Some(new_password))?;
+    let retrieved = keystore.load_keypair(&key_id, Some(new_password), true)?;
     assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
@@ -131,8 +131,8 @@ fn test_add_passphrase_to_passwordless_key() -> Result<()> {
     keystore.set_passphrase(&key_id, None, new_password)?;
 
     // Should now require password
-    assert!(keystore.load_keypair(&key_id, None).is_err());
-    let retrieved = keystore.load_keypair(&key_id, Some(new_password))?;
+    assert!(keystore.load_keypair(&key_id, None, true).is_err());
+    let retrieved = keystore.load_keypair(&key_id, Some(new_password), true)?;
     assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
@@ -150,7 +150,7 @@ fn test_remove_passphrase() -> Result<()> {
     keystore.remove_passphrase(&key_id, password)?;
 
     // Should now work without password
-    let retrieved = keystore.load_keypair(&key_id, None)?;
+    let retrieved = keystore.load_keypair(&key_id, None, true)?;
     assert_eq!(keypair.public_key().to_base64(), retrieved.public_key().to_base64());
 
     Ok(())
@@ -189,13 +189,13 @@ fn test_delete_key() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, Some("password"))?;
 
     // Key should exist
-    assert!(keystore.load_keypair(&key_id, Some("password")).is_ok());
+    assert!(keystore.load_keypair(&key_id, Some("password"), true).is_ok());
 
     // Delete key
     keystore.delete_keypair(&key_id)?;
 
     // Key should no longer exist
-    assert!(keystore.load_keypair(&key_id, Some("password")).is_err());
+    assert!(keystore.load_keypair(&key_id, Some("password"), true).is_err());
 
     Ok(())
 }
@@ -210,13 +210,18 @@ fn test_current_key_management() -> Result<()> {
     let key_id1 = keystore.store_keypair(&keypair1, Some("pass1"))?;
     let _key_id2 = keystore.store_keypair(&keypair2, Some("pass2"))?;
 
-    // Most recent should be current (key_id2)
-    let current = keystore.get_current_keypair(Some("pass2"))?;
+    // 18-03: classic store_keypair writes format_version=1; get_current_keypair
+    // intentionally refuses unsigned legacy entries (D-11). Drive the test via
+    // get_current_key_id + load_keypair(.., true) so we still exercise the
+    // `current` symlink mechanism.
+    let current_id = keystore.get_current_key_id()?;
+    let current = keystore.load_keypair(&current_id, Some("pass2"), true)?;
     assert_eq!(current.public_key().to_base64(), keypair2.public_key().to_base64());
 
     // Switch to key_id1
     keystore.set_current_key(&key_id1)?;
-    let current = keystore.get_current_keypair(Some("pass1"))?;
+    let current_id = keystore.get_current_key_id()?;
+    let current = keystore.load_keypair(&current_id, Some("pass1"), true)?;
     assert_eq!(current.public_key().to_base64(), keypair1.public_key().to_base64());
 
     Ok(())
@@ -250,7 +255,7 @@ fn test_keypair_metadata_preserved() -> Result<()> {
     let key_id = keystore.store_keypair(&keypair, Some("password"))?;
 
     // Verify key exists and can be loaded
-    let loaded = keystore.load_keypair(&key_id, Some("password"))?;
+    let loaded = keystore.load_keypair(&key_id, Some("password"), true)?;
     assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
 
     // Verify key ID is in the list
@@ -274,17 +279,17 @@ fn test_multiple_keys_different_passwords() -> Result<()> {
     let key_id3 = keystore.store_keypair(&keypair3, Some("password3"))?;
 
     // Each key should only work with its own password
-    assert!(keystore.load_keypair(&key_id1, Some("password1")).is_ok());
-    assert!(keystore.load_keypair(&key_id1, Some("password2")).is_err());
-    assert!(keystore.load_keypair(&key_id1, Some("password3")).is_err());
+    assert!(keystore.load_keypair(&key_id1, Some("password1"), true).is_ok());
+    assert!(keystore.load_keypair(&key_id1, Some("password2"), true).is_err());
+    assert!(keystore.load_keypair(&key_id1, Some("password3"), true).is_err());
 
-    assert!(keystore.load_keypair(&key_id2, Some("password1")).is_err());
-    assert!(keystore.load_keypair(&key_id2, Some("password2")).is_ok());
-    assert!(keystore.load_keypair(&key_id2, Some("password3")).is_err());
+    assert!(keystore.load_keypair(&key_id2, Some("password1"), true).is_err());
+    assert!(keystore.load_keypair(&key_id2, Some("password2"), true).is_ok());
+    assert!(keystore.load_keypair(&key_id2, Some("password3"), true).is_err());
 
-    assert!(keystore.load_keypair(&key_id3, Some("password1")).is_err());
-    assert!(keystore.load_keypair(&key_id3, Some("password2")).is_err());
-    assert!(keystore.load_keypair(&key_id3, Some("password3")).is_ok());
+    assert!(keystore.load_keypair(&key_id3, Some("password1"), true).is_err());
+    assert!(keystore.load_keypair(&key_id3, Some("password2"), true).is_err());
+    assert!(keystore.load_keypair(&key_id3, Some("password3"), true).is_ok());
 
     Ok(())
 }
@@ -334,7 +339,7 @@ fn test_dual_suite_roundtrip() -> Result<()> {
     let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("test_pass"))?;
     assert!(!key_id.is_empty(), "key_id must be non-empty");
 
-    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("test_pass"))?;
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("test_pass"), false)?;
     assert_eq!(
         loaded_hybrid.public_key().as_bytes(), hybrid_pub_bytes.as_slice(),
         "loaded hybrid public key must match original"
@@ -407,7 +412,7 @@ fn test_dual_suite_single_passphrase() -> Result<()> {
         keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some("shared_pass"))?;
 
     // Classic key must be loadable with the shared passphrase
-    let loaded_classic = keystore.load_keypair(&key_id, Some("shared_pass"));
+    let loaded_classic = keystore.load_keypair(&key_id, Some("shared_pass"), false);
     assert!(
         loaded_classic.is_ok(),
         "classic key must be decryptable with shared passphrase"
@@ -418,7 +423,7 @@ fn test_dual_suite_single_passphrase() -> Result<()> {
     );
 
     // Hybrid key must be loadable with the same shared passphrase
-    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("shared_pass"));
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, Some("shared_pass"), false);
     assert!(
         loaded_hybrid.is_ok(),
         "hybrid key must be decryptable with shared passphrase"
@@ -426,13 +431,13 @@ fn test_dual_suite_single_passphrase() -> Result<()> {
 
     // Wrong password must fail for classic
     assert!(
-        keystore.load_keypair(&key_id, Some("wrong_pass")).is_err(),
+        keystore.load_keypair(&key_id, Some("wrong_pass"), false).is_err(),
         "classic load must fail with wrong passphrase"
     );
 
     // Wrong password must fail for hybrid
     assert!(
-        keystore.load_hybrid_keypair(&key_id, Some("wrong_pass")).is_err(),
+        keystore.load_hybrid_keypair(&key_id, Some("wrong_pass"), false).is_err(),
         "hybrid load must fail with wrong passphrase"
     );
 
@@ -448,7 +453,7 @@ fn test_load_hybrid_no_hybrid_key_errors() -> Result<()> {
     let keypair = KeyPair::generate()?;
     let key_id = keystore.store_keypair(&keypair, Some("pass"))?;
 
-    let result = keystore.load_hybrid_keypair(&key_id, Some("pass"));
+    let result = keystore.load_hybrid_keypair(&key_id, Some("pass"), true);
     assert!(result.is_err(), "must return Err for classic-only identity");
 
     let err_msg = result.unwrap_err().to_string();
@@ -492,7 +497,7 @@ fn test_store_dual_keypair_case_c_delegates_to_store_keypair() -> Result<()> {
     assert!(!key_id.is_empty(), "Case C must return non-empty key_id");
 
     // Round-trip via load_keypair (Case C wraps in KeyPair::Classic)
-    let loaded = keystore.load_keypair(&key_id, Some("case_c_pw"))?;
+    let loaded = keystore.load_keypair(&key_id, Some("case_c_pw"), true)?;
     assert_eq!(
         loaded.public_key().to_base64(),
         classic_pub_b64,
@@ -529,7 +534,7 @@ fn test_store_dual_keypair_case_a_passwordless_roundtrip() -> Result<()> {
     assert!(!key_id.is_empty(), "Case A passwordless must return non-empty key_id");
 
     // Hybrid recovers byte-identically (passwordless raw base64 path, line 700)
-    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None, false)?;
     assert_eq!(
         loaded_hybrid.public_key().as_bytes(),
         hybrid_pub_bytes.as_slice(),
@@ -537,7 +542,7 @@ fn test_store_dual_keypair_case_a_passwordless_roundtrip() -> Result<()> {
     );
 
     // Classic recovers byte-identically
-    let loaded_classic = keystore.load_keypair(&key_id, None)?;
+    let loaded_classic = keystore.load_keypair(&key_id, None, false)?;
     assert_eq!(
         loaded_classic.public_key().to_base64(),
         classic_pub_b64,
@@ -617,7 +622,7 @@ fn test_store_dual_keypair_case_b_passwordless_upgrade() -> Result<()> {
     );
 
     // Classic remains loadable passwordless
-    let loaded_classic = keystore.load_keypair(&key_id, None)?;
+    let loaded_classic = keystore.load_keypair(&key_id, None, false)?;
     assert_eq!(
         loaded_classic.public_key().to_base64(),
         classic_pub_b64,
@@ -625,7 +630,7 @@ fn test_store_dual_keypair_case_b_passwordless_upgrade() -> Result<()> {
     );
 
     // Hybrid is now loadable passwordless
-    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None, false)?;
     assert_eq!(
         loaded_hybrid.public_key().as_bytes(),
         hybrid_pub_bytes.as_slice(),
@@ -667,7 +672,7 @@ fn test_store_dual_keypair_neither_key_errors() -> Result<()> {
 fn test_load_hybrid_keypair_nonexistent_key_id_errors() -> Result<()> {
     let (keystore, _temp_dir) = create_temp_keystore()?;
 
-    let result = keystore.load_hybrid_keypair("nonexistent_key_id_abc123", None);
+    let result = keystore.load_hybrid_keypair("nonexistent_key_id_abc123", None, false);
     assert!(
         result.is_err(),
         "load_hybrid_keypair on missing file must return Err"
@@ -702,7 +707,7 @@ fn test_load_hybrid_keypair_password_required_errors() -> Result<()> {
     )?;
 
     // Load hybrid with password=None on protected identity — must fail
-    let result = keystore.load_hybrid_keypair(&key_id, None);
+    let result = keystore.load_hybrid_keypair(&key_id, None, false);
     assert!(
         result.is_err(),
         "load_hybrid_keypair with password=None on protected identity must Err"
@@ -737,7 +742,7 @@ fn test_load_hybrid_keypair_passwordless_roundtrip() -> Result<()> {
     let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), None)?;
 
     // Load hybrid passwordless — exercises lines 880-882
-    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None)?;
+    let loaded_hybrid = keystore.load_hybrid_keypair(&key_id, None, false)?;
     assert_eq!(
         loaded_hybrid.public_key().as_bytes(),
         hybrid_pub_bytes.as_slice(),

@@ -173,7 +173,7 @@ fn test_concurrent_key_retrieval() -> Result<()> {
         let keystore_clone = Arc::clone(&keystore);
         let key_id_clone = Arc::clone(&key_id);
         let handle = thread::spawn(move || {
-            keystore_clone.load_keypair(&key_id_clone, Some(password))
+            keystore_clone.load_keypair(&key_id_clone, Some(password), true)
         });
         handles.push(handle);
     }
@@ -203,7 +203,7 @@ fn test_malformed_toml_file() -> Result<()> {
     fs::write(&malformed_file, "invalid toml content [[")?;
 
     // Attempting to load should fail gracefully
-    let result = keystore.load_keypair("malformed-key-id", Some("password"));
+    let result = keystore.load_keypair("malformed-key-id", Some("password"), true);
     assert!(result.is_err(), "Malformed TOML should be rejected");
 
     Ok(())
@@ -243,7 +243,7 @@ fn test_tampered_key_detection() -> Result<()> {
     fs::write(&key_file, content)?;
 
     // Attempting to load tampered key should fail
-    let result = keystore.load_keypair(&key_id, Some(password));
+    let result = keystore.load_keypair(&key_id, Some(password), true);
     assert!(result.is_err(), "Tampered key should be rejected");
 
     Ok(())
@@ -275,7 +275,7 @@ fn test_missing_salt_field() -> Result<()> {
     fs::write(&key_file, &content)?;
 
     // Should still load (salt is optional for passwordless keys)
-    let loaded = keystore.load_keypair(&key_id, None)?;
+    let loaded = keystore.load_keypair(&key_id, None, true)?;
     assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());
 
     Ok(())
@@ -305,7 +305,7 @@ fn test_excessive_keys_handling() -> Result<()> {
 
     // Should be able to access individual keys with correct password
     let (key_id, password) = &key_ids[10];
-    let loaded = keystore.load_keypair(key_id, Some(password))?;
+    let loaded = keystore.load_keypair(key_id, Some(password), true)?;
     assert!(!loaded.public_key().to_base64().is_empty());
 
     Ok(())
@@ -327,7 +327,7 @@ fn test_zero_byte_key_file() -> Result<()> {
     fs::write(&empty_file, "")?;
 
     // Attempting to load should fail
-    let result = keystore.load_keypair("empty-key-id", Some("password"));
+    let result = keystore.load_keypair("empty-key-id", Some("password"), true);
     assert!(result.is_err(), "Empty file should be rejected");
 
     Ok(())
@@ -344,7 +344,7 @@ fn test_very_long_key_id() -> Result<()> {
 
     // Try to load a key with very long ID
     let long_id = "a".repeat(1000);
-    let result = keystore.load_keypair(&long_id, Some("password"));
+    let result = keystore.load_keypair(&long_id, Some("password"), true);
 
     // Should fail gracefully (key doesn't exist)
     assert!(result.is_err());
@@ -372,7 +372,7 @@ fn test_special_characters_in_key_id() -> Result<()> {
     ];
 
     for malicious_id in path_traversal_attempts {
-        let result = keystore.load_keypair(malicious_id, Some("password"));
+        let result = keystore.load_keypair(malicious_id, Some("password"), true);
         // Should fail (either doesn't exist or path is invalid)
         assert!(result.is_err(), "Path traversal attempt should fail: {}", malicious_id);
     }
@@ -401,7 +401,7 @@ fn test_invalid_utf8_in_key_file() -> Result<()> {
     fs::write(&invalid_file, &invalid_bytes)?;
 
     // Attempting to load should fail
-    let result = keystore.load_keypair("invalid-utf8", Some("password"));
+    let result = keystore.load_keypair("invalid-utf8", Some("password"), true);
     assert!(result.is_err(), "Invalid UTF-8 should be rejected");
 
     Ok(())
@@ -457,7 +457,7 @@ fn test_symlink_attack_prevention() -> Result<()> {
     }
 
     // Try to load through symlink
-    let result = keystore.load_keypair("symlink-key", Some("password"));
+    let result = keystore.load_keypair("symlink-key", Some("password"), true);
 
     // Should fail (either can't follow symlink or invalid TOML)
     assert!(result.is_err(), "Symlink should not allow reading outside keys dir");
@@ -485,7 +485,7 @@ fn test_repeated_save_load_consistency() -> Result<()> {
 
     // Load and re-store multiple times
     for _ in 0..10 {
-        let loaded = keystore.load_keypair(&key_id, Some(password))?;
+        let loaded = keystore.load_keypair(&key_id, Some(password), true)?;
 
         // Verify keys match
         assert_eq!(loaded.public_key().to_base64(), keypair.public_key().to_base64());

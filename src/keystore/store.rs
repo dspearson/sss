@@ -97,7 +97,11 @@ fn default_format_version() -> u32 { 1 }
 
 /// Simple file-based keystore using ~/.config/sss/keys/
 pub struct Keystore {
-    keys_dir: PathBuf,
+    /// Directory holding the per-identity TOML files.
+    /// Phase 18-03: elevated to `pub(crate)` so the import/export handlers
+    /// (`src/commands/keys.rs::handle_keys_import` / `handle_keys_export`)
+    /// can resolve destination paths verbatim without re-deriving them.
+    pub(crate) keys_dir: PathBuf,
     kdf_params: KdfParams,
     use_keyring: bool,
 }
@@ -318,11 +322,25 @@ impl Keystore {
         }
 
         let key_id = self.read_current_key_id()?;
-        self.load_keypair(&key_id, password)
+        // 18-03: get_current_keypair preserves prior behaviour — refuses to
+        // load unsigned legacy entries silently. Callers wanting legacy
+        // access must invoke `load_keypair(.., true)` directly.
+        self.load_keypair(&key_id, password, false)
     }
 
-    /// Load a specific keypair by ID
-    pub fn load_keypair(&self, key_id: &str, password: Option<&str>) -> Result<KeyPair> {
+    /// Load a specific keypair by ID.
+    ///
+    /// Phase 18-03 (PQSIG-02 / D-10): adds `allow_unsigned` parameter and
+    /// format_version dispatch.
+    /// - `format_version == 1` + `allow_unsigned == false` → hard error.
+    /// - `format_version == 1` + `allow_unsigned == true`  → proceed (legacy read).
+    /// - `format_version == 2` → invoke `verify_stored_signature` (hybrid only).
+    /// - `format_version >= 3` → hard error (`unsupported format_version`).
+    ///
+    /// All v2 verify-failures (missing signature, missing pubkey, decode/parse
+    /// failure, sig verify failure) collapse into the canonical D-20 error
+    /// string. No sub-cause leakage.
+    pub fn load_keypair(&self, key_id: &str, password: Option<&str>, allow_unsigned: bool) -> Result<KeyPair> {
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
 
         if !key_file.exists() {
@@ -333,6 +351,38 @@ impl Keystore {
             .map_err(|e| anyhow!("keystore: read key file for key_id={}: {}", key_id, e))?;
         let stored_keypair: StoredKeyPair = toml::from_str(&content)
             .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={}: {}", key_id, e))?;
+
+        // Phase 18 / D-10 format_version dispatch.
+        match stored_keypair.format_version {
+            1 => {
+                if !allow_unsigned {
+                    return Err(anyhow!(
+                        "keystore: entry {} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {}` to re-sign",
+                        key_id, key_id
+                    ));
+                }
+                // Proceed without verify.
+            }
+            2 => {
+                #[cfg(feature = "hybrid")]
+                {
+                    self.verify_stored_signature(&stored_keypair, &key_file)?;
+                }
+                #[cfg(not(feature = "hybrid"))]
+                {
+                    return Err(anyhow!(
+                        "keystore: entry {} is signed (format_version=2) but the current build does not include the `hybrid` feature; rebuild with --features hybrid",
+                        key_id
+                    ));
+                }
+            }
+            v => {
+                return Err(anyhow!(
+                    "keystore: unsupported format_version {} for {}; upgrade sss",
+                    v, key_id
+                ));
+            }
+        }
 
         self.decrypt_stored_keypair(&stored_keypair, password)
     }
@@ -427,8 +477,12 @@ impl Keystore {
         old_password: Option<&str>,
         new_password: &str,
     ) -> Result<()> {
-        // Load the keypair with the old password (if any)
-        let keypair = self.load_keypair(key_id, old_password)?;
+        // Load the keypair with the old password (if any).
+        // 18-03: pass `allow_unsigned: true` — passphrase mutation MUST work on
+        // legacy v1 entries on disk; the upgrade-to-v2 workflow is a separate
+        // user-initiated step (deferred to 18-04). Verification of v2 entries
+        // still happens inside `load_keypair` regardless of this flag.
+        let keypair = self.load_keypair(key_id, old_password, true)?;
 
         // Load the stored keypair metadata to preserve other fields
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
@@ -523,8 +577,12 @@ impl Keystore {
     /// * `key_id` - The ID of the key to modify
     /// * `current_password` - Current password protecting the key
     pub fn remove_passphrase(&self, key_id: &str, current_password: &str) -> Result<()> {
-        // Load the keypair with the current password
-        let keypair = self.load_keypair(key_id, Some(current_password))?;
+        // Load the keypair with the current password.
+        // 18-03: pass `allow_unsigned: true` — passphrase removal MUST work on
+        // legacy v1 entries on disk; the upgrade-to-v2 workflow is a separate
+        // user-initiated step (deferred to 18-04). Verification of v2 entries
+        // still happens inside `load_keypair` regardless of this flag.
+        let keypair = self.load_keypair(key_id, Some(current_password), true)?;
 
         // Load the stored keypair metadata
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
@@ -723,68 +781,148 @@ impl Keystore {
 
             // Case A — both keys, fresh identity file
             (Some(classic), Some(hybrid)) => {
+                use crate::keystore::sig::{build_signed_payload, sign_entry};
+                use trelis_primitives::{
+                    Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme,
+                };
+                use zeroize::Zeroizing;
+
                 let key_id = uuid::Uuid::new_v4().to_string();
 
-                let (enc_classic, enc_hybrid, stored_salt, is_protected) =
-                    if let Some(pw) = password {
-                        let salt = crate::kdf::Salt::new();
-                        let dk = crate::kdf::DerivedKey::derive_with_params(
-                            pw, &salt, &self.kdf_params,
-                        )
-                            .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
-                        let enc_key = dk.to_encryption_key();
+                // PQSIG-02 — generate per-entry sig keypairs (D-06)
+                let ed448_sk = Ed448Standard::generate()
+                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+                let ed448_pk_b64 = BASE64_STANDARD
+                    .encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
+                let ed448_sk_bytes = Zeroizing::new(
+                    Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec(),
+                );
 
-                        // Classic secret — standard path (32-byte key, base64 string)
-                        let classic_sk_b64 =
-                            KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
-                        let enc_classic =
-                            crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)
-                                .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                let mldsa_sk = MlDsa65Fips204::generate()
+                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+                let mldsa_pk_b64 = BASE64_STANDARD
+                    .encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
+                let mldsa_sk_bytes = Zeroizing::new(
+                    MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk).to_vec(),
+                );
 
-                        // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
-                        // avoid copying into a non-Zeroizing buffer (T-03-02).
-                        let hybrid_sk_b64 =
-                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
-                        let enc_hybrid =
-                            crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)
-                                .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                let (
+                    enc_classic,
+                    enc_hybrid,
+                    enc_sig_ed448,
+                    enc_sig_mldsa,
+                    stored_salt,
+                    is_protected,
+                ) = if let Some(pw) = password {
+                    let salt = crate::kdf::Salt::new();
+                    let dk = crate::kdf::DerivedKey::derive_with_params(
+                        pw, &salt, &self.kdf_params,
+                    )
+                        .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    let enc_key = dk.to_encryption_key();
 
-                        (enc_classic, enc_hybrid, Some(salt.to_base64()), true)
-                    } else {
-                        // Passwordless path — store raw base64 (same warning as store_keypair)
-                        eprintln!("\n⚠️  WARNING: Storing dual-suite keypair WITHOUT password protection!");
-                        eprintln!("   Your private keys will be accessible to anyone who can read:");
-                        eprintln!("   ~/.config/sss/keys/");
-                        eprintln!("\n   Consider using password protection (recommended)\n");
+                    // Classic secret — standard path (32-byte key, base64 string)
+                    let classic_sk_b64 =
+                        KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+                    let enc_classic =
+                        crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
 
-                        let classic_sk_b64 =
-                            KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
-                        let hybrid_sk_b64 =
-                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
-                        (classic_sk_b64, hybrid_sk_b64, None, false)
-                    };
+                    // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
+                    // avoid copying into a non-Zeroizing buffer (T-03-02).
+                    let hybrid_sk_b64 =
+                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                    let enc_hybrid =
+                        crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+
+                    // Sig secrets — encrypted under the same KEK (D-07)
+                    let sig_ed448_sk_b64 =
+                        BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                    let enc_sig_ed448 = crate::crypto::encrypt_to_base64(
+                        &sig_ed448_sk_b64,
+                        &enc_key,
+                    )
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+
+                    let sig_mldsa_sk_b64 =
+                        BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                    let enc_sig_mldsa = crate::crypto::encrypt_to_base64(
+                        &sig_mldsa_sk_b64,
+                        &enc_key,
+                    )
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+
+                    (
+                        enc_classic,
+                        enc_hybrid,
+                        enc_sig_ed448,
+                        enc_sig_mldsa,
+                        Some(salt.to_base64()),
+                        true,
+                    )
+                } else {
+                    // Passwordless path — store raw base64 (same warning as store_keypair)
+                    eprintln!("\n⚠️  WARNING: Storing dual-suite keypair WITHOUT password protection!");
+                    eprintln!("   Your private keys will be accessible to anyone who can read:");
+                    eprintln!("   ~/.config/sss/keys/");
+                    eprintln!("\n   Consider using password protection (recommended)\n");
+
+                    let classic_sk_b64 =
+                        KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+                    let hybrid_sk_b64 =
+                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                    let sig_ed448_sk_b64 =
+                        BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                    let sig_mldsa_sk_b64 =
+                        BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                    (
+                        classic_sk_b64,
+                        hybrid_sk_b64,
+                        sig_ed448_sk_b64,
+                        sig_mldsa_sk_b64,
+                        None,
+                        false,
+                    )
+                };
+
+                // Pitfall 1 — single timestamp shared by struct field AND signed payload
+                let created_at = chrono::Utc::now();
+                let public_key_b64 =
+                    KeyPair::Classic(classic.clone()).public_key().to_base64();
+                let hybrid_public_key_b64 = BASE64_STANDARD.encode(&hybrid.public_bytes);
+
+                // D-08 / D-19 canonical payload (identity-bearing public fields only)
+                let payload = build_signed_payload(
+                    &key_id,
+                    &public_key_b64,
+                    Some(&hybrid_public_key_b64),
+                    Some(&ed448_pk_b64),
+                    Some(&mldsa_pk_b64),
+                    &created_at.to_rfc3339(),
+                );
+                let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
+                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
 
                 let stored = StoredKeyPair {
                     uuid: key_id.clone(),
-                    public_key: KeyPair::Classic(classic.clone()).public_key().to_base64(),
+                    public_key: public_key_b64,
                     encrypted_secret_key: enc_classic,
                     salt: stored_salt,
-                    created_at: chrono::Utc::now(),
+                    created_at,
                     is_password_protected: is_protected,
                     in_keyring: false,
-                    hybrid_public_key: Some(
-                        BASE64_STANDARD.encode(&hybrid.public_bytes),
-                    ),
+                    hybrid_public_key: Some(hybrid_public_key_b64),
                     hybrid_encrypted_secret_key: Some(enc_hybrid),
-                    // Phase 18 / PQSIG-03 schema fields. This dual-suite path
-                    // currently emits `format_version: 1` (legacy unsigned);
-                    // 18-03 will overwrite these with v2 sign-on-write values.
-                    format_version: 1,
-                    sig_ed448_public_key: None,
-                    sig_ed448_encrypted_secret_key: None,
-                    sig_mldsa65_public_key: None,
-                    sig_mldsa65_encrypted_secret_key: None,
-                    signature: None,
+                    // Phase 18 / PQSIG-02 — sign-on-write (D-10 v2)
+                    format_version: 2,
+                    sig_ed448_public_key: Some(ed448_pk_b64),
+                    sig_ed448_encrypted_secret_key: Some(enc_sig_ed448),
+                    sig_mldsa65_public_key: Some(mldsa_pk_b64),
+                    sig_mldsa65_encrypted_secret_key: Some(enc_sig_mldsa),
+                    signature: Some(sig),
                 };
 
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
@@ -810,6 +948,12 @@ impl Keystore {
 
             // Case B — hybrid only: upgrade existing classic identity
             (None, Some(hybrid)) => {
+                use crate::keystore::sig::{build_signed_payload, sign_entry};
+                use trelis_primitives::{
+                    Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme,
+                };
+                use zeroize::Zeroizing;
+
                 let key_id = self.read_current_key_id()?;
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
                 if !key_file.exists() {
@@ -829,38 +973,105 @@ impl Keystore {
                     ));
                 }
 
-                // Encrypt new hybrid material under the EXISTING salt (KEYSTORE-04).
-                // We re-derive only to encrypt the new hybrid secret; the classic
-                // material is not touched.
-                let enc_hybrid = if stored.is_password_protected {
-                    let pw = password.ok_or_else(|| {
-                        anyhow!("Password required to add hybrid material to a protected identity")
-                    })?;
-                    let salt_str = stored.salt.as_ref().ok_or_else(|| {
-                        anyhow!("Salt missing for password-protected key")
-                    })?;
-                    let salt = crate::kdf::Salt::from_base64(salt_str)
-                        .map_err(|e| anyhow!("keystore: salt-decode (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
-                    let dk = crate::kdf::DerivedKey::derive_with_params(
-                        pw, &salt, &self.kdf_params,
-                    )
-                        .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
-                    let hybrid_sk_b64 =
-                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
-                    crate::crypto::encrypt_to_base64(
-                        &hybrid_sk_b64,
-                        &dk.to_encryption_key(),
-                    )
-                        .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?
-                } else {
-                    // Passwordless — store raw base64
-                    BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref())
-                };
+                // PQSIG-02 — generate per-entry sig keypairs (D-06)
+                let ed448_sk = Ed448Standard::generate()
+                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+                let ed448_pk_b64 = BASE64_STANDARD
+                    .encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
+                let ed448_sk_bytes = Zeroizing::new(
+                    Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec(),
+                );
 
-                // Append hybrid fields — all classic fields are untouched (KEYSTORE-03)
-                stored.hybrid_public_key =
-                    Some(BASE64_STANDARD.encode(&hybrid.public_bytes));
+                let mldsa_sk = MlDsa65Fips204::generate()
+                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+                let mldsa_pk_b64 = BASE64_STANDARD
+                    .encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
+                let mldsa_sk_bytes = Zeroizing::new(
+                    MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk).to_vec(),
+                );
+
+                // Encrypt new hybrid + sig material under the EXISTING salt (KEYSTORE-04).
+                // We re-derive only to encrypt the new secrets; the classic
+                // material is not touched.
+                let (enc_hybrid, enc_sig_ed448, enc_sig_mldsa) =
+                    if stored.is_password_protected {
+                        let pw = password.ok_or_else(|| {
+                            anyhow!("Password required to add hybrid material to a protected identity")
+                        })?;
+                        let salt_str = stored.salt.as_ref().ok_or_else(|| {
+                            anyhow!("Salt missing for password-protected key")
+                        })?;
+                        let salt = crate::kdf::Salt::from_base64(salt_str)
+                            .map_err(|e| anyhow!("keystore: salt-decode (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                        let dk = crate::kdf::DerivedKey::derive_with_params(
+                            pw, &salt, &self.kdf_params,
+                        )
+                            .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                        let enc_key = dk.to_encryption_key();
+
+                        let hybrid_sk_b64 =
+                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                        let enc_h = crate::crypto::encrypt_to_base64(
+                            &hybrid_sk_b64,
+                            &enc_key,
+                        )
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+
+                        let sig_ed448_sk_b64 =
+                            BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                        let enc_e = crate::crypto::encrypt_to_base64(
+                            &sig_ed448_sk_b64,
+                            &enc_key,
+                        )
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+
+                        let sig_mldsa_sk_b64 =
+                            BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                        let enc_m = crate::crypto::encrypt_to_base64(
+                            &sig_mldsa_sk_b64,
+                            &enc_key,
+                        )
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+
+                        (enc_h, enc_e, enc_m)
+                    } else {
+                        // Passwordless — store raw base64
+                        let enc_h =
+                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                        let enc_e =
+                            BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                        let enc_m =
+                            BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                        (enc_h, enc_e, enc_m)
+                    };
+
+                // Append hybrid + sig fields — all classic fields are untouched (KEYSTORE-03)
+                let hybrid_public_key_b64 = BASE64_STANDARD.encode(&hybrid.public_bytes);
+                stored.hybrid_public_key = Some(hybrid_public_key_b64.clone());
                 stored.hybrid_encrypted_secret_key = Some(enc_hybrid);
+
+                // Phase 18 / PQSIG-02 — sign-on-write (D-10 v2)
+                stored.format_version = 2;
+                stored.sig_ed448_public_key = Some(ed448_pk_b64.clone());
+                stored.sig_ed448_encrypted_secret_key = Some(enc_sig_ed448);
+                stored.sig_mldsa65_public_key = Some(mldsa_pk_b64.clone());
+                stored.sig_mldsa65_encrypted_secret_key = Some(enc_sig_mldsa);
+
+                // D-08 / D-19 canonical payload (identity-bearing public fields only)
+                // Pitfall 1 — use the SAME `created_at` already on the struct, not a new now()
+                let payload = build_signed_payload(
+                    &stored.uuid,
+                    &stored.public_key,
+                    Some(&hybrid_public_key_b64),
+                    Some(&ed448_pk_b64),
+                    Some(&mldsa_pk_b64),
+                    &stored.created_at.to_rfc3339(),
+                );
+                let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
+                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                stored.signature = Some(sig);
 
                 let updated_content = toml::to_string_pretty(&stored)
                     .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
@@ -890,12 +1101,20 @@ impl Keystore {
 
     /// Load and decrypt a hybrid keypair from a stored identity file.
     ///
+    /// Phase 18-03 (PQSIG-02 / D-10 / D-11): adds `allow_unsigned` parameter and
+    /// format_version dispatch. Same ladder as `load_keypair`:
+    /// - `format_version == 1` + `allow_unsigned == false` → hard error.
+    /// - `format_version == 1` + `allow_unsigned == true`  → proceed (legacy read).
+    /// - `format_version == 2` → invoke `verify_stored_signature` (D-11).
+    /// - `format_version >= 3` → hard error.
+    ///
     /// Returns `Err` if the file has no hybrid material, or if decryption fails.
     #[cfg(feature = "hybrid")]
     pub fn load_hybrid_keypair(
         &self,
         key_id: &str,
         password: Option<&str>,
+        allow_unsigned: bool,
     ) -> Result<crate::crypto::HybridKeyPair> {
         use base64::prelude::BASE64_STANDARD;
         use crate::constants::HYBRID_SECRET_KEY_SIZE;
@@ -911,6 +1130,28 @@ impl Keystore {
             .map_err(|e| anyhow!("keystore: read key file (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
         let stored: StoredKeyPair = toml::from_str(&content)
             .map_err(|e| anyhow!("keystore: parse-stored-toml (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+
+        // Phase 18 / D-10 format_version dispatch (mirrors load_keypair).
+        match stored.format_version {
+            1 => {
+                if !allow_unsigned {
+                    return Err(anyhow!(
+                        "keystore: entry {} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {}` to re-sign",
+                        key_id, key_id
+                    ));
+                }
+                // Proceed without verify.
+            }
+            2 => {
+                self.verify_stored_signature(&stored, &key_file)?;
+            }
+            v => {
+                return Err(anyhow!(
+                    "keystore: unsupported format_version {} for {}; upgrade sss",
+                    v, key_id
+                ));
+            }
+        }
 
         // Guard: no hybrid material stored
         let hybrid_pub_b64 = stored.hybrid_public_key.ok_or_else(|| {
@@ -981,6 +1222,72 @@ impl Keystore {
         let secret_bytes = Zeroizing::new(secret_array);
 
         Ok(crate::crypto::HybridKeyPair { public_bytes, secret_bytes })
+    }
+
+    /// Verify an entry's AND-composition signature.
+    ///
+    /// Phase 18-03 / D-11 + D-20: ALL sub-cause errors (missing signature,
+    /// missing pubkey, base64 decode fail, key-parse fail, sig-verify fail)
+    /// collapse into the IDENTICAL canonical D-20 error string per T-18-03-04
+    /// (no sub-cause leakage to attackers).
+    ///
+    /// `pub(crate)` so the import/export handlers in `commands/keys.rs` can
+    /// invoke it without re-implementing the dispatch logic.
+    #[cfg(feature = "hybrid")]
+    pub(crate) fn verify_stored_signature(
+        &self,
+        stored: &StoredKeyPair,
+        file: &std::path::Path,
+    ) -> Result<()> {
+        use crate::keystore::sig::{build_signed_payload, verify_entry};
+        use base64::prelude::BASE64_STANDARD;
+        use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+
+        // Canonical D-20 error string. Repeated verbatim in EVERY error arm
+        // below per T-18-03-04 (sub-cause leak prevention).
+        let canonical_err = || {
+            anyhow!(
+                "keystore: signature verification failed for {} (file: {}) — entry rejected; if this is expected after a format upgrade run `sss keys upgrade {}`",
+                stored.uuid,
+                file.display(),
+                stored.uuid
+            )
+        };
+
+        let sig = stored.signature.as_ref().ok_or_else(canonical_err)?;
+
+        let ed448_pk_b64 = stored
+            .sig_ed448_public_key
+            .as_ref()
+            .ok_or_else(canonical_err)?;
+        let ed448_pk_bytes = BASE64_STANDARD
+            .decode(ed448_pk_b64.as_bytes())
+            .map_err(|_| canonical_err())?;
+        let ed448_pk = Ed448Standard::verifying_key_from_bytes(&ed448_pk_bytes)
+            .map_err(|_| canonical_err())?;
+
+        let mldsa_pk_b64 = stored
+            .sig_mldsa65_public_key
+            .as_ref()
+            .ok_or_else(canonical_err)?;
+        let mldsa_pk_bytes = BASE64_STANDARD
+            .decode(mldsa_pk_b64.as_bytes())
+            .map_err(|_| canonical_err())?;
+        let mldsa_pk = MlDsa65Fips204::verifying_key_from_bytes(&mldsa_pk_bytes)
+            .map_err(|_| canonical_err())?;
+
+        // Pitfall 1: pass `created_at.to_rfc3339()` — same encoding used in
+        // `store_dual_keypair`. Deterministic; round-trips via chrono::serde.
+        let payload = build_signed_payload(
+            &stored.uuid,
+            &stored.public_key,
+            stored.hybrid_public_key.as_deref(),
+            stored.sig_ed448_public_key.as_deref(),
+            stored.sig_mldsa65_public_key.as_deref(),
+            &stored.created_at.to_rfc3339(),
+        );
+
+        verify_entry(&ed448_pk, &mldsa_pk, &payload, sig).map_err(|_| canonical_err())
     }
 
     /// Decrypt a stored keypair
@@ -1108,12 +1415,13 @@ mod tests {
         let (keystore, _temp_dir) = create_temp_keystore()?;
         let keypair = KeyPair::generate()?;
 
-        // Store without password
+        // Store without password (classic store_keypair → format_version=1)
         let key_id = keystore.store_keypair(&keypair, None)?;
         assert!(!key_id.is_empty());
 
-        // Retrieve
-        let retrieved = keystore.get_current_keypair(None)?;
+        // 18-03: classic store_keypair writes format_version=1; pass
+        // allow_unsigned=true to bypass the legacy-unsigned guard.
+        let retrieved = keystore.load_keypair(&key_id, None, true)?;
         assert_eq!(
             keypair.public_key().to_base64(),
             retrieved.public_key().to_base64()
@@ -1132,15 +1440,19 @@ mod tests {
         let keypair = KeyPair::generate()?;
         let password = "test_password_123";
 
-        // Store with password
+        // Store with password (classic store_keypair → format_version=1)
         let key_id = keystore.store_keypair(&keypair, Some(password))?;
         assert!(!key_id.is_empty());
 
-        // Should fail without password
-        assert!(keystore.get_current_keypair(None).is_err());
+        // 18-03: classic store_keypair writes format_version=1; pass
+        // allow_unsigned=true to bypass the legacy-unsigned guard.
+
+        // Should fail without password (password gate fires before signature gate
+        // in load_keypair → decrypt_stored_keypair).
+        assert!(keystore.load_keypair(&key_id, None, true).is_err());
 
         // Should work with correct password
-        let retrieved = keystore.get_current_keypair(Some(password))?;
+        let retrieved = keystore.load_keypair(&key_id, Some(password), true)?;
         assert_eq!(
             keypair.public_key().to_base64(),
             retrieved.public_key().to_base64()
@@ -1152,7 +1464,7 @@ mod tests {
 
         // Should fail with wrong password
         assert!(keystore
-            .get_current_keypair(Some("wrong_password"))
+            .load_keypair(&key_id, Some("wrong_password"), true)
             .is_err());
 
         Ok(())
@@ -1162,19 +1474,21 @@ mod tests {
     fn test_multiple_keypairs_ordering() -> Result<()> {
         let (keystore, _temp_dir) = create_temp_keystore()?;
 
-        // Store multiple keypairs
+        // Store multiple keypairs (classic store_keypair → format_version=1)
         let keypair1 = KeyPair::generate()?;
         let keypair2 = KeyPair::generate()?;
         let keypair3 = KeyPair::generate()?;
 
-        keystore.store_keypair(&keypair1, None)?;
+        let _id1 = keystore.store_keypair(&keypair1, None)?;
         std::thread::sleep(std::time::Duration::from_millis(10)); // Ensure different timestamps
-        keystore.store_keypair(&keypair2, None)?;
+        let _id2 = keystore.store_keypair(&keypair2, None)?;
         std::thread::sleep(std::time::Duration::from_millis(10));
-        keystore.store_keypair(&keypair3, None)?;
+        let id3 = keystore.store_keypair(&keypair3, None)?;
 
-        // Current should be keypair3 (latest stored)
-        let current = keystore.get_current_keypair(None)?;
+        // 18-03: classic store_keypair writes format_version=1; load most-recent
+        // entry directly with allow_unsigned=true (get_current_keypair routes
+        // through allow_unsigned=false and would reject the v1 legacy entry).
+        let current = keystore.load_keypair(&id3, None, true)?;
         assert_eq!(
             keypair3.public_key().to_base64(),
             current.public_key().to_base64()
@@ -1257,7 +1571,10 @@ mod tests {
         let keypair = KeyPair::generate()?;
         let key_id = keystore.store_keypair(&keypair, None)?;
 
-        let result = keystore.load_hybrid_keypair(&key_id, None);
+        // 18-03: classic store_keypair writes format_version=1; pass
+        // allow_unsigned=true so the dispatch lets us reach the
+        // "no hybrid material" guard rather than rejecting on format_version=1.
+        let result = keystore.load_hybrid_keypair(&key_id, None, true);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("no hybrid keypair"),
             "error message must contain 'no hybrid keypair'");
@@ -1325,8 +1642,10 @@ mod tests {
             let key_id = keystore
                 .store_keypair(&keypair, pw_ref)
                 .expect("store classic keypair");
+            // 18-03: classic store_keypair writes format_version=1; pass
+            // allow_unsigned=true to load.
             let retrieved = keystore
-                .load_keypair(&key_id, pw_ref)
+                .load_keypair(&key_id, pw_ref, true)
                 .expect("load classic keypair");
 
             proptest::prop_assert_eq!(
@@ -1378,8 +1697,10 @@ mod tests {
             let key_id = keystore
                 .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), pw_ref)
                 .expect("store dual keypair");
+            // 18-03: store_dual_keypair Case A now emits format_version=2,
+            // so the standard verify-on-read path applies. allow_unsigned=false.
             let loaded_hybrid = keystore
-                .load_hybrid_keypair(&key_id, pw_ref)
+                .load_hybrid_keypair(&key_id, pw_ref, false)
                 .expect("load hybrid keypair");
 
             let loaded_pub_bytes = loaded_hybrid.public_key().as_bytes().to_vec();

@@ -63,9 +63,9 @@ fn test_keystore_multiple_keypairs() -> anyhow::Result<()> {
     assert_eq!(keys.len(), 3);
 
     // Verify we can load each keypair
-    let loaded1 = keystore.load_keypair(&key_id1, None)?;
-    let loaded2 = keystore.load_keypair(&key_id2, None)?;
-    let loaded3 = keystore.load_keypair(&key_id3, None)?;
+    let loaded1 = keystore.load_keypair(&key_id1, None, true)?;
+    let loaded2 = keystore.load_keypair(&key_id2, None, true)?;
+    let loaded3 = keystore.load_keypair(&key_id3, None, true)?;
 
     assert_eq!(loaded1.public_key().to_base64(), keypair1.public_key().to_base64());
     assert_eq!(loaded2.public_key().to_base64(), keypair2.public_key().to_base64());

@@ -239,11 +239,13 @@ fn handle_keys_generate_command_with_prompt(
 pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("generate", sub_matches)) => handle_keys_generate_command(main_matches, sub_matches)?,
-        Some(("list", _)) => handle_keys_list(main_matches)?,
+        Some(("list", sub_matches)) => handle_keys_list(main_matches, sub_matches)?,
         Some(("pubkey", sub_matches)) => handle_keys_pubkey(main_matches, sub_matches)?,
         Some(("show", _)) => handle_keys_show(main_matches)?,
         Some(("delete", sub_matches)) => handle_keys_delete(main_matches, sub_matches)?,
         Some(("current", sub_matches)) => handle_keys_current(main_matches, sub_matches)?,
+        Some(("import", sub_matches)) => handle_keys_import(main_matches, sub_matches)?,
+        Some(("export", sub_matches)) => handle_keys_export(main_matches, sub_matches)?,
         Some(("rotate", sub_matches)) => {
             handle_keys_rotate_command(main_matches, sub_matches)?;
         }
@@ -264,6 +266,8 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                   show               Display public key fingerprint and randomart\n\
                   current            Show or set current keypair\n\
                   delete             Delete a keypair\n\
+                  import             Import a keystore TOML entry from file\n\
+                  export             Export a keystore TOML entry to file\n\
                   set-passphrase     Set or change passphrase for a key\n\
                   remove-passphrase  Remove passphrase protection from a key\n\
                   rotate             Rotate repository encryption key\n\n\
@@ -276,7 +280,10 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     Ok(())
 }
 
-fn handle_keys_list(main_matches: &ArgMatches) -> Result<()> {
+fn handle_keys_list(main_matches: &ArgMatches, _sub_matches: &ArgMatches) -> Result<()> {
+    // Phase 18-03 (PQSIG-02 / D-17): `--allow-unsigned` is accepted at the CLI
+    // layer; full unsigned-legacy tagging in the listing output is deferred to
+    // plan unit 18-04. Today the flag is parsed but not yet surfaced in output.
     let keystore = create_keystore(main_matches)?;
     let keys = keystore.list_key_ids()?;
 
@@ -672,6 +679,182 @@ fn handle_keys_remove_passphrase_with_prompt(
 
     println!("✅ Passphrase protection removed from key: {}", &key_id[..KEY_ID_DISPLAY_LENGTH]);
     println!("⚠️  Key is now stored unencrypted!");
+
+    Ok(())
+}
+
+/// Import a keystore TOML entry from a file path. Phase 18-03 (PQSIG-02).
+///
+/// Behaviour:
+/// - Reads the source file as a `StoredKeyPair` TOML blob.
+/// - `format_version == 2` → invoke `verify_stored_signature` (requires `hybrid`).
+/// - `format_version == 1` → reject unless `--allow-unsigned` is passed.
+/// - `format_version >= 3` → reject as unsupported.
+/// - On success, writes the TOML to `{keys_dir}/{uuid}.toml` verbatim, preserving
+///   the signature sub-table for v2 entries.
+pub fn handle_keys_import(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let allow_unsigned = sub_matches.get_flag("allow-unsigned");
+    let file_path = sub_matches
+        .get_one::<String>("file")
+        .ok_or_else(|| anyhow!("file path required for `sss keys import`"))?;
+
+    let src = std::path::PathBuf::from(file_path);
+    if !src.exists() {
+        return Err(anyhow!("import: source file not found: {}", src.display()));
+    }
+
+    let content = std::fs::read_to_string(&src)
+        .map_err(|e| anyhow!("import: read source file {}: {}", src.display(), e))?;
+
+    let stored: crate::keystore::StoredKeyPair = toml::from_str(&content)
+        .map_err(|e| anyhow!("import: parse-stored-toml from {}: {}", src.display(), e))?;
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Phase 18 / D-10 dispatch — mirrors `Keystore::load_keypair`.
+    match stored.format_version {
+        1 => {
+            if !allow_unsigned {
+                return Err(anyhow!(
+                    "keystore: source file {} is unsigned legacy format (format_version=1); \
+                     pass --allow-unsigned to import or re-sign at the source",
+                    src.display()
+                ));
+            }
+            // Proceed without verify.
+        }
+        2 => {
+            #[cfg(feature = "hybrid")]
+            {
+                keystore.verify_stored_signature(&stored, &src)?;
+            }
+            #[cfg(not(feature = "hybrid"))]
+            {
+                return Err(anyhow!(
+                    "keystore: source file {} is signed (format_version=2) but the current build \
+                     does not include the `hybrid` feature; rebuild with --features hybrid",
+                    src.display()
+                ));
+            }
+        }
+        v => {
+            return Err(anyhow!(
+                "keystore: unsupported format_version {} in {}; upgrade sss",
+                v,
+                src.display()
+            ));
+        }
+    }
+
+    // Write verbatim to the keystore — signature sub-table is preserved by
+    // virtue of writing the original bytes.
+    let dst = keystore.keys_dir.join(format!("{}.toml", stored.uuid));
+    if dst.exists() {
+        return Err(anyhow!(
+            "import: destination already exists ({}). Refusing to overwrite.",
+            dst.display()
+        ));
+    }
+    std::fs::write(&dst, &content)
+        .map_err(|e| anyhow!("import: write destination {}: {}", dst.display(), e))?;
+
+    println!("Imported keystore entry: {}", stored.uuid);
+    println!("  Public key:      {}", stored.public_key);
+    if let Some(ref hpk) = stored.hybrid_public_key {
+        println!("  Hybrid pubkey:   {hpk}");
+    }
+    println!("  Format version:  {}", stored.format_version);
+    println!("  File:            {}", dst.display());
+
+    Ok(())
+}
+
+/// Export a keystore TOML entry to a file path. Phase 18-03 (PQSIG-02).
+///
+/// Behaviour:
+/// - Locates the entry by UUID prefix in the keystore.
+/// - Reads the source TOML file from the keystore.
+/// - Verifies via standard `load_keypair` path (so v2 entries are verified;
+///   v1 entries require `--allow-unsigned`).
+/// - Writes the TOML bytes verbatim to the destination, signature included.
+pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let allow_unsigned = sub_matches.get_flag("allow-unsigned");
+    let uuid = sub_matches
+        .get_one::<String>("uuid")
+        .ok_or_else(|| anyhow!("uuid required for `sss keys export`"))?;
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Resolve uuid prefix → full key id.
+    let keys = keystore.list_key_ids()?;
+    let (full_id, _) = keys
+        .iter()
+        .find(|(id, _)| id.starts_with(uuid))
+        .ok_or_else(|| anyhow!("export: no keystore entry matching uuid prefix '{}'", uuid))?;
+
+    let src = keystore.keys_dir.join(format!("{full_id}.toml"));
+    if !src.exists() {
+        return Err(anyhow!("export: source file not found: {}", src.display()));
+    }
+
+    let content = std::fs::read_to_string(&src)
+        .map_err(|e| anyhow!("export: read source file {}: {}", src.display(), e))?;
+    let stored: crate::keystore::StoredKeyPair = toml::from_str(&content)
+        .map_err(|e| anyhow!("export: parse-stored-toml from {}: {}", src.display(), e))?;
+
+    // Phase 18 / D-10 dispatch — mirrors `Keystore::load_keypair`. We do NOT
+    // call `load_keypair` directly because that decrypts the secret; export
+    // only needs to validate the signature envelope before writing the
+    // unmodified bytes.
+    match stored.format_version {
+        1 => {
+            if !allow_unsigned {
+                return Err(anyhow!(
+                    "keystore: entry {} is unsigned legacy format (format_version=1); \
+                     pass --allow-unsigned to export or re-sign first",
+                    full_id
+                ));
+            }
+            // Proceed without verify.
+        }
+        2 => {
+            #[cfg(feature = "hybrid")]
+            {
+                keystore.verify_stored_signature(&stored, &src)?;
+            }
+            #[cfg(not(feature = "hybrid"))]
+            {
+                return Err(anyhow!(
+                    "keystore: entry {} is signed (format_version=2) but the current build does \
+                     not include the `hybrid` feature; rebuild with --features hybrid",
+                    full_id
+                ));
+            }
+        }
+        v => {
+            return Err(anyhow!(
+                "keystore: unsupported format_version {} for {}; upgrade sss",
+                v, full_id
+            ));
+        }
+    }
+
+    let file_path = sub_matches
+        .get_one::<String>("file")
+        .ok_or_else(|| anyhow!("file path required for `sss keys export`"))?;
+    let dst = std::path::PathBuf::from(file_path);
+    if dst.exists() {
+        return Err(anyhow!(
+            "export: destination already exists ({}). Refusing to overwrite.",
+            dst.display()
+        ));
+    }
+    std::fs::write(&dst, &content)
+        .map_err(|e| anyhow!("export: write destination {}: {}", dst.display(), e))?;
+
+    println!("Exported keystore entry: {}", stored.uuid);
+    println!("  Format version: {}", stored.format_version);
+    println!("  File:           {}", dst.display());
 
     Ok(())
 }

@@ -442,7 +442,7 @@ fn keystore_load_keypair_nonexistent_id_does_not_panic() {
     // user's real ~/.config/sss/ keystore.
     let dir = tempdir().expect("tempdir");
     if let Ok(ks) = Keystore::new_with_config_dir(dir.path().to_path_buf()) {
-        let result = ks.load_keypair("does-not-exist", None);
+        let result = ks.load_keypair("does-not-exist", None, true);
         assert!(result.is_err());
     }
 }

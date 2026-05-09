@@ -152,7 +152,7 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
         #[cfg(feature = "hybrid")]
         {
             let id = keystore.get_current_key_id()?;
-            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref())?)
+            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref(), false)?)
         }
         #[cfg(not(feature = "hybrid"))]
         return Err(anyhow!("hybrid suite requires a --features hybrid build"));
@@ -229,7 +229,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
         #[cfg(feature = "hybrid")]
         {
             let id = keystore.get_current_key_id()?;
-            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref())?)
+            KeyPair::Hybrid(keystore.load_hybrid_keypair(&id, password_str.as_deref(), false)?)
         }
         #[cfg(not(feature = "hybrid"))]
         return Err(anyhow!("hybrid suite requires a --features hybrid build"));

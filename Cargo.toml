@@ -118,3 +118,12 @@ required-features = ["hybrid", "slow-tests"]
 name = "stress_render"
 path = "tests/stress_render.rs"
 required-features = ["hybrid", "slow-tests"]
+
+# Phase 18-05 (PQSIG closure) — negative-path tests for v2 keystore-entry
+# hybrid AND-composition signatures. Belt-and-braces feature gating:
+# this binary cannot compile without `hybrid`, AND the source file is
+# `#![cfg(feature = "hybrid")]`-gated. `cargo test` (no flags) skips it.
+[[test]]
+name = "keystore_signature_negative_paths"
+path = "tests/keystore_signature_negative_paths.rs"
+required-features = ["hybrid"]

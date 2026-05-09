@@ -1224,6 +1224,127 @@ impl Keystore {
         Ok(crate::crypto::HybridKeyPair { public_bytes, secret_bytes })
     }
 
+    /// Load and decrypt the sig keypair (Ed448 + ML-DSA-65 signing keys) for the
+    /// current user from their keystore entry.
+    ///
+    /// Phase 19-02 (PQSIG-05): Wave 0 prerequisite. Returns the two signing keys
+    /// used to AND-compose envelope signatures. The `username` parameter is accepted
+    /// for API clarity but the implementation resolves the current key-ID from the
+    /// keystore's own current-key pointer — the caller is always the authenticated
+    /// user whose key is already loaded.
+    ///
+    /// Decryption mirrors `load_hybrid_keypair`:
+    /// - password-protected: derive KEK → AEAD-decrypt → inner-base64-decode → parse key bytes
+    /// - passwordless: outer-base64-decode → parse key bytes directly
+    ///
+    /// Returns `Err` if the current key has no sig material (format_version < 2 or
+    /// fields absent) or if decryption / key-parse fails.
+    #[cfg(feature = "hybrid")]
+    pub fn load_sig_keypair(
+        &self,
+        _username: &str,
+        password: Option<&str>,
+    ) -> Result<(
+        trelis_primitives::Ed448SigningKey,
+        trelis_primitives::MlDsa65SigningKey,
+    )> {
+        use base64::prelude::BASE64_STANDARD;
+        use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+        use zeroize::Zeroizing;
+
+        let key_id = self.get_current_key_id()?;
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+        if !key_file.exists() {
+            return Err(anyhow!("Key file not found: {key_id}"));
+        }
+
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+        let stored: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+
+        // Guard: sig material only exists in format_version >= 2 entries.
+        // format_version == 1 entries were created before Phase 18 sig keys.
+        if stored.format_version < 2 {
+            return Err(anyhow!(
+                "keystore: entry {} has no sig keypair (format_version={}); \
+                 run `sss keys upgrade {}` to generate sig keys",
+                key_id, stored.format_version, key_id
+            ));
+        }
+
+        // Obtain KEK material once (shared by both sig keys).
+        // For password-protected entries: derive the key-encryption key.
+        // For passwordless entries: no KEK needed — keys stored as plain base64.
+        let kek: Option<crate::crypto::RepositoryKey> = if stored.is_password_protected {
+            let pw = password.ok_or_else(|| {
+                anyhow!("Password required for encrypted key")
+            })?;
+            let salt_str = stored.salt.as_ref().ok_or_else(|| {
+                anyhow!("Salt missing for password-protected key")
+            })?;
+            let salt = crate::kdf::Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+            let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+            Some(dk.to_encryption_key())
+        } else {
+            None
+        };
+
+        // Decrypt helper: given a base64-encoded (possibly AEAD-encrypted) field,
+        // return raw key bytes in a Zeroizing buffer.
+        let decrypt_sig_key_bytes = |field_b64: &str, field_name: &str| -> Result<Zeroizing<Vec<u8>>> {
+            if let Some(ref enc_key) = kek {
+                // Password-protected: outer b64 → AEAD decrypt → inner b64 → raw bytes
+                let enc_bytes = BASE64_STANDARD.decode(field_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?;
+                let decrypted = Zeroizing::new(
+                    crate::crypto::decrypt(&enc_bytes, enc_key)
+                        .map_err(|e| anyhow!("keystore: aead-decrypt-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?
+                );
+                let inner_b64 = std::str::from_utf8(&decrypted)
+                    .map_err(|e| anyhow!("keystore: utf8-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?;
+                Ok(Zeroizing::new(
+                    BASE64_STANDARD.decode(inner_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-{}-inner (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?
+                ))
+            } else {
+                // Passwordless: plain base64 → raw bytes
+                Ok(Zeroizing::new(
+                    BASE64_STANDARD.decode(field_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-{} (load_sig_keypair, passwordless) for key_id={}: {}", field_name, key_id, e))?
+                ))
+            }
+        };
+
+        // Ed448 signing key
+        let ed448_enc_sk = stored.sig_ed448_encrypted_secret_key.as_deref().ok_or_else(|| {
+            anyhow!(
+                "keystore: sig_ed448_encrypted_secret_key absent for key_id={}; \
+                 run `sss keys upgrade {}` to add sig keys",
+                key_id, key_id
+            )
+        })?;
+        let ed448_sk_bytes = decrypt_sig_key_bytes(ed448_enc_sk, "sig_ed448_sk")?;
+        let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_bytes)
+            .map_err(|e| anyhow!("keystore: parse-ed448-sig-signing-key for key_id={}: {}", key_id, e))?;
+
+        // ML-DSA-65 signing key
+        let mldsa_enc_sk = stored.sig_mldsa65_encrypted_secret_key.as_deref().ok_or_else(|| {
+            anyhow!(
+                "keystore: sig_mldsa65_encrypted_secret_key absent for key_id={}; \
+                 run `sss keys upgrade {}` to add sig keys",
+                key_id, key_id
+            )
+        })?;
+        let mldsa_sk_bytes = decrypt_sig_key_bytes(mldsa_enc_sk, "sig_mldsa65_sk")?;
+        let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_bytes)
+            .map_err(|e| anyhow!("keystore: parse-mldsa65-sig-signing-key for key_id={}: {}", key_id, e))?;
+
+        Ok((ed448_sk, mldsa_sk))
+    }
+
     /// Re-sign a `format_version=1` (legacy unsigned) entry in place,
     /// promoting it to `format_version=2` (signed) without changing identity.
     ///
@@ -2117,5 +2238,130 @@ mldsa65 = "ml-sig"
     #[test]
     fn default_format_version_is_one() {
         assert_eq!(default_format_version(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 19-02 / PQSIG-05 — load_sig_keypair round-trip tests
+    //
+    // Verify that sig signing keys written by store_dual_keypair (Case A,
+    // format_version=2) can be decrypted back by load_sig_keypair for both
+    // password-protected and passwordless identities.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Passwordless round-trip: store_dual_keypair (passwordless) → load_sig_keypair.
+    /// The sig SK stored as plain base64; load_sig_keypair must reconstruct valid
+    /// Ed448SigningKey and MlDsa65SigningKey objects that produce verifiable signatures.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn load_sig_keypair_round_trip_passwordless() {
+        use crate::crypto::hybrid::HybridKeyPair;
+        use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+
+        let (keystore, _tmp) = create_temp_keystore_interactive().expect("temp keystore");
+        let classic_kp = ClassicKeyPair::generate().expect("classic kp");
+        let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp");
+
+        // store_dual_keypair passwordless path stores sig SKs as plain base64
+        let _key_id = keystore
+            .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), None)
+            .expect("store_dual_keypair passwordless");
+
+        // load_sig_keypair must return (Ed448SigningKey, MlDsa65SigningKey)
+        let (ed448_sk, mldsa_sk) = keystore
+            .load_sig_keypair("alice", None)
+            .expect("load_sig_keypair passwordless");
+
+        // Round-trip: sign a test payload with each key and verify it loads
+        let payload = b"test-payload-for-sig-roundtrip";
+        let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+        let ed448_sig = Ed448Standard::sign_with_context(
+            &ed448_sk,
+            payload,
+            b"test-context",
+        )
+        .expect("Ed448 sign");
+        assert!(
+            Ed448Standard::verify_with_context(&ed448_pk, payload, b"test-context", &ed448_sig),
+            "Ed448 sig must verify after load_sig_keypair passwordless round-trip"
+        );
+
+        let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+        let mldsa_sig = MlDsa65Fips204::sign_with_context(
+            &mldsa_sk,
+            payload,
+            b"test-context",
+        )
+        .expect("ML-DSA-65 sign");
+        MlDsa65Fips204::verify_with_context(&mldsa_pk, payload, b"test-context", &mldsa_sig)
+            .expect("ML-DSA-65 sig must verify after load_sig_keypair passwordless round-trip");
+    }
+
+    /// Password-protected round-trip: store_dual_keypair (pw) → load_sig_keypair(pw).
+    /// The sig SK stored AEAD-encrypted; load_sig_keypair must decrypt and reconstruct.
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn load_sig_keypair_round_trip_password_protected() {
+        use crate::crypto::hybrid::HybridKeyPair;
+        use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+
+        let (keystore, _tmp) = create_temp_keystore_interactive().expect("temp keystore");
+        let classic_kp = ClassicKeyPair::generate().expect("classic kp");
+        let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp");
+        let pw = "test-sig-keypair-pw-42";
+
+        let _key_id = keystore
+            .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), Some(pw))
+            .expect("store_dual_keypair pw-protected");
+
+        let (ed448_sk, mldsa_sk) = keystore
+            .load_sig_keypair("alice", Some(pw))
+            .expect("load_sig_keypair pw-protected");
+
+        let payload = b"test-payload-for-sig-roundtrip-pw";
+        let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+        let ed448_sig = Ed448Standard::sign_with_context(
+            &ed448_sk,
+            payload,
+            b"test-context",
+        )
+        .expect("Ed448 sign");
+        assert!(
+            Ed448Standard::verify_with_context(&ed448_pk, payload, b"test-context", &ed448_sig),
+            "Ed448 sig must verify after load_sig_keypair pw round-trip"
+        );
+
+        let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+        let mldsa_sig = MlDsa65Fips204::sign_with_context(
+            &mldsa_sk,
+            payload,
+            b"test-context",
+        )
+        .expect("ML-DSA-65 sign");
+        MlDsa65Fips204::verify_with_context(&mldsa_pk, payload, b"test-context", &mldsa_sig)
+            .expect("ML-DSA-65 sig must verify after load_sig_keypair pw round-trip");
+    }
+
+    /// Wrong password must fail load_sig_keypair (AEAD authentication failure).
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn load_sig_keypair_wrong_password_fails() {
+        use crate::crypto::hybrid::HybridKeyPair;
+
+        let (keystore, _tmp) = create_temp_keystore_interactive().expect("temp keystore");
+        let classic_kp = ClassicKeyPair::generate().expect("classic kp");
+        let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp");
+        let pw = "correct-password-here";
+
+        keystore
+            .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), Some(pw))
+            .expect("store_dual_keypair");
+
+        let result = keystore.load_sig_keypair("alice", Some("wrong-password"));
+        assert!(result.is_err(), "wrong password must fail load_sig_keypair");
+        let err = result.err().expect("checked is_err above");
+        assert!(
+            err.to_string().contains("aead") || err.to_string().contains("decrypt"),
+            "wrong password must produce AEAD error, got: {err}"
+        );
     }
 }

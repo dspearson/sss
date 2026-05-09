@@ -1,0 +1,89 @@
+# CI Matrix — sss v2.2 closeout deliverable (REQ CI-01)
+#
+# Purpose
+# -------
+# Per .planning/REQUIREMENTS.md lines 165-179 (CI-01): exercise
+# `cargo build --tests` + `cargo test` on
+#   {linux-x86_64, linux-aarch64, macos-arm64} x {classic, hybrid}
+# so any platform / feature-arm regression is caught BEFORE the v2.2 tag.
+#
+# Six jobs (3 platforms x 2 feature arms). `fail-fast: false` ensures one
+# red cell does not mask the other five — the whole point of a matrix is
+# the per-cell signal, so an early abort would defeat it.
+#
+# Slow-tests exclusion (D-06 caveat)
+# ----------------------------------
+# `[[test]]` targets `soak_agent` (10-min soak) and `stress_render`
+# (1000-fan-out stress) require both `slow-tests` AND `hybrid` features;
+# their wall-clock would dominate matrix runtime. They are intentionally
+# OUT of CI scope and run via `workflow_dispatch` against `test.yml` or
+# operator-driven local runs (per Phase 17 D-17 8-step gate).
+#
+# Why this is separate from test.yml (D-02)
+# -----------------------------------------
+# `test.yml` keeps its `cargo test --all-features` smoke role (manual
+# `workflow_dispatch` only, conflates classic + hybrid into a single
+# `--all-features` job). This new file adds the explicit
+# `{platform} x {feature-arm}` regression net the requirement names —
+# no consolidation, no replacement.
+#
+# Phase 19 baseline reality
+# -------------------------
+# `cargo test --features hybrid` on the hybrid arm currently shows up to
+# 63 pre-existing failures across e2e_cli_workflows / process_command_tests
+# / migrate_e2e / editor_integration (see
+# .planning/phases/19-hybrid-signatures-envelope/deferred-items.md).
+# The workflow ships AS-IS and reports the actual pass/fail status; gating
+# policy (baseline-aware filtering vs. accepting initial hybrid red) is
+# deferred to a future Plan 02 decision, not a Plan 00 deliverable.
+
+name: CI Matrix
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  matrix-test:
+    name: ${{ matrix.platform }} / ${{ matrix.feature_arm }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            feature_arm: classic
+            cargo_features: ""
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            feature_arm: hybrid
+            cargo_features: "--features hybrid"
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            feature_arm: classic
+            cargo_features: ""
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            feature_arm: hybrid
+            cargo_features: "--features hybrid"
+          - platform: macos-arm64
+            runner: macos-14
+            feature_arm: classic
+            cargo_features: ""
+          - platform: macos-arm64
+            runner: macos-14
+            feature_arm: hybrid
+            cargo_features: "--features hybrid"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}-${{ matrix.feature_arm }}
+      - name: Build tests
+        run: cargo build --tests ${{ matrix.cargo_features }}
+      - name: Run tests
+        run: cargo test ${{ matrix.cargo_features }}

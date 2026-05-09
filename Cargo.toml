@@ -127,3 +127,12 @@ required-features = ["hybrid", "slow-tests"]
 name = "keystore_signature_negative_paths"
 path = "tests/keystore_signature_negative_paths.rs"
 required-features = ["hybrid"]
+
+# Phase 19-02 (PQSIG-05) — sign-on-write integration tests.
+# Exercises all four CLI verbs (init, user add, user remove, migrate) via the
+# real sss binary and asserts the resulting .sss.toml carries a valid
+# [envelope.sig] table with non-empty ed448 + mldsa65 base64 legs.
+[[test]]
+name = "envelope_signature_negative_paths"
+path = "tests/envelope_signature_negative_paths.rs"
+required-features = ["hybrid"]

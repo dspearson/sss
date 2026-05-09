@@ -62,8 +62,8 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         }
     };
 
-    // Initialize project
-    init_project_config(config_path, &username, &keypair.public_key(), crypto)?;
+    // Initialize project (pass keystore for hybrid sign-on-write, PQSIG-05).
+    init_project_config(config_path, &username, &keypair.public_key(), crypto, Some(&keystore))?;
 
     println!("Project initialized successfully!");
     println!("Username: {username}");

@@ -383,8 +383,14 @@ fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
     }
 
     let config_path = crate::config::get_project_config_path()?;
-    let mut config = ProjectConfig::load_from_file(&config_path)?;  // PQSIG-06: unmask so D-10 string flows through
-    config.require_signed(&config_path)?;  // PQSIG-06: refuse to mutate an unsigned envelope
+    // PQSIG-06 carve-out: add-hybrid-key is the v1->v2 migration prep step.
+    // It populates a user's hybrid public key on a v1 (unsigned) envelope so
+    // that the subsequent `migrate` command can build the AND-composition
+    // signature. Gating it on require_signed creates a chicken-and-egg
+    // blocker for the documented migration workflow — handle_migrate itself
+    // (src/commands/migrate.rs) likewise omits require_signed because it is
+    // the v1->v2 transition site.
+    let mut config = ProjectConfig::load_from_file(&config_path)?;
 
     let user = config.users.get_mut(username.as_str()).ok_or_else(|| {
         anyhow!("User '{}' not found in project", username)

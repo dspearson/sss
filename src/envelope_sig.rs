@@ -10,10 +10,6 @@
 //! See `docs/CRYPTOGRAPHY.md` §"Envelope Signatures (v2)" for the
 //! authoritative format spec (added in plan unit 19-05).
 
-#![cfg(feature = "hybrid")]
-// Why: signing primitives use trelis-primitives types that are gated on the
-// `hybrid` feature in this crate's Cargo.toml.
-
 use anyhow::{anyhow, Result};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -106,6 +102,7 @@ pub fn sign_envelope(
 /// CRITICAL (mirrors src/keystore/sig.rs):
 ///   - Ed448::verify_with_context returns `bool` (use `if !`)
 ///   - ML-DSA-65::verify_with_context returns `Result<()>` (use `.map_err`)
+///
 /// Both shapes are wrapped into the same `envelope:`-prefixed error so
 /// NEG-01/NEG-02 can pin the failing leg by substring match.
 pub fn verify_envelope(
@@ -273,8 +270,8 @@ mod tests {
         let real_pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
             &MlDsa65Fips204::verifying_key(&real_pq),
         );
-        let real_ed_pk_b64 = BASE64_STANDARD.encode(&real_ed_pk_bytes);
-        let real_pq_pk_b64 = BASE64_STANDARD.encode(&real_pq_pk_bytes);
+        let real_ed_pk_b64 = BASE64_STANDARD.encode(real_ed_pk_bytes);
+        let real_pq_pk_b64 = BASE64_STANDARD.encode(real_pq_pk_bytes);
 
         // Generate one wrong keypair (advertised by user "bob" — won't verify).
         let wrong_ed = Ed448Standard::generate().unwrap();
@@ -304,8 +301,8 @@ mod tests {
             sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
             added: "2026-05-09T00:00:00Z".to_string(),
             hybrid_public: None,
-            sig_ed448_public: Some(BASE64_STANDARD.encode(&wrong_ed_pk_bytes)),  // ← wrong
-            sig_mldsa65_public: Some(BASE64_STANDARD.encode(&wrong_pq_pk_bytes)),
+            sig_ed448_public: Some(BASE64_STANDARD.encode(wrong_ed_pk_bytes)),  // ← wrong
+            sig_mldsa65_public: Some(BASE64_STANDARD.encode(wrong_pq_pk_bytes)),
         });
         users.insert("zelda".to_string(), UserConfig {
             public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
@@ -370,8 +367,8 @@ mod tests {
                 sealed_key: sealed_b64.clone(),
                 added: "2026-05-09T00:00:00Z".to_string(),
                 hybrid_public: None,
-                sig_ed448_public: Some(BASE64_STANDARD.encode(&ed448_pk_bytes)),
-                sig_mldsa65_public: Some(BASE64_STANDARD.encode(&mldsa_pk_bytes)),
+                sig_ed448_public: Some(BASE64_STANDARD.encode(ed448_pk_bytes)),
+                sig_mldsa65_public: Some(BASE64_STANDARD.encode(mldsa_pk_bytes)),
             });
 
             let mut cfg = ProjectConfig {
@@ -416,8 +413,8 @@ mod tests {
         let wrong_pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
             &MlDsa65Fips204::verifying_key(&wrong_pq),
         );
-        let wrong_ed_pk_b64 = BASE64_STANDARD.encode(&wrong_ed_pk_bytes);
-        let wrong_pq_pk_b64 = BASE64_STANDARD.encode(&wrong_pq_pk_bytes);
+        let wrong_ed_pk_b64 = BASE64_STANDARD.encode(wrong_ed_pk_bytes);
+        let wrong_pq_pk_b64 = BASE64_STANDARD.encode(wrong_pq_pk_bytes);
 
         let mut users = HashMap::new();
         for name in &["alice", "bob", "carol"] {

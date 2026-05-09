@@ -45,10 +45,66 @@ impl Drop for CwdGuard {
 /// Build a TempDir with a seeded `.sss.toml` containing a single classic user.
 /// Returns the TempDir (which owns the temp directory's lifetime) and the
 /// generated KeyPair (kept so callers can use the public key in tests).
+///
+/// Produces a format_version=1 (unsigned) envelope.  Use `setup_signed_project`
+/// instead for tests that exercise mutating handlers gated by PQSIG-06
+/// `require_signed` — `users add`, `users remove`, …
+///
+/// The v1 helper exists for the v1→v2 migration-prep scenarios (notably
+/// `users add-hybrid-key`, whose carve-out explicitly accepts v1 input).
 fn setup_users_project(seed_user: &str) -> (TempDir, KeyPair) {
     let tmp = tempfile::tempdir().expect("tempdir create");
     let kp = KeyPair::generate().expect("keypair generate");
     let cfg = ProjectConfig::new(seed_user, &kp.public_key()).expect("config new");
+    cfg.save_to_file(tmp.path().join(".sss.toml"))
+        .expect("save config");
+    (tmp, kp)
+}
+
+/// Build a TempDir with a seeded `.sss.toml` promoted to format_version=2
+/// using an ephemeral Ed448 + ML-DSA-65 sig keypair pair, mirroring the
+/// production `sss envelope upgrade-sig` flow entirely in memory.
+///
+/// Required for tests that exercise the mutating handlers gated by PQSIG-06
+/// `require_signed` — those handlers refuse v1 envelopes with the D-10
+/// "unsigned envelope (format_version=1)" error before reaching the
+/// behaviour-under-test (e.g. last-user / unknown-user guards).
+///
+/// Hybrid-only: the v2 envelope cannot exist without the AND-composition
+/// signature scheme.
+#[cfg(feature = "hybrid")]
+fn setup_signed_project(seed_user: &str) -> (TempDir, KeyPair) {
+    use base64::Engine as _;
+    use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+
+    let tmp = tempfile::tempdir().expect("tempdir create");
+    let kp = KeyPair::generate().expect("keypair generate");
+    let mut cfg = ProjectConfig::new(seed_user, &kp.public_key()).expect("config new");
+
+    let ed_sk = Ed448Standard::generate().expect("ed448 keygen");
+    let pq_sk = MlDsa65Fips204::generate().expect("mldsa keygen");
+
+    if let Some(u) = cfg.users.get_mut(seed_user) {
+        u.sig_ed448_public = Some(
+            base64::prelude::BASE64_STANDARD.encode(
+                Ed448Standard::verifying_key_to_bytes(&Ed448Standard::verifying_key(&ed_sk)),
+            ),
+        );
+        u.sig_mldsa65_public = Some(
+            base64::prelude::BASE64_STANDARD.encode(
+                MlDsa65Fips204::verifying_key_to_bytes(&MlDsa65Fips204::verifying_key(&pq_sk)),
+            ),
+        );
+    }
+
+    cfg.format_version = 2;
+    let payload = sss::envelope_sig::build_envelope_payload(&cfg);
+    let sig = sss::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)
+        .expect("sign_envelope");
+    cfg.envelope
+        .get_or_insert_with(sss::project::EnvelopeMeta::default)
+        .sig = Some(sig);
+
     cfg.save_to_file(tmp.path().join(".sss.toml"))
         .expect("save config");
     (tmp, kp)
@@ -166,10 +222,15 @@ fn users_04_add_invalid_base64_errors() -> Result<()> {
 
 /// users_05 — `users remove <unknown-user>` errors with "not found".  Drives
 /// the membership-check branch in handle_users_remove.
+///
+/// Hybrid-only: PQSIG-06 `require_signed` (unconditional in production) fires
+/// before the membership check on a v1 envelope, masking the "not found"
+/// error under classic builds.  See `setup_signed_project`.
 #[test]
 #[serial]
+#[cfg(feature = "hybrid")]
 fn users_05_remove_unknown_user_errors() -> Result<()> {
-    let (tmp, _kp) = setup_users_project("alice");
+    let (tmp, _kp) = setup_signed_project("alice");
     with_cwd(tmp.path(), || {
         let main = build_main_matches();
         let matches = build_users_matches(&["users", "remove", "ghost"]);
@@ -186,10 +247,13 @@ fn users_05_remove_unknown_user_errors() -> Result<()> {
 
 /// users_06 — `users remove <last-user>` errors with the last-user guard.
 /// Drives the `users.len() == 1` branch in handle_users_remove.
+///
+/// Hybrid-only for the same reason as users_05.
 #[test]
 #[serial]
+#[cfg(feature = "hybrid")]
 fn users_06_remove_last_user_errors() -> Result<()> {
-    let (tmp, _kp) = setup_users_project("alice");
+    let (tmp, _kp) = setup_signed_project("alice");
     with_cwd(tmp.path(), || {
         let main = build_main_matches();
         let matches = build_users_matches(&["users", "remove", "alice"]);

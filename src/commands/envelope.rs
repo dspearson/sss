@@ -6,8 +6,6 @@
 //!
 //! Future verbs (rotate-sig, dump-sig) can join this group cleanly per D-11.
 
-#![cfg(feature = "hybrid")]
-
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 

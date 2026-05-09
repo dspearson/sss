@@ -137,8 +137,14 @@ impl RotationManager {
             Some(self.create_backup(&scan_result.files_with_patterns)?)
         };
 
-        // Step 3: Load project config for timestamp
-        let project_config = ProjectConfig::load_from_file(config_path)?;
+        // Step 3: Load project config for timestamp.
+        // Use the unverified loader: rotation is invoked from sites that have
+        // already mutated the user map and persisted that change without
+        // re-signing (e.g. `users remove` saves the reduced user map before
+        // calling us). Re-running verify-on-read here would fail against the
+        // intentionally stale envelope.sig — the caller re-signs after rotation
+        // completes (PQSIG-05 sign-on-write site in handle_users_remove).
+        let project_config = ProjectConfig::load_from_file_unverified(config_path)?;
         let project_root = config_path.parent()
             .ok_or_else(|| anyhow!("Config path has no parent"))?
             .to_path_buf();
@@ -211,8 +217,10 @@ impl RotationManager {
             );
         }
 
-        // Load config to show users that would be updated
-        let config = ProjectConfig::load_from_file(config_path)?;
+        // Load config to show users that would be updated.
+        // Unverified loader for the same reason as the live rotation path:
+        // the caller may have already mutated the user map without re-signing.
+        let config = ProjectConfig::load_from_file_unverified(config_path)?;
         let user_count = config.users.len();
         println!("   Would update sealed keys for {user_count} users");
 
@@ -328,7 +336,11 @@ impl RotationManager {
             println!("📝 Updating project configuration...");
         }
 
-        let mut config = ProjectConfig::load_from_file(config_path)?;
+        // Unverified loader: see Step 3 in `rotate_repository_key`. The caller
+        // pre-verified before invoking us; the on-disk envelope.sig may now be
+        // stale relative to the in-flight user-map mutation. The caller's
+        // post-rotation sign-on-write block produces a fresh signature.
+        let mut config = ProjectConfig::load_from_file_unverified(config_path)?;
 
         // Update rotation metadata
         config.update_rotation_metadata(reason.to_string());

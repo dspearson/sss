@@ -208,49 +208,49 @@ pub fn init_project_config<P: AsRef<Path>>(
     // Sign-on-write (D-14, PQSIG-05): hybrid projects get a signed envelope.
     // Classic projects bypass this block — no sig keypair exists for classic-only keys.
     #[cfg(feature = "hybrid")]
-    if crypto == crate::crypto::Suite::Hybrid {
-        if let Some(ks) = keystore {
-            use base64::Engine as _;
-            use crate::project::EnvelopeMeta;
-            use trelis_primitives::{Ed448Scheme as _, Ed448Standard, MlDsa65Fips204, MlDsaScheme as _};
+    if crypto == crate::crypto::Suite::Hybrid
+        && let Some(ks) = keystore
+    {
+        use base64::Engine as _;
+        use crate::project::EnvelopeMeta;
+        use trelis_primitives::{Ed448Scheme as _, Ed448Standard, MlDsa65Fips204, MlDsaScheme as _};
 
-            config.format_version = 2;
+        config.format_version = 2;
 
-            // Load the writing user's sig keypair (Wave 0 prereq, task 19-02-00).
-            let (ed_sk, pq_sk) = ks.load_sig_keypair(username, None)?;
+        // Load the writing user's sig keypair (Wave 0 prereq, task 19-02-00).
+        let (ed_sk, pq_sk) = ks.load_sig_keypair(username, None)?;
 
-            // Populate per-user sig pubkeys BEFORE signing so the canonical
-            // payload (build_envelope_payload) covers them. Fields are
-            // Option<String> (base64), per locked plan 19-01 (Pitfall 4).
-            let ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
-                &Ed448Standard::verifying_key(&ed_sk),
-            );
-            let pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
-                &MlDsa65Fips204::verifying_key(&pq_sk),
-            );
-            if let Some(user) = config.users.get_mut(username) {
-                user.sig_ed448_public = Some(base64::prelude::BASE64_STANDARD.encode(&ed_pk_bytes));
-                user.sig_mldsa65_public = Some(base64::prelude::BASE64_STANDARD.encode(&pq_pk_bytes));
-            }
-
-            // Build canonical payload and sign with both legs (AND-composition).
-            let payload = crate::envelope_sig::build_envelope_payload(&config);
-            let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
-
-            // Set cfg.envelope.sig (envelope is Option<EnvelopeMeta> — Pitfall 3).
-            config
-                .envelope
-                .get_or_insert_with(EnvelopeMeta::default)
-                .sig = Some(sig);
-
-            // Atomic write (D-13). Return here so we don't fall through to the
-            // non-atomic save_to_file below.
-            write_atomic(&config, config_path.as_ref())?;
-            println!("Created {}", config_path.as_ref().display());
-            println!("Added user '{username}' to project");
-            println!("Crypto suite: hybrid (v2.0; requires v2-capable sss binary for subsequent operations)");
-            return Ok(());
+        // Populate per-user sig pubkeys BEFORE signing so the canonical
+        // payload (build_envelope_payload) covers them. Fields are
+        // Option<String> (base64), per locked plan 19-01 (Pitfall 4).
+        let ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
+            &Ed448Standard::verifying_key(&ed_sk),
+        );
+        let pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
+            &MlDsa65Fips204::verifying_key(&pq_sk),
+        );
+        if let Some(user) = config.users.get_mut(username) {
+            user.sig_ed448_public = Some(base64::prelude::BASE64_STANDARD.encode(ed_pk_bytes));
+            user.sig_mldsa65_public = Some(base64::prelude::BASE64_STANDARD.encode(pq_pk_bytes));
         }
+
+        // Build canonical payload and sign with both legs (AND-composition).
+        let payload = crate::envelope_sig::build_envelope_payload(&config);
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
+
+        // Set cfg.envelope.sig (envelope is Option<EnvelopeMeta> — Pitfall 3).
+        config
+            .envelope
+            .get_or_insert_with(EnvelopeMeta::default)
+            .sig = Some(sig);
+
+        // Atomic write (D-13). Return here so we don't fall through to the
+        // non-atomic save_to_file below.
+        write_atomic(&config, config_path.as_ref())?;
+        println!("Created {}", config_path.as_ref().display());
+        println!("Added user '{username}' to project");
+        println!("Crypto suite: hybrid (v2.0; requires v2-capable sss binary for subsequent operations)");
+        return Ok(());
     }
 
     config.save_to_file(&config_path)?;

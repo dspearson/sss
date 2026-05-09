@@ -270,6 +270,30 @@ impl ProjectConfig {
         Ok(config)
     }
 
+    /// Load project configuration from file **without** running the suite-version
+    /// gate that `load_from_file` applies.
+    ///
+    /// Used exclusively by the sign-on-write sites that need to reload the
+    /// on-disk state *after* `RotationManager` has already written the file
+    /// (task 19-02-03).  At that point the file is valid TOML but the caller
+    /// is about to add the signature and call `write_atomic`, so running the
+    /// version gate a second time would be redundant and could fail if the
+    /// gate itself changes in plan 19-03.
+    ///
+    /// **Do not use this for ordinary reads** — it intentionally skips the
+    /// SUITE-04 guard that prevents stale binaries from silently corrupting
+    /// v2 files.
+    pub(crate) fn load_from_file_unverified<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(&path).map_err(|e| {
+            anyhow!(
+                "Failed to read project config file {}: {}",
+                path.as_ref().display(),
+                e
+            )
+        })?;
+        toml_helpers::parse_toml(&content, "project")
+    }
+
     /// Save project configuration to file
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let content = toml_helpers::serialize_toml(self, "project config")?;

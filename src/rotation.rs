@@ -75,7 +75,10 @@ impl RotationResult {
             println!("  Backup created: {}", backup_path.display());
         }
         println!("  Duration: {:.2}s", self.duration.as_secs_f64());
-        println!("  New key ID: {}...", &self.new_key_id[..16]);
+        // Truncate to 16 chars safely; short IDs like "no-files" are valid.
+        let id_preview = &self.new_key_id[..self.new_key_id.len().min(16)];
+        let ellipsis = if self.new_key_id.len() > 16 { "..." } else { "" };
+        println!("  New key ID: {id_preview}{ellipsis}");
     }
 }
 
@@ -112,6 +115,13 @@ impl RotationManager {
 
         if scan_result.files_count() == 0 {
             println!("ℹ️  No files with SSS patterns found");
+            // Even with no encrypted files the config must still be rewritten:
+            // the removed user was stripped from the in-memory map by the
+            // caller before rotation, so we need to re-seal for the remaining
+            // users and persist that reduced user map.  Skipping this write
+            // left the removed user in .sss.toml (Rule 1 bug fix, 19-02).
+            let new_key = current_repository_key.rotate().1;
+            self.update_project_config(config_path, &new_key, &reason)?;
             return self.create_empty_rotation_result(reason, start_time);
         }
 
@@ -326,9 +336,20 @@ impl RotationManager {
         // Re-seal the new repository key for all users
         let mut updated_users = HashMap::new();
 
+        let suite = config.suite()?;
         for (username, user_config) in &config.users {
-            let public_key = PublicKey::from_base64(&user_config.public)?;
-            let sealed_key = ClassicSuite.seal_repo_key(new_key, &public_key)?;
+            let public_key = PublicKey::decode_base64_for_suite(&user_config.public, suite)?;
+            // Dispatch on key variant: hybrid projects store HybridPublicKey in
+            // `public`, so route through HybridCryptoSuite.  Classic keys use
+            // ClassicSuite as before.  Rule 1 fix (19-02): previously always
+            // used ClassicSuite, corrupting re-sealed keys in hybrid projects.
+            let sealed_key = match &public_key {
+                PublicKey::Classic(_) => ClassicSuite.seal_repo_key(new_key, &public_key)?,
+                #[cfg(feature = "hybrid")]
+                PublicKey::Hybrid(_) => {
+                    crate::crypto::HybridCryptoSuite.seal_repo_key(new_key, &public_key)?
+                }
+            };
 
             let updated_user_config = UserConfig {
                 public: user_config.public.clone(),
@@ -372,6 +393,11 @@ impl RotationManager {
 /// Utility function to confirm rotation with user
 pub fn confirm_rotation(reason: &RotationReason, force: bool) -> Result<bool> {
     if force {
+        return Ok(true);
+    }
+
+    // Non-interactive mode (CI / integration tests): auto-confirm.
+    if std::env::var("SSS_NONINTERACTIVE").as_deref() == Ok("1") {
         return Ok(true);
     }
 

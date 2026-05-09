@@ -882,6 +882,158 @@ fn example_key_wrapping() -> Result<()> {
 }
 ```
 
+## Keystore Entry Signatures (v2)
+
+Phase 18 introduces hybrid AND-composition signatures over keystore entries. Every `~/.config/sss/keys/<uuid>.toml` entry written by an `sss` v2.2-or-later client carries a `[signature]` sub-table whose Ed448 + ML-DSA-65 components both verify before the entry is accepted on read.
+
+### Format-Version Dispatch
+
+Each on-disk entry carries a `format_version` field:
+
+| format_version | Meaning | Read behaviour |
+|----------------|---------|----------------|
+| (absent) or `1` | Legacy unsigned (pre-Phase 18) | Rejected unless caller passes `--allow-unsigned` |
+| `2`             | Hybrid signed (Phase 18+) | Hard verify; reject on mismatch |
+| `>= 3`          | Future schema | Hard reject with "upgrade sss" error |
+
+Mixed keystores (some `format_version=1`, some `=2`) are supported — each `*.toml` file is dispatched independently. `sss keys list` displays a trailing ` (unsigned-legacy)` tag for `format_version=1` entries; the tag is omitted (silent good case) for signed entries.
+
+The transition path is `sss keys upgrade <uuid>`, which re-signs a legacy entry in place using the existing passphrase (atomic via `tempfile::NamedTempFile::persist`).
+
+### Per-Entry Signing Keypair Model
+
+Each `format_version=2` `StoredKeyPair` carries its own dedicated Ed448 + ML-DSA-65 signing keypair, generated alongside the existing X448 + sntrup761 encryption keypair. All three keypairs share a single KDF-derived KEK (Argon2id over `passphrase + salt`), so one passphrase prompt unlocks all three secret keys.
+
+The canonical fields added in v2:
+
+```rust
+pub struct StoredKeyPair {
+    // ... existing v1 fields ...
+    pub format_version: u32,                          // 1 = legacy, 2 = signed
+    pub sig_ed448_public_key: Option<String>,         // Ed448 verifying key, base64 (57B)
+    pub sig_ed448_encrypted_secret_key: Option<String>,
+    pub sig_mldsa65_public_key: Option<String>,       // ML-DSA-65 verifying key, base64 (1952B)
+    pub sig_mldsa65_encrypted_secret_key: Option<String>,
+    pub signature: Option<KeystoreEntrySig>,
+}
+
+pub struct KeystoreEntrySig {
+    pub ed448: String,    // base64 of 114-byte Ed448 sig
+    pub mldsa65: String,  // base64 of 3309-byte ML-DSA-65 sig
+}
+```
+
+### Canonical Encoding (Signed Payload)
+
+The signed payload is a length-prefixed concatenation of the entry's identity-bearing fields. All integers are big-endian; lengths are 4-byte unsigned (count bytes that follow):
+
+| Offset | Field | Length | Value |
+|--------|-------|--------|-------|
+| 0 | `uuid_len` | 4B u32-BE | bytes of `uuid` UTF-8 string |
+| 4 | `uuid_bytes` | `uuid_len` | UTF-8 of `uuid` |
+| ... | `pk_len` | 4B u32-BE | bytes of base64-encoded `public_key` |
+| ... | `pk_b64_bytes` | `pk_len` | UTF-8 of base64 string verbatim from on-disk TOML |
+| ... | `hybrid_pk_len` | 4B u32-BE | bytes of base64-encoded `hybrid_public_key` (0 if absent) |
+| ... | `hybrid_pk_b64_bytes` | `hybrid_pk_len` | UTF-8 (empty if `hybrid_pk_len == 0`) |
+| ... | `sig_ed448_pk_len` | 4B u32-BE | bytes of base64-encoded `sig_ed448_public_key` |
+| ... | `sig_ed448_pk_b64_bytes` | `sig_ed448_pk_len` | UTF-8 |
+| ... | `sig_mldsa65_pk_len` | 4B u32-BE | bytes of base64-encoded `sig_mldsa65_public_key` |
+| ... | `sig_mldsa65_pk_b64_bytes` | `sig_mldsa65_pk_len` | UTF-8 |
+| ... | `created_at_len` | 4B u32-BE | bytes of RFC 3339 timestamp string |
+| ... | `created_at_bytes` | `created_at_len` | UTF-8 of `created_at.to_rfc3339()` |
+
+Field order is fixed and documented; absent `hybrid_public_key` encodes as a 4-byte zero-length prefix followed by zero bytes (the slot is preserved for future schema growth).
+
+Encrypted-secret fields (`encrypted_secret_key`, `hybrid_encrypted_secret_key`, `sig_*_encrypted_secret_key`) are NOT in the signed payload — the signature covers identity (public keys + uuid + timestamp), not storage detail. The encrypted-secret bytes are independently authenticated by the AEAD tag of XChaCha20-Poly1305 at decrypt time.
+
+### Signature Scheme
+
+Two signatures are computed over the same canonical payload, both required:
+
+| Component | Algorithm | Trelis API | Sig size | Pubkey size |
+|-----------|-----------|------------|----------|-------------|
+| Classic | Ed448 (RFC 8032 SHAKE256) | `Ed448Standard` | 114 B | 57 B |
+| Post-quantum | ML-DSA-65 (FIPS 204) | `MlDsa65Fips204` | 3309 B | 1952 B |
+
+Both use the trelis `sign_with_context` / `verify_with_context` APIs (NOT plain `sign` / `verify`) to invoke each algorithm's native domain-separation path. The context bytes are constant across both schemes:
+
+```rust
+pub const KEYSTORE_SIG_CONTEXT: &[u8] = b"sss-keystore-entry-sig-v1";
+```
+
+The trelis API folds the context into Ed448's RFC 8032 §8.1 with-context branch and into ML-DSA-65's FIPS 204 §5.1 ctx parameter — no application-layer concatenation needed. This prevents cross-protocol confusion attacks (e.g. a Phase 19 envelope signature being valid as a keystore signature).
+
+### On-Disk Schema (TOML)
+
+A `format_version=2` entry on disk:
+
+```toml
+uuid = "abc12345-6789-..."
+public_key = "<b64-classic-pk>"
+encrypted_secret_key = "<b64-classic-sk-encrypted>"
+salt = "<b64-salt>"
+created_at = "2026-05-09T12:00:00Z"
+is_password_protected = true
+in_keyring = false
+hybrid_public_key = "<b64-x448-sntrup-pk>"
+hybrid_encrypted_secret_key = "<b64-hybrid-sk-encrypted>"
+format_version = 2
+sig_ed448_public_key = "<b64-ed448-pk-57b>"
+sig_ed448_encrypted_secret_key = "<b64-ed448-sk-encrypted>"
+sig_mldsa65_public_key = "<b64-mldsa-pk-1952b>"
+sig_mldsa65_encrypted_secret_key = "<b64-mldsa-sk-encrypted>"
+
+[signature]
+ed448 = "<b64-114b>"
+mldsa65 = "<b64-3309b>"
+```
+
+### Verification Algorithm
+
+Pseudocode for verifying an entry on read:
+
+```text
+1. Deserialise TOML → StoredKeyPair { format_version, ..., signature: Option<KeystoreEntrySig>, ... }.
+2. If format_version is absent or 1:
+    - If caller passed --allow-unsigned: accept; skip steps 3-7.
+    - Else: hard-reject with "unsigned legacy format" error.
+3. If format_version >= 3: hard-reject with "unsupported format_version" error.
+4. Assert format_version == 2 implies signature is Some(...) AND all four sig pubkey fields are Some(...).
+   If any are None: hard-reject with "missing signature" or "missing sig pubkey" error.
+5. Build canonical payload over (uuid, public_key, hybrid_public_key, sig_ed448_public_key, sig_mldsa65_public_key, created_at).
+6. Decode base64 of signature.ed448 (114B) and signature.mldsa65 (3309B).
+7. Run BOTH:
+    - Ed448Standard::verify_with_context(&ed448_pk, &payload, KEYSTORE_SIG_CONTEXT, &ed448_sig)
+        → must return true.
+    - MlDsa65Fips204::verify_with_context(&mldsa_pk, &payload, KEYSTORE_SIG_CONTEXT, &mldsa_sig)
+        → must return Ok(()).
+   If either fails: hard-reject with the failure-mode error below.
+```
+
+AND-composition: BOTH legs must verify. If only Ed448 verifies, the entry is rejected. If only ML-DSA-65 verifies, the entry is rejected. The composition is OR-secure under the union of Ed448 + ML-DSA-65 security assumptions; AND-broken means both algorithms broken.
+
+### Failure Modes
+
+The canonical hard-error message for verify-on-read failure:
+
+```text
+keystore: signature verification failed for <uuid> (file: <path>) — entry rejected; if this is expected after a format upgrade run `sss keys upgrade <uuid>`
+```
+
+Sub-causes (tampered public key, tampered Ed448 sig, tampered ML-DSA-65 sig, mutated timestamp, etc.) all produce the same message — sub-cause information is intentionally NOT leaked, since an attacker who can mutate one field can typically mutate any field.
+
+There is no soft-fail mode, no warning-only mode, and no `--ignore-signature-errors` flag. ROADMAP §Phase 18 success-criterion 4 mandates hard-error on verification failure.
+
+### Cross-References
+
+- Canonical implementation: `src/keystore/sig.rs` (struct, canonical-encoding builder, sign/verify primitives).
+- Wired into command paths: `src/commands/keys.rs` (`generate`, `import`, `export`, `upgrade`, `list`).
+- Executable spec (regression tests): `tests/keystore_signature_negative_paths.rs` (NEG-01..NEG-07 mandatory + bonus tests).
+- Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`, crates `trelis-primitives::Ed448Standard` (`crates/trelis-primitives/src/ed448_scheme.rs`) + `trelis-primitives::MlDsa65Fips204` (`crates/trelis-primitives/src/mldsa.rs`).
+- Test vectors: `vectors/hybrid-sig.json` in trelis upstream (sanity-check reference).
+
+Phase 19 will add a sibling `## .sss.toml Envelope Signatures (v2)` section using a different signing context (`b"sss-toml-envelope-sig-v1"`) and an envelope-level signing-key model.
+
 ## References
 
 - **XChaCha20-Poly1305**: [draft-irtf-cfrg-xchacha](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha)

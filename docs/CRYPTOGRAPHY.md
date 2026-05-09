@@ -1032,6 +1032,14 @@ There is no soft-fail mode, no warning-only mode, and no `--ignore-signature-err
 - Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`, crates `trelis-primitives::Ed448Standard` (`crates/trelis-primitives/src/ed448_scheme.rs`) + `trelis-primitives::MlDsa65Fips204` (`crates/trelis-primitives/src/mldsa.rs`).
 - Test vectors: `vectors/hybrid-sig.json` in trelis upstream (sanity-check reference).
 
+**Final state (v2.2):** Phase 18 (PQSIG-01..03) closed with AND-composition
+Ed448 + ML-DSA-65, payload-first canonical encoding, and domain-separation
+context bytes `b"sss-keystore-entry-sig-v1"`. Each leg verifies independently
+and both must succeed; verification errors report which leg failed (Ed448 /
+ML-DSA-65 / both) for operator triage. Negative-path coverage in
+`tests/keystore_signature_negative_paths.rs` exercises tampered ciphertext,
+context-byte mismatch, and downgrade attempts.
+
 ## Envelope Signatures (v2)
 
 Phase 19 introduces hybrid AND-composition signatures over the entire `.sss.toml`
@@ -1183,6 +1191,14 @@ This string is asserted byte-exact by `neg_04_unsigned_v2_exact_string` in
 - Sign-on-write wiring: `src/commands/init.rs`, `src/commands/users.rs`, `src/commands/migrate.rs`, `src/commands/envelope.rs`.
 - Executable spec (regression tests): `tests/envelope_signature_negative_paths.rs` (7 sign-on-write + round-trip + upgrade-sig + 4 NEG tests).
 - Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`.
+
+**Final state (v2.2):** Phase 19 (PQSIG-04..06) closed with sign-on-write at
+`init` / `users add` / `users remove` / `migrate` and verify-on-read on every
+envelope load. Domain-separation context bytes `b"sss-toml-envelope-sig-v1"`
+distinguish envelope sigs from keystore-entry sigs. Per-leg error reporting
+matches the keystore pattern. Negative-path coverage in
+`tests/envelope_signature_negative_paths.rs` exercises tampered envelope body,
+swapped sig bytes, missing signature, and context-byte mismatch.
 
 ## References
 

@@ -8,6 +8,8 @@ use sss::commands::{
     handle_migrate, handle_open, handle_project, handle_render, handle_seal, handle_settings,
     handle_status, handle_users,
 };
+#[cfg(feature = "hybrid")]
+use sss::commands::handle_envelope;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 use sss::commands::{handle_git, handle_mount};
 #[cfg(feature = "ninep")]
@@ -482,6 +484,22 @@ fn create_cli_app() -> Command {
                 ),
         )
         .subcommand(
+            {
+                #[cfg(feature = "hybrid")]
+                let cmd = Command::new("envelope")
+                    .about("Envelope-level operations (signing, rotation, inspection)")
+                    .subcommand(
+                        Command::new("upgrade-sig")
+                            .about("Retro-fit a hybrid signature onto a legacy un-signed (format_version=1) envelope"),
+                    );
+                #[cfg(not(feature = "hybrid"))]
+                let cmd = Command::new("envelope")
+                    .about("Envelope-level operations (requires --features hybrid build)")
+                    .hide(true);
+                cmd
+            }
+        )
+        .subcommand(
             Command::new("migrate")
                 .about("Migrate a v1 (classic) repo to v2 (hybrid) crypto suite")
                 .long_about(
@@ -847,6 +865,8 @@ fn main() -> Result<()> {
     // Handle commands
     match matches.subcommand() {
         Some(("init", sub_matches)) => handle_init(&matches, sub_matches),
+        #[cfg(feature = "hybrid")]
+        Some(("envelope", sub_matches)) => handle_envelope(&matches, sub_matches),
         Some(("keygen", sub_matches)) => handle_keygen_deprecated(&matches, sub_matches),
         Some(("keys", sub_matches)) => handle_keys(&matches, sub_matches),
         Some(("users", sub_matches)) => handle_users(&matches, sub_matches),

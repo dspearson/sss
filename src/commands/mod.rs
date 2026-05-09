@@ -1,4 +1,6 @@
 pub mod agent;
+#[cfg(feature = "hybrid")]
+pub mod envelope;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub mod git;
 pub mod hooks;
@@ -17,6 +19,8 @@ pub mod users;
 pub mod utils;
 
 pub use agent::handle_agent;
+#[cfg(feature = "hybrid")]
+pub use envelope::handle_envelope;
 #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "fuse"))]
 pub use git::handle_git;
 pub use hooks::handle_hooks;

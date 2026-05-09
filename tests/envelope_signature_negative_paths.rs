@@ -335,6 +335,80 @@ fn verify_passes_round_trip() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 19-04-01 — upgrade_sig_round_trip: v1 classic envelope → signed v2 (PQSIG-06)
+// ---------------------------------------------------------------------------
+
+/// Drives `sss init --crypto classic` (produces format_version=1, no sig) then
+/// runs `sss envelope upgrade-sig` and asserts:
+/// 1. format_version promoted to 2.
+/// 2. [envelope.sig] table populated with non-empty Ed448 + ML-DSA-65 legs.
+/// 3. alice's sig_ed448_public is set.
+/// 4. The upgraded envelope verifies via the production loader (T-19-04).
+#[test]
+fn upgrade_sig_round_trip() {
+    let project_dir = TempDir::new().expect("project tempdir");
+    let env = UserEnv::new();
+
+    // Generate both suites so the keystore has sig keypairs available.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["keys", "generate", "--suite", "both", "--no-password"])
+        .output()
+        .expect("dual-suite keygen");
+    assert!(
+        out.status.success(),
+        "keygen failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Init in classic mode → format_version=1, no [envelope.sig].
+    let out = env
+        .cmd(project_dir.path())
+        .args(["init", "--crypto", "classic", "alice"])
+        .output()
+        .expect("sss init classic");
+    assert!(
+        out.status.success(),
+        "sss init classic failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Verify pre-condition: format_version=1, no sig.
+    let (pre_str, pre_cfg) = load_toml(project_dir.path());
+    assert_eq!(pre_cfg.format_version, 1, "init --crypto classic must produce format_version=1");
+    assert!(
+        pre_cfg.envelope.as_ref().and_then(|e| e.sig.as_ref()).is_none(),
+        "classic init must produce no [envelope.sig]; got:\n{pre_str}"
+    );
+
+    // Run upgrade-sig.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["envelope", "upgrade-sig"])
+        .output()
+        .expect("sss envelope upgrade-sig");
+    assert!(
+        out.status.success(),
+        "upgrade-sig failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Assert post-conditions.
+    let (_post_str, post_cfg) = load_toml(project_dir.path());
+    assert_eq!(post_cfg.format_version, 2, "upgrade-sig must promote to format_version=2");
+    assert_sig_present(&post_cfg, "upgrade_sig_round_trip");
+    assert!(
+        post_cfg.users["alice"].sig_ed448_public.is_some(),
+        "upgrade-sig must populate alice's sig_ed448_public"
+    );
+
+    // Verify-on-read must succeed against the upgraded envelope.
+    let toml_path = project_dir.path().join(".sss.toml");
+    sss::project::ProjectConfig::load_from_file(&toml_path)
+        .expect("upgraded envelope must verify via production loader");
+}
+
+// ---------------------------------------------------------------------------
 // Task 19-02-04 — sss migrate produces a signed v2 envelope
 // ---------------------------------------------------------------------------
 

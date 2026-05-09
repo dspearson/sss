@@ -1,4 +1,4 @@
-.TH sss 1 "2026-05-02" "sss 2.0.1" "User Commands"
+.TH sss 1 "2026-05-09" "sss 2.2.0" "User Commands"
 .SH NAME
 sss \- Secret String Substitution: transparent encryption for text files
 .SH SYNOPSIS
@@ -22,8 +22,10 @@ configuration file and sets up the initial user. If username is not provided, us
 the project is created at version "2.0" with the hybrid post-quantum suite enabled (requires sss built with
 .B --features hybrid
 for subsequent operations). Default is
+.B --crypto hybrid
+(project version "2.0"); pass
 .B --crypto classic
-(project version "1.0").
+for v1.0 behaviour.
 .TP
 .B sss status
 Check if the current directory is within an sss project. Outputs the project root path and exits with status 0 if in a project, 1 otherwise.

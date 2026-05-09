@@ -5,6 +5,36 @@ All notable changes to sss (Secret String Substitution) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-05-09
+
+### Changed
+- **BREAKING:** `sss init` (no flags) now creates v2.0 hybrid repos by
+  default. Pass `--crypto classic` to retain v1.0 behaviour. Following the
+  internal audit, signed envelope (PQSIG-04..06), keystore signature
+  hardening (PQSIG-01..03), and 7.6M-run fuzz / 10-min soak coverage shipped
+  earlier in v2.2, hybrid is now the default for new repositories.
+
+### Added
+- Signed `.sss.toml` envelope: AND-composition Ed448 + ML-DSA-65 with
+  domain-separation context bytes `b"sss-toml-envelope-sig-v1"`,
+  sign-on-write at `init` / `users add` / `users remove` / `migrate`,
+  verify-on-read with per-leg error reporting (PQSIG-04..06; Phase 19).
+- Keystore entry signature hardening: payload-first canonical encoding +
+  context bytes `b"sss-keystore-entry-sig-v1"`, AND-composition Ed448 +
+  ML-DSA-65 (PQSIG-01..03; Phase 18).
+- Fuzz coverage: 7.6 M-run cargo-fuzz on envelope sig + keystore sig
+  decoders (TEST-12).
+- Soak coverage: 10-min `soak_agent` test (slow-tests gated; TEST-13).
+
+### Internal
+- New CI matrix workflow `.github/workflows/ci-matrix.yml`: 6-cell matrix
+  ({ubuntu-24.04, ubuntu-24.04-arm, macos-14} × {classic, hybrid}) running
+  `cargo build --tests` + `cargo test` on push (master), pull_request, and
+  workflow_dispatch (CI-01).
+- Workspace coverage at 75.48% via cargo-llvm-cov (TEST-11).
+- Documentation audit: `docs/security-model.md` and `docs/CRYPTOGRAPHY.md`
+  reviewed for v2.2 deltas; internal anchors verified (DOCS-07).
+
 ## [2.1.0] - 2026-04-30
 
 ### Internal

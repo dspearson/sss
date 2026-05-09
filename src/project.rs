@@ -262,12 +262,62 @@ impl ProjectConfig {
 
         let config: Self = toml_helpers::parse_toml(&content, "project")?;
 
-        // Version gate — run BEFORE returning the parsed config so callers
-        // never operate on a file they don't understand. Emits the SUITE-04
+        // Version gate — run BEFORE envelope dispatch so suite-version errors
+        // surface ahead of envelope-version errors (D-15). Emits the SUITE-04
         // actionable error for `version = "2.0"` against this v1 binary.
         resolve_suite_from_version(&config.version)?;
 
+        // D-09 envelope-version dispatch ladder (D-15 ordering: after suite check,
+        // before Ok(config)).
+        match config.format_version {
+            1 => {
+                // Legacy un-signed envelope; return as-is. Callers that mutate
+                // the envelope must additionally call `require_signed(path)?`
+                // (PQSIG-06 — see require_signed below).
+            }
+            2 => {
+                // Signed envelope — verify before returning to any caller.
+                #[cfg(feature = "hybrid")]
+                crate::envelope_sig::verify_envelope_signature(&config, path.as_ref())
+                    .map_err(|e| anyhow!(
+                        "{}: envelope signature verification failed: {}",
+                        path.as_ref().display(),
+                        e
+                    ))?;
+                // On non-hybrid builds, format_version=2 is unreadable: the loader
+                // cannot prove the signature. Return an actionable error.
+                #[cfg(not(feature = "hybrid"))]
+                return Err(anyhow!(
+                    "{}: format_version=2 requires the `hybrid` build feature; rebuild sss with `--features hybrid`",
+                    path.as_ref().display()
+                ));
+            }
+            other => {
+                return Err(anyhow!(
+                    "{}: envelope format_version {} is forward-incompatible (this binary supports 1 and 2)",
+                    path.as_ref().display(),
+                    other
+                ));
+            }
+        }
+
         Ok(config)
+    }
+
+    /// Helper for PQSIG-06-mandated verbs: returns the D-10 byte-exact actionable
+    /// error if the envelope is un-signed (format_version=1).
+    ///
+    /// CRITICAL: the error string is the D-10 verbatim text. NEG-04 in plan 19-05
+    /// asserts this byte-for-byte via `assert_eq!`. Any whitespace or punctuation
+    /// drift breaks the test contract.
+    pub fn require_signed<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        if self.format_version == 1 {
+            return Err(anyhow!(
+                "{}: unsigned envelope (format_version=1); run `sss envelope upgrade-sig` to sign in place",
+                path.as_ref().display()
+            ));
+        }
+        Ok(())
     }
 
     /// Load project configuration from file **without** running the suite-version

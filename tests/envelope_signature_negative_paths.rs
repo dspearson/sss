@@ -291,6 +291,50 @@ fn sign_on_write_user_remove() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 19-03-01 — verify_passes_round_trip: production loader verifies fresh envelope
+// ---------------------------------------------------------------------------
+
+/// Drives `sss init --crypto hybrid` then reloads via `ProjectConfig::load_from_file`
+/// (the production path with format_version dispatch + signature verification).
+/// Verifies that a freshly-signed v2 envelope verifies cleanly on read-back (T-19-05).
+#[test]
+fn verify_passes_round_trip() {
+    let project_dir = TempDir::new().expect("project tempdir");
+    let env = UserEnv::new();
+
+    // Generate both suites in one call.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["keys", "generate", "--suite", "both", "--no-password"])
+        .output()
+        .expect("dual-suite keygen");
+    assert!(
+        out.status.success(),
+        "keygen failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Init hybrid project — sign-on-write produces format_version=2.
+    let out = env
+        .cmd(project_dir.path())
+        .args(["init", "--crypto", "hybrid", "alice"])
+        .output()
+        .expect("sss init");
+    assert!(
+        out.status.success(),
+        "sss init failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Read back through the production loader (verify-on-read MUST pass).
+    let toml_path = project_dir.path().join(".sss.toml");
+    let cfg = sss::project::ProjectConfig::load_from_file(&toml_path)
+        .expect("freshly-signed envelope must verify");
+    assert_eq!(cfg.format_version, 2, "v2 init must set format_version=2");
+    assert!(cfg.envelope.is_some(), "v2 envelope must carry [envelope.sig]");
+}
+
+// ---------------------------------------------------------------------------
 // Task 19-02-04 — sss migrate produces a signed v2 envelope
 // ---------------------------------------------------------------------------
 

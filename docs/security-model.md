@@ -53,6 +53,11 @@ an existing project.
 of which suite is in use.** Only the per-user `sealed_key` entries in `.sss.toml` differ.
 Migration never touches file content.
 
+**v2.2 update:** Hybrid is the default for new repositories. Classic remains
+audited and is the recommended choice for non-PQ-sensitive deployments where
+avoiding the unaudited trelis dependency outweighs the post-quantum coverage
+benefit. See [Default flip to hybrid (v2.2)](#default-flip-to-hybrid-v22).
+
 ---
 
 ## Key Derivation (Argon2id)
@@ -208,6 +213,34 @@ suite. Its safety properties:
   mid-migration leaves either the old or the new file complete.
 - **Idempotency.** Migrating an already-v2.0 project is a no-op (the version-field
   gate at `src/project.rs` detects v2.0 and returns Ok before any wrap operation runs).
+
+### Default flip to hybrid (v2.2)
+
+As of v2.2, `sss init` (no flags) creates a v2.0 hybrid repository by default.
+The flip reflects the convergence of three v2.x hardening tracks:
+
+1. **Internal audit complete (v2.0–v2.1):** the hybrid suite has been
+   exercised under fuzz (cargo-fuzz, 7.6 M runs), soak (10-min `soak_agent`
+   target), and stress (1000-fan-out `stress_render` target) without
+   regression.
+2. **Signed envelope (Phase 19, PQSIG-04..06):** every `.sss.toml` envelope
+   carries an AND-composition Ed448 + ML-DSA-65 signature with
+   domain-separation context bytes `b"sss-toml-envelope-sig-v1"`. Sign-on-write
+   at `init` / `users add` / `users remove` / `migrate`; verify-on-read with
+   per-leg error reporting. See [Envelope Signatures (v2)](./CRYPTOGRAPHY.md#envelope-signatures-v2).
+3. **Keystore entry signatures (Phase 18, PQSIG-01..03):** each keystore entry
+   is signed with the same AND-composition under context bytes
+   `b"sss-keystore-entry-v1"`. See [Keystore Entry Signatures (v2)](./CRYPTOGRAPHY.md#keystore-entry-signatures-v2).
+
+The `--crypto classic` opt-out remains available and continues to write v1.0
+repositories. Existing v1.0 repositories are NOT auto-migrated by the flip;
+only NEW `sss init` invocations adopt the v2.0 default.
+
+**Outstanding caveat (AUDIT-01):** the trelis post-quantum dependency
+(`trelis-hybrid` / `trelis-primitives`, git rev `5374dff…`) is internal-audit
+only and pinned. Third-party audit (AUDIT-01) is tracked for a future
+milestone. Deployments that cannot accept this supply-chain risk should pin
+`--crypto classic` until AUDIT-01 closes.
 
 ---
 

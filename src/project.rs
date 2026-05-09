@@ -38,10 +38,12 @@ pub struct UserConfig {
 }
 
 /// Top-level envelope signature container; present iff format_version=2 (D-07).
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct EnvelopeMeta {
-    /// Envelope AND-composition signature.
+    /// Hybrid AND-composition signature over the canonical envelope payload (D-07).
+    /// `None` is rendered as no `[envelope.sig]` table at all (skip_if_none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(not(feature = "hybrid"), serde(skip))]
     pub sig: Option<EnvelopeSig>,
 }
 
@@ -990,6 +992,108 @@ added = "2026-05-09T00:00:00Z"
         let legacy: ProjectConfig = toml::from_str(legacy_toml).unwrap();
         assert_eq!(legacy.format_version, 1, "missing format_version must default to 1 (D-09)");
         assert!(legacy.envelope.is_none());
+    }
+
+    // --- Phase 19 Plan 19-01-02: [envelope.sig] table emission ---
+
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn envelope_meta_serialises() {
+        let keypair = KeyPair::generate().unwrap();
+        let mut config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
+        config.format_version = 2;
+        config.envelope = Some(EnvelopeMeta {
+            sig: Some(EnvelopeSig {
+                ed448: "3q2+7w==".to_string(),    // base64 for [0xDE, 0xAD, 0xBE, 0xEF]
+                mldsa65: "yv4=".to_string(),      // base64 for [0xCA, 0xFE]
+            }),
+        });
+
+        let toml = toml::to_string(&config).unwrap();
+        // Must produce the nested table header.
+        assert!(
+            toml.contains("[envelope.sig]"),
+            "missing [envelope.sig] table header in:\n{toml}"
+        );
+        // Both base64 string fields must appear under the table.
+        assert!(toml.contains("ed448 = \"3q2+7w==\""), "missing ed448 field in:\n{toml}");
+        assert!(toml.contains("mldsa65 = \"yv4=\""), "missing mldsa65 field in:\n{toml}");
+
+        // Round-trip with the base64 strings preserved exactly.
+        let round: ProjectConfig = toml::from_str(&toml).unwrap();
+        let sig = round.envelope.unwrap().sig.unwrap();
+        assert_eq!(sig.ed448, "3q2+7w==");
+        assert_eq!(sig.mldsa65, "yv4=");
+
+        // Negative: when sig is None the table header is NOT emitted.
+        let mut empty_cfg = ProjectConfig::new("bob", &keypair.public_key()).unwrap();
+        empty_cfg.envelope = None;
+        let empty_toml = toml::to_string(&empty_cfg).unwrap();
+        assert!(
+            !empty_toml.contains("[envelope.sig]"),
+            "[envelope.sig] must be skipped when envelope = None, got:\n{empty_toml}"
+        );
+    }
+
+    // --- Phase 19 Plan 19-01-03: UserConfig per-user sig pubkeys skip-if-none ---
+
+    #[test]
+    fn user_sig_pubkey_skip_if_none() {
+        let user_none = UserConfig {
+            public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            added: "2026-05-09T00:00:00Z".to_string(),
+            hybrid_public: None,
+            sig_ed448_public: None,
+            sig_mldsa65_public: None,
+        };
+        let toml = toml::to_string(&user_none).unwrap();
+        #[cfg(feature = "hybrid")]
+        {
+            assert!(
+                !toml.contains("sig_ed448_public"),
+                "None Ed448 sig pubkey must be skipped, got:\n{toml}"
+            );
+            assert!(
+                !toml.contains("sig_mldsa65_public"),
+                "None ML-DSA-65 sig pubkey must be skipped, got:\n{toml}"
+            );
+        }
+
+        // Round-trip preserves None on read-back.
+        let round_none: UserConfig = toml::from_str(&toml).unwrap();
+        #[cfg(feature = "hybrid")]
+        {
+            assert!(round_none.sig_ed448_public.is_none());
+            assert!(round_none.sig_mldsa65_public.is_none());
+        }
+        let _ = round_none;
+
+        // With Some(_), keys appear and round-trip exactly.
+        let user_some = UserConfig {
+            public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            added: "2026-05-09T00:00:00Z".to_string(),
+            hybrid_public: None,
+            sig_ed448_public: Some("ZWQ0NDhfcGtfaGVyZQ==".to_string()),
+            sig_mldsa65_public: Some("bWxkc2FfcGtfaGVyZQ==".to_string()),
+        };
+        let toml_some = toml::to_string(&user_some).unwrap();
+        #[cfg(feature = "hybrid")]
+        {
+            assert!(toml_some.contains("sig_ed448_public = \"ZWQ0NDhfcGtfaGVyZQ==\""),
+                "missing sig_ed448_public in:\n{toml_some}");
+            assert!(toml_some.contains("sig_mldsa65_public = \"bWxkc2FfcGtfaGVyZQ==\""),
+                "missing sig_mldsa65_public in:\n{toml_some}");
+        }
+
+        let round_some: UserConfig = toml::from_str(&toml_some).unwrap();
+        #[cfg(feature = "hybrid")]
+        {
+            assert_eq!(round_some.sig_ed448_public.as_deref(), Some("ZWQ0NDhfcGtfaGVyZQ=="));
+            assert_eq!(round_some.sig_mldsa65_public.as_deref(), Some("bWxkc2FfcGtfaGVyZQ=="));
+        }
+        let _ = round_some;
     }
 
     #[test]

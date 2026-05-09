@@ -208,9 +208,19 @@ impl ProjectConfig {
         // Generate a new repository key
         let repository_key = RepositoryKey::new();
 
-        // Seal the repository key for this user via the CryptoSuite trait
-        // (ClassicSuite is the only concrete suite in Phase 1; Phase 2 will
-        // route this through `config.suite()?` once HybridSuite lands).
+        // Dispatch sealing on the key variant.  Classic keys → ClassicSuite;
+        // hybrid keys → HybridSuite (via the `hybrid` feature gate so the
+        // code is unreachable in non-hybrid builds and the compiler can
+        // elide the branch).  This wires the Phase-2 TODO that was deferred
+        // in the original comment (Rule 1 fix, 19-02).
+        #[cfg(feature = "hybrid")]
+        let sealed_key = match user_public_key {
+            PublicKey::Classic(_) => ClassicSuite.seal_repo_key(&repository_key, user_public_key)?,
+            PublicKey::Hybrid(_) => {
+                crate::crypto::HybridCryptoSuite.seal_repo_key(&repository_key, user_public_key)?
+            }
+        };
+        #[cfg(not(feature = "hybrid"))]
         let sealed_key = ClassicSuite.seal_repo_key(&repository_key, user_public_key)?;
 
         let user_config = UserConfig {
@@ -258,6 +268,30 @@ impl ProjectConfig {
         resolve_suite_from_version(&config.version)?;
 
         Ok(config)
+    }
+
+    /// Load project configuration from file **without** running the suite-version
+    /// gate that `load_from_file` applies.
+    ///
+    /// Used exclusively by the sign-on-write sites that need to reload the
+    /// on-disk state *after* `RotationManager` has already written the file
+    /// (task 19-02-03).  At that point the file is valid TOML but the caller
+    /// is about to add the signature and call `write_atomic`, so running the
+    /// version gate a second time would be redundant and could fail if the
+    /// gate itself changes in plan 19-03.
+    ///
+    /// **Do not use this for ordinary reads** — it intentionally skips the
+    /// SUITE-04 guard that prevents stale binaries from silently corrupting
+    /// v2 files.
+    pub(crate) fn load_from_file_unverified<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(&path).map_err(|e| {
+            anyhow!(
+                "Failed to read project config file {}: {}",
+                path.as_ref().display(),
+                e
+            )
+        })?;
+        toml_helpers::parse_toml(&content, "project")
     }
 
     /// Save project configuration to file

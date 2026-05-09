@@ -151,6 +151,26 @@ pub enum ConfigFormat {
     Empty,  // New format but no users yet
 }
 
+/// Atomically write a `ProjectConfig` to `target` via a temp file in the same
+/// directory (D-13). Prevents torn-file state under concurrent access or crash.
+///
+/// Called by every sign-on-write site in this crate (init, user add/remove,
+/// migrate). Implemented once here to avoid divergence (Pitfall 8 / 19-02).
+pub(crate) fn write_atomic(cfg: &ProjectConfig, target: &Path) -> Result<()> {
+    use std::io::Write as _;
+    let parent = target
+        .parent()
+        .ok_or_else(|| anyhow!("target has no parent directory"))?;
+    let toml = crate::toml_helpers::serialize_toml(cfg, "project config")?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|e| anyhow!("failed to create temp file for atomic write: {e}"))?;
+    tmp.write_all(toml.as_bytes())
+        .map_err(|e| anyhow!("failed to write config to temp file: {e}"))?;
+    tmp.persist(target)
+        .map_err(|e| anyhow!("atomic rename failed: {e}"))?;
+    Ok(())
+}
+
 /// Initialize a new project configuration.
 ///
 /// Stamps the `.sss.toml` `version` field based on `crypto`:
@@ -159,11 +179,16 @@ pub enum ConfigFormat {
 /// - `Suite::Hybrid` → `version = "2.0"` (Phase 2 wires the hybrid seal
 ///   path; this v1 binary will error at subsequent load with the
 ///   SUITE-04 actionable message).
+///
+/// When `crypto = Suite::Hybrid` and `keystore` is `Some`, signs the freshly-
+/// created envelope with the writer's sig keypair before writing to disk
+/// (D-14 sign-on-write, PQSIG-05). Classic projects are never signed here.
 pub fn init_project_config<P: AsRef<Path>>(
     config_path: P,
     username: &str,
     public_key: &PublicKey,
     crypto: crate::crypto::Suite,
+    keystore: Option<&crate::keystore::Keystore>,
 ) -> Result<()> {
     if config_path.as_ref().exists() {
         return Err(anyhow!(
@@ -179,6 +204,55 @@ pub fn init_project_config<P: AsRef<Path>>(
         crate::crypto::Suite::Classic => "1.0".to_string(),
         crate::crypto::Suite::Hybrid => "2.0".to_string(),
     };
+
+    // Sign-on-write (D-14, PQSIG-05): hybrid projects get a signed envelope.
+    // Classic projects bypass this block — no sig keypair exists for classic-only keys.
+    #[cfg(feature = "hybrid")]
+    if crypto == crate::crypto::Suite::Hybrid {
+        if let Some(ks) = keystore {
+            use base64::Engine as _;
+            use crate::project::EnvelopeMeta;
+            use trelis_primitives::{Ed448Scheme as _, Ed448Standard, MlDsa65Fips204, MlDsaScheme as _};
+
+            config.format_version = 2;
+
+            // Load the writing user's sig keypair (Wave 0 prereq, task 19-02-00).
+            let (ed_sk, pq_sk) = ks.load_sig_keypair(username, None)?;
+
+            // Populate per-user sig pubkeys BEFORE signing so the canonical
+            // payload (build_envelope_payload) covers them. Fields are
+            // Option<String> (base64), per locked plan 19-01 (Pitfall 4).
+            let ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
+                &Ed448Standard::verifying_key(&ed_sk),
+            );
+            let pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
+                &MlDsa65Fips204::verifying_key(&pq_sk),
+            );
+            if let Some(user) = config.users.get_mut(username) {
+                user.sig_ed448_public = Some(base64::prelude::BASE64_STANDARD.encode(&ed_pk_bytes));
+                user.sig_mldsa65_public = Some(base64::prelude::BASE64_STANDARD.encode(&pq_pk_bytes));
+            }
+
+            // Build canonical payload and sign with both legs (AND-composition).
+            let payload = crate::envelope_sig::build_envelope_payload(&config);
+            let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
+
+            // Set cfg.envelope.sig (envelope is Option<EnvelopeMeta> — Pitfall 3).
+            config
+                .envelope
+                .get_or_insert_with(EnvelopeMeta::default)
+                .sig = Some(sig);
+
+            // Atomic write (D-13). Return here so we don't fall through to the
+            // non-atomic save_to_file below.
+            write_atomic(&config, config_path.as_ref())?;
+            println!("Created {}", config_path.as_ref().display());
+            println!("Added user '{username}' to project");
+            println!("Crypto suite: hybrid (v2.0; requires v2-capable sss binary for subsequent operations)");
+            return Ok(());
+        }
+    }
+
     config.save_to_file(&config_path)?;
 
     println!("Created {}", config_path.as_ref().display());
@@ -454,6 +528,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             "alice",
             &keypair.public_key(),
             crate::crypto::Suite::Classic,
+            None,
         )
         .unwrap();
         assert!(config_path.exists());
@@ -464,6 +539,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             "alice",
             &keypair.public_key(),
             crate::crypto::Suite::Classic,
+            None,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
@@ -482,6 +558,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             "alice",
             &keypair.public_key(),
             crate::crypto::Suite::Classic,
+            None,
         )
         .unwrap();
 
@@ -506,6 +583,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             "alice",
             &keypair.public_key(),
             crate::crypto::Suite::Hybrid,
+            None,
         )
         .unwrap();
 
@@ -530,6 +608,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
             "alice",
             &keypair.public_key(),
             crate::crypto::Suite::Hybrid,
+            None,
         )
         .unwrap();
 

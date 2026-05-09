@@ -158,7 +158,32 @@ pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
 
         // Execute migration
         migrate_project_config(&mut config, &repository_key, false)?;
-        config.save_to_file(&config_path)?;
+
+        // Sign-on-write (PQSIG-05 / D-14): set format_version=2, build payload,
+        // sign with both legs, write atomically. The caller's sig keypair is
+        // loaded from the keystore under the username resolved above.
+        let (ed_sk, pq_sk) = keystore.load_sig_keypair(&caller, password_str.as_deref())?;
+        use base64::Engine as _;
+        if let Some(u) = config.users.get_mut(&caller) {
+            if u.sig_ed448_public.is_none() {
+                u.sig_ed448_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(ed_sk.verifying_key().as_bytes()),
+                );
+            }
+            if u.sig_mldsa65_public.is_none() {
+                u.sig_mldsa65_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(pq_sk.verifying_key().as_bytes()),
+                );
+            }
+        }
+        config.format_version = 2;
+        let payload = crate::envelope_sig::build_envelope_payload(&config);
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        config
+            .envelope
+            .get_or_insert_with(crate::project::EnvelopeMeta::default)
+            .sig = Some(sig);
+        crate::config::write_atomic(&config, &config_path)?;
 
         let n = config.users.len();
         println!("Migrated {n} user(s) to hybrid suite. .sss.toml version bumped to \"2.0\".");

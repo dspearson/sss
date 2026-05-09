@@ -163,6 +163,40 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
 
     // add_user dispatches sealing via config.suite() internally.
     config.add_user(username, &new_pub, &repository_key)?;
+
+    // Sign-on-write (PQSIG-05 / D-14): hybrid projects re-sign the envelope
+    // before atomic write so the new user entry is covered by the signature.
+    #[cfg(feature = "hybrid")]
+    if suite == Suite::Hybrid {
+        use crate::envelope_sig::{build_envelope_payload, sign_envelope};
+        use crate::project::EnvelopeMeta;
+        use base64::Engine as _;
+
+        let (ed_sk, pq_sk) = keystore.load_sig_keypair(&current_user, password_str.as_deref())?;
+        // Populate sig pubkeys in the writer's user entry if absent.
+        if let Some(u) = config.users.get_mut(&current_user) {
+            if u.sig_ed448_public.is_none() {
+                u.sig_ed448_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(ed_sk.verifying_key().as_bytes()),
+                );
+            }
+            if u.sig_mldsa65_public.is_none() {
+                u.sig_mldsa65_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(pq_sk.verifying_key().as_bytes()),
+                );
+            }
+        }
+        config.format_version = 2;
+        let payload = build_envelope_payload(&config);
+        let sig = sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        config.envelope.get_or_insert_with(EnvelopeMeta::default).sig = Some(sig);
+        crate::config::write_atomic(&config, &config_path)?;
+    }
+    #[cfg(feature = "hybrid")]
+    if suite != Suite::Hybrid {
+        config.save_to_file(&config_path)?;
+    }
+    #[cfg(not(feature = "hybrid"))]
     config.save_to_file(&config_path)?;
 
     println!("Added user '{username}' to project");
@@ -199,10 +233,12 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
         get_system_username().unwrap_or_else(|_| DEFAULT_USERNAME_FALLBACK.to_string());
     let sealed_key = config.get_sealed_key_for_user(&current_user)?;
 
-    // Now it is safe to remove the user from the in-memory copy. `rotation`
-    // rewrites the user map wholesale from disk, but keeping the local state
-    // honest makes future refactors safer.
+    // Remove the user from the in-memory copy and persist immediately so that
+    // RotationManager (which reloads from disk) sees the reduced user map.
+    // Previously `rotation` was assumed to "rewrite wholesale from disk" but
+    // that left the removed user in the on-disk file until rotation completed.
     config.remove_user(username)?;
+    config.save_to_file(&config_path)?;
 
     println!("Removing user '{username}' from project...");
     println!("⚠️  This will trigger automatic key rotation for security");
@@ -257,6 +293,40 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     )?;
 
     result.print_summary();
+
+    // Sign-on-write (PQSIG-05 / D-14): after RotationManager rewrites the
+    // file, reload the on-disk state and sign the new envelope.  We use the
+    // unverified loader because RotationManager has already committed a valid
+    // file and we are about to add the signature in a second atomic write.
+    #[cfg(feature = "hybrid")]
+    if suite == Suite::Hybrid {
+        use crate::envelope_sig::{build_envelope_payload, sign_envelope};
+        use crate::project::{EnvelopeMeta, ProjectConfig};
+        use base64::Engine as _;
+
+        let mut rotated = ProjectConfig::load_from_file_unverified(&config_path)?;
+
+        let (ed_sk, pq_sk) = keystore.load_sig_keypair(&current_user, password_str.as_deref())?;
+        // Populate sig pubkeys in the writer's user entry if absent.
+        if let Some(u) = rotated.users.get_mut(&current_user) {
+            if u.sig_ed448_public.is_none() {
+                u.sig_ed448_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(ed_sk.verifying_key().as_bytes()),
+                );
+            }
+            if u.sig_mldsa65_public.is_none() {
+                u.sig_mldsa65_public = Some(
+                    base64::prelude::BASE64_STANDARD.encode(pq_sk.verifying_key().as_bytes()),
+                );
+            }
+        }
+        rotated.format_version = 2;
+        let payload = build_envelope_payload(&rotated);
+        let sig = sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        rotated.envelope.get_or_insert_with(EnvelopeMeta::default).sig = Some(sig);
+        crate::config::write_atomic(&rotated, &config_path)?;
+    }
+
     println!("✓ User '{username}' removed and repository key rotated");
     Ok(())
 }

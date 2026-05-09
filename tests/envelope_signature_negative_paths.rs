@@ -299,15 +299,30 @@ fn sign_on_write_migrate() {
     let project_dir = TempDir::new().expect("project tempdir");
     let alice_env = UserEnv::new();
 
-    // Alice: generate classic keypair first.
+    // Alice: generate both classic and hybrid keypairs atomically (--suite both).
+    // --suite classic produces an unsigned v1 file that init refuses to load;
+    // --suite both produces a signed v2 dual-keypair file that init accepts.
     let out = alice_env
         .cmd(project_dir.path())
-        .args(["keys", "generate", "--suite", "classic", "--no-password"])
+        .args(["keys", "generate", "--suite", "both", "--no-password"])
         .output()
-        .expect("alice classic keygen");
-    assert!(out.status.success(), "classic keygen failed: {}", String::from_utf8_lossy(&out.stderr));
+        .expect("alice both keygen");
+    assert!(out.status.success(), "both keygen failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    // Extract the hybrid public key from keygen stdout (line: "Hybrid public key:  <b64>").
+    // We cannot use `keys pubkey` here because we are in a v1 project (classic mode),
+    // which causes `keys pubkey` to return the classic key rather than the hybrid one.
+    let keygen_stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let alice_hybrid_pk = keygen_stdout
+        .lines()
+        .find(|l| l.contains("Hybrid public key:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .map(str::trim)
+        .expect("keygen --suite both must print 'Hybrid public key: ...'")
+        .to_string();
 
     // Init in classic mode (no signature expected initially).
+    // The dual keypair created above satisfies init's requirement for a classic key.
     let out = alice_env
         .cmd(project_dir.path())
         .args(["init", "--crypto", "classic", "alice"])
@@ -315,26 +330,9 @@ fn sign_on_write_migrate() {
         .expect("sss init classic");
     assert!(out.status.success(), "sss init classic failed: {}", String::from_utf8_lossy(&out.stderr));
 
-    // Alice generates hybrid keypair (needed for migration).
     let out = alice_env
         .cmd(project_dir.path())
-        .args(["keys", "generate", "--suite", "hybrid", "--no-password"])
-        .output()
-        .expect("alice hybrid keygen");
-    assert!(out.status.success(), "hybrid keygen failed: {}", String::from_utf8_lossy(&out.stderr));
-
-    // Capture Alice's hybrid pubkey and register it (needed for sss migrate).
-    let out = alice_env
-        .cmd(project_dir.path())
-        .args(["keys", "pubkey"])
-        .output()
-        .expect("alice keys pubkey");
-    assert!(out.status.success(), "keys pubkey failed: {}", String::from_utf8_lossy(&out.stderr));
-    let alice_hybrid_pk = String::from_utf8_lossy(&out.stdout).trim().to_string();
-
-    let out = alice_env
-        .cmd(project_dir.path())
-        .args(["user", "add-hybrid-key", "alice", &alice_hybrid_pk])
+        .args(["users", "add-hybrid-key", "alice", &alice_hybrid_pk])
         .output()
         .expect("add-hybrid-key");
     assert!(out.status.success(), "add-hybrid-key failed: {}", String::from_utf8_lossy(&out.stderr));

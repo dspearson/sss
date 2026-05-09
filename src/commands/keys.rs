@@ -246,6 +246,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
         Some(("current", sub_matches)) => handle_keys_current(main_matches, sub_matches)?,
         Some(("import", sub_matches)) => handle_keys_import(main_matches, sub_matches)?,
         Some(("export", sub_matches)) => handle_keys_export(main_matches, sub_matches)?,
+        Some(("upgrade", sub_matches)) => handle_keys_upgrade(main_matches, sub_matches)?,
         Some(("rotate", sub_matches)) => {
             handle_keys_rotate_command(main_matches, sub_matches)?;
         }
@@ -268,6 +269,7 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
                   delete             Delete a keypair\n\
                   import             Import a keystore TOML entry from file\n\
                   export             Export a keystore TOML entry to file\n\
+                  upgrade            Re-sign a legacy (format_version=1) keystore entry in place\n\
                   set-passphrase     Set or change passphrase for a key\n\
                   remove-passphrase  Remove passphrase protection from a key\n\
                   rotate             Rotate repository encryption key\n\n\
@@ -280,10 +282,46 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     Ok(())
 }
 
+/// Phase 18-04 (PQSIG-03 / D-18): pure formatter for a single `keys list`
+/// entry line. Extracted so unit tests can exercise tag rendering without
+/// having to capture process stdout — `gag::BufferRedirect::stdout()` does
+/// not interoperate with cargo's test harness, which swallows tag bytes.
+///
+/// Returns the rendered line without a trailing newline. Used by both
+/// `handle_keys_list` (production) and `tests/keys_command_tests.rs` (D-18
+/// tag tests keys_14..16).
+pub fn format_list_entry(
+    key_id: &str,
+    stored: &crate::keystore::StoredKeyPair,
+    is_current: bool,
+) -> String {
+    let status = if is_current { " (current)" } else { "" };
+    let protection = if stored.is_password_protected {
+        " [protected]"
+    } else {
+        ""
+    };
+    // D-18: per-entry legacy tag; v2 entries omit it.
+    let legacy_tag = if stored.format_version == 1 {
+        " (unsigned-legacy)"
+    } else {
+        ""
+    };
+    format!(
+        "  {}... - Created: {}{}{}{}",
+        &key_id[..KEY_ID_DISPLAY_LENGTH],
+        stored.created_at.format("%Y-%m-%d %H:%M"),
+        protection,
+        status,
+        legacy_tag
+    )
+}
+
 fn handle_keys_list(main_matches: &ArgMatches, _sub_matches: &ArgMatches) -> Result<()> {
-    // Phase 18-03 (PQSIG-02 / D-17): `--allow-unsigned` is accepted at the CLI
-    // layer; full unsigned-legacy tagging in the listing output is deferred to
-    // plan unit 18-04. Today the flag is parsed but not yet surfaced in output.
+    // Phase 18-04 (PQSIG-03 / D-18): legacy (format_version=1) entries are
+    // tagged with a trailing ` (unsigned-legacy)` marker so operators can
+    // identify which entries still need `sss keys upgrade <uuid>`. v2 entries
+    // emit no tag (D-18: silence on the happy path keeps signed output clean).
     let keystore = create_keystore(main_matches)?;
     let keys = keystore.list_key_ids()?;
 
@@ -296,20 +334,7 @@ fn handle_keys_list(main_matches: &ArgMatches, _sub_matches: &ArgMatches) -> Res
 
         for (key_id, stored) in keys {
             let is_current = current_id.as_ref() == Some(&key_id);
-            let status = if is_current { " (current)" } else { "" };
-            let protection = if stored.is_password_protected {
-                " [protected]"
-            } else {
-                ""
-            };
-
-            println!(
-                "  {}... - Created: {}{}{}",
-                &key_id[..KEY_ID_DISPLAY_LENGTH],
-                stored.created_at.format("%Y-%m-%d %H:%M"),
-                protection,
-                status
-            );
+            println!("{}", format_list_entry(&key_id, &stored, is_current));
         }
     }
 
@@ -857,6 +882,65 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     println!("  File:           {}", dst.display());
 
     Ok(())
+}
+
+/// Re-sign a legacy (`format_version=1`) keystore entry in place.
+///
+/// Phase 18-04 / PQSIG-03 part 2: thin CLI wrapper over
+/// `Keystore::upgrade_keypair_in_place`. Resolves the user-supplied uuid
+/// (which may be a unique prefix) to the full key id via `list_key_ids`,
+/// prompts for the existing passphrase if the entry is password-protected,
+/// then delegates to the keystore method which performs the atomic
+/// read-modify-write under `tempfile::NamedTempFile::persist` (D-15).
+///
+/// D-17: there is intentionally NO `--allow-unsigned` flag — `upgrade` IS
+/// the upgrade path, so the only legitimate input is a v1 entry. v2 entries
+/// surface as "already signed" errors from the keystore layer.
+pub fn handle_keys_upgrade(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
+    let uuid = sub_matches
+        .get_one::<String>("uuid")
+        .ok_or_else(|| anyhow!("uuid required for `sss keys upgrade`"))?;
+
+    let keystore = create_keystore(main_matches)?;
+
+    // Resolve uuid prefix → full key id (mirrors handle_keys_export).
+    let keys = keystore.list_key_ids()?;
+    let (full_id, stored) = keys
+        .iter()
+        .find(|(id, _)| id.starts_with(uuid))
+        .ok_or_else(|| anyhow!("upgrade: no keystore entry matching uuid prefix '{}'", uuid))?;
+
+    // Prompt for the existing passphrase only if the entry is protected.
+    // The keystore layer probes the KEK before any write, so a wrong
+    // passphrase fails before mutation (T-18-04-04).
+    let password_opt = if stored.is_password_protected {
+        Some(crate::keystore::get_passphrase_or_prompt(
+            "Enter current passphrase: ",
+        )?)
+    } else {
+        None
+    };
+
+    // Compile-time gate: upgrade only exists on hybrid builds (the sig
+    // primitives are gated). Non-hybrid builds reach here only via clap
+    // parsing; the keystore method itself is `#[cfg(feature = "hybrid")]`.
+    #[cfg(feature = "hybrid")]
+    {
+        keystore.upgrade_keypair_in_place(full_id, password_opt.as_deref())?;
+        println!(
+            "Upgraded keystore entry: {}... (format_version 1 → 2, AND-composition signature)",
+            &full_id[..KEY_ID_DISPLAY_LENGTH]
+        );
+        Ok(())
+    }
+    #[cfg(not(feature = "hybrid"))]
+    {
+        // Suppress unused-variable warnings for the gated path.
+        let _ = (full_id, stored, password_opt);
+        Err(anyhow!(
+            "keystore: `sss keys upgrade` requires the `hybrid` feature; rebuild with --features hybrid"
+        ))
+    }
 }
 
 pub fn handle_keygen_deprecated(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()> {

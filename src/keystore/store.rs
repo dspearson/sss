@@ -1224,6 +1224,203 @@ impl Keystore {
         Ok(crate::crypto::HybridKeyPair { public_bytes, secret_bytes })
     }
 
+    /// Re-sign a `format_version=1` (legacy unsigned) entry in place,
+    /// promoting it to `format_version=2` (signed) without changing identity.
+    ///
+    /// Phase 18-04 / PQSIG-03 transition path. Generates fresh per-entry
+    /// Ed448 + ML-DSA-65 sig keypairs, encrypts the sig SKs under the
+    /// EXISTING KEK (D-07; passwordless entries store base64 raw), bumps
+    /// `format_version` to 2, populates the four sig fields, builds the
+    /// canonical signed payload (D-08), and produces an AND-composition
+    /// signature via `keystore::sig::sign_entry`.
+    ///
+    /// Atomic write via `tempfile::NamedTempFile::new_in(parent).persist(target)`
+    /// so a crash mid-write never produces a half-written entry (D-15).
+    /// **Pitfall 4**: MUST use `new_in(parent)` — `NamedTempFile::new()` defaults
+    /// to `/tmp` which is a different filesystem on most Linux installs and
+    /// `.persist()` would fail with `EXDEV` (cross-device link).
+    ///
+    /// Refuses (without writing) if `format_version >= 2`; the caller (CLI)
+    /// surfaces this as a no-op message. Refuses if `format_version` is
+    /// neither 1 nor 2 (future schema). Probes the existing KEK by
+    /// decrypting `encrypted_secret_key` so a wrong passphrase fails BEFORE
+    /// any write, leaving the v1 file untouched.
+    ///
+    /// T-18-04-03: raw sig SK bytes are wrapped in `Zeroizing<Vec<u8>>` and
+    /// dropped at end-of-scope.
+    #[cfg(feature = "hybrid")]
+    pub fn upgrade_keypair_in_place(
+        &self,
+        key_id: &str,
+        password: Option<&str>,
+    ) -> Result<()> {
+        use crate::keystore::sig::{build_signed_payload, sign_entry};
+        use base64::prelude::BASE64_STANDARD;
+        use std::io::Write;
+        use trelis_primitives::{
+            Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme,
+        };
+        use zeroize::Zeroizing;
+
+        let key_file = self.keys_dir.join(format!("{key_id}.toml"));
+        if !key_file.exists() {
+            return Err(anyhow!(
+                "keystore: upgrade target key file not found: {}",
+                key_file.display()
+            ));
+        }
+
+        // Read on-disk TOML directly (bypasses load_keypair so we can read a
+        // v1 entry without --allow-unsigned).
+        let content = fs::read_to_string(&key_file)
+            .map_err(|e| anyhow!("keystore: read key file (upgrade) for key_id={}: {}", key_id, e))?;
+        let mut stored: StoredKeyPair = toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (upgrade) for key_id={}: {}", key_id, e))?;
+
+        // Refuse already-signed entries (D-17): upgrade IS the upgrade path
+        // for v1 → v2; there is no v2 → v2 re-sign mode.
+        if stored.format_version >= 2 {
+            return Err(anyhow!(
+                "keystore: entry {} is already signed (format_version={}); upgrade is a no-op",
+                key_id, stored.format_version
+            ));
+        }
+        if stored.format_version != 1 {
+            return Err(anyhow!(
+                "keystore: unsupported format_version {} for upgrade (expected 1)",
+                stored.format_version
+            ));
+        }
+
+        // Probe the existing KEK by decrypting encrypted_secret_key — a wrong
+        // passphrase MUST fail before any write happens (T-18-04-04).
+        // Passwordless entries skip this probe (no KEK to validate).
+        if stored.is_password_protected {
+            let pw = password.ok_or_else(|| {
+                anyhow!("Password required to upgrade protected key {}", key_id)
+            })?;
+            let salt_str = stored
+                .salt
+                .as_ref()
+                .ok_or_else(|| anyhow!("Salt missing for password-protected key {}", key_id))?;
+            let salt = crate::kdf::Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode (upgrade) for key_id={}: {}", key_id, e))?;
+            let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive (upgrade) for key_id={}: {}", key_id, e))?;
+            let enc_bytes = BASE64_STANDARD
+                .decode(&stored.encrypted_secret_key)
+                .map_err(|e| anyhow!("keystore: base64-decode-secret-key (upgrade) for key_id={}: {}", key_id, e))?;
+            let _probe = Zeroizing::new(
+                crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
+                    .map_err(|_| anyhow!("keystore: passphrase verification failed for {}", key_id))?,
+            );
+        }
+
+        // Generate fresh per-entry sig keypairs (D-06).
+        let ed448_sk = Ed448Standard::generate()
+            .map_err(|e| anyhow!("keystore: Ed448 sig keygen (upgrade) for key_id={}: {}", key_id, e))?;
+        let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+        let ed448_pk_b64 =
+            BASE64_STANDARD.encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
+        let ed448_sk_bytes =
+            Zeroizing::new(Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec());
+
+        let mldsa_sk = MlDsa65Fips204::generate()
+            .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (upgrade) for key_id={}: {}", key_id, e))?;
+        let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+        let mldsa_pk_b64 =
+            BASE64_STANDARD.encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
+        let mldsa_sk_bytes =
+            Zeroizing::new(MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk).to_vec());
+
+        // Encrypt sig SKs under the existing KEK (protected) or store base64
+        // raw (passwordless) — matches the precedent in store_dual_keypair
+        // Case A/B for D-07 consistency.
+        let (sig_ed448_sk_field, sig_mldsa_sk_field) = if stored.is_password_protected {
+            // Re-derive KEK (we already validated the passphrase above).
+            let pw = password.expect("checked above");
+            let salt_str = stored.salt.as_ref().expect("checked above");
+            let salt = crate::kdf::Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={}: {}", key_id, e))?;
+            let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade) for key_id={}: {}", key_id, e))?;
+            let enc_key = dk.to_encryption_key();
+
+            let sig_ed448_sk_b64 = BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+            let enc_sig_ed448 =
+                crate::crypto::encrypt_to_base64(&sig_ed448_sk_b64, &enc_key)
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (upgrade) for key_id={}: {}", key_id, e))?;
+
+            let sig_mldsa_sk_b64 = BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+            let enc_sig_mldsa =
+                crate::crypto::encrypt_to_base64(&sig_mldsa_sk_b64, &enc_key)
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (upgrade) for key_id={}: {}", key_id, e))?;
+
+            (enc_sig_ed448, enc_sig_mldsa)
+        } else {
+            (
+                BASE64_STANDARD.encode(&ed448_sk_bytes[..]),
+                BASE64_STANDARD.encode(&mldsa_sk_bytes[..]),
+            )
+        };
+
+        // Bump schema + populate sig fields.
+        stored.format_version = 2;
+        stored.sig_ed448_public_key = Some(ed448_pk_b64.clone());
+        stored.sig_ed448_encrypted_secret_key = Some(sig_ed448_sk_field);
+        stored.sig_mldsa65_public_key = Some(mldsa_pk_b64.clone());
+        stored.sig_mldsa65_encrypted_secret_key = Some(sig_mldsa_sk_field);
+
+        // Canonical D-08 payload (identity-bearing public fields only).
+        // T-18-04-05: uuid + public_key + hybrid_public_key + created_at
+        // are byte-preserved from the v1 entry.
+        let payload = build_signed_payload(
+            &stored.uuid,
+            &stored.public_key,
+            stored.hybrid_public_key.as_deref(),
+            stored.sig_ed448_public_key.as_deref(),
+            stored.sig_mldsa65_public_key.as_deref(),
+            &stored.created_at.to_rfc3339(),
+        );
+        let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
+            .map_err(|e| anyhow!("keystore: sign-entry (upgrade) for key_id={}: {}", key_id, e))?;
+        stored.signature = Some(sig);
+
+        let new_content = toml::to_string_pretty(&stored)
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (upgrade) for key_id={}: {}", key_id, e))?;
+
+        // Atomic write via NamedTempFile::new_in(parent).persist(target) (D-15).
+        // Pitfall 4: MUST be `new_in(parent_dir)` — `new()` defaults to /tmp,
+        // .persist() then fails with EXDEV (cross-device link) on most Linux.
+        let parent = key_file.parent().ok_or_else(|| {
+            anyhow!("keystore: cannot resolve parent dir of {}", key_file.display())
+        })?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| anyhow!("keystore: tempfile-create (upgrade) for key_id={}: {}", key_id, e))?;
+        tmp.write_all(new_content.as_bytes())
+            .map_err(|e| anyhow!("keystore: tempfile-write (upgrade) for key_id={}: {}", key_id, e))?;
+        tmp.flush()
+            .map_err(|e| anyhow!("keystore: tempfile-flush (upgrade) for key_id={}: {}", key_id, e))?;
+        tmp.persist(&key_file)
+            .map_err(|e| anyhow!("keystore: tempfile-persist (upgrade) for key_id={}: {}", key_id, e))?;
+
+        // Restore 0o600 permissions (NamedTempFile defaults are mode 0o600 on
+        // Unix already, but persist() onto an existing 0o600 file may pick up
+        // umask-derived perms on some platforms — be explicit).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&key_file)
+                .map_err(|e| anyhow!("keystore: stat key file (upgrade) for key_id={}: {}", key_id, e))?;
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o600);
+            fs::set_permissions(&key_file, perms)
+                .map_err(|e| anyhow!("keystore: set-permissions on key file (upgrade) for key_id={}: {}", key_id, e))?;
+        }
+
+        Ok(())
+    }
+
     /// Verify an entry's AND-composition signature.
     ///
     /// Phase 18-03 / D-11 + D-20: ALL sub-cause errors (missing signature,

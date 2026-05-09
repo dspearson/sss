@@ -342,6 +342,21 @@ fn create_cli_app() -> Command {
                         ),
                 )
                 .subcommand(
+                    // Phase 18-04 / PQSIG-03 part 2: re-sign a legacy
+                    // (format_version=1) entry in place. D-17 — there is
+                    // intentionally NO `--allow-unsigned` flag here; upgrade
+                    // IS the upgrade path, so the only legitimate input is a
+                    // v1 entry. Trying to upgrade a v2 entry yields an
+                    // "already signed" error from the keystore layer.
+                    Command::new("upgrade")
+                        .about("Re-sign a legacy (format_version=1) keystore entry in place")
+                        .arg(
+                            Arg::new("uuid")
+                                .help("UUID (or unique prefix) of the legacy entry to upgrade")
+                                .required(true),
+                        ),
+                )
+                .subcommand(
                     Command::new("pubkey")
                         .about("Show your public key")
                         .arg(

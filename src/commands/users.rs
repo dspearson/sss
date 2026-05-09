@@ -8,7 +8,7 @@ use std::path::Path;
 use crate::{
     commands::utils::{create_keystore, get_password_if_protected, get_system_username},
     config::get_project_config_path,
-    constants::{DEFAULT_USERNAME_FALLBACK, ERR_NO_PROJECT_CONFIG},
+    constants::DEFAULT_USERNAME_FALLBACK,
     crypto::{KeyPair, PublicKey, Suite, suite_for},
     project::ProjectConfig,
 };
@@ -41,8 +41,7 @@ pub fn handle_users(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<(
 
 fn handle_users_list() -> Result<()> {
     let config_path = get_project_config_path()?;
-    let config = ProjectConfig::load_from_file(&config_path)
-        .map_err(|_| anyhow!(ERR_NO_PROJECT_CONFIG))?;
+    let config = ProjectConfig::load_from_file(&config_path)?;  // PQSIG-06: unmask so D-10 string flows through
 
     let users = config.list_users();
     if users.is_empty() {
@@ -114,8 +113,8 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
     };
 
     let config_path = get_project_config_path()?;
-    let mut config = ProjectConfig::load_from_file(&config_path)
-        .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
+    let mut config = ProjectConfig::load_from_file(&config_path)?;  // PQSIG-06: unmask so D-10 string flows through
+    config.require_signed(&config_path)?;  // PQSIG-06: refuse to mutate an unsigned envelope
 
     // Reject mismatches between the provided key type and the project suite.
     let suite = config.suite()?;
@@ -211,6 +210,7 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
     // Load project config once.
     let config_path = get_project_config_path()?;
     let mut config = ProjectConfig::load_from_file(&config_path)?;
+    config.require_signed(&config_path)?;  // PQSIG-06: refuse to mutate an unsigned envelope
     let suite = config.suite()?;
 
     // Check if user exists
@@ -336,8 +336,7 @@ fn handle_users_info(sub_matches: &ArgMatches) -> Result<()> {
     let username = sub_matches.get_one::<String>("username").unwrap();
 
     let config_path = get_project_config_path()?;
-    let config = ProjectConfig::load_from_file(&config_path)
-        .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
+    let config = ProjectConfig::load_from_file(&config_path)?;  // PQSIG-06: unmask so D-10 string flows through; read-only, no require_signed
 
     if let Some(user_config) = config.users.get(username) {
         println!("User: {username}");
@@ -384,8 +383,8 @@ fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
     }
 
     let config_path = crate::config::get_project_config_path()?;
-    let mut config = ProjectConfig::load_from_file(&config_path)
-        .map_err(|_| anyhow!("No project configuration found. Run 'sss init' first."))?;
+    let mut config = ProjectConfig::load_from_file(&config_path)?;  // PQSIG-06: unmask so D-10 string flows through
+    config.require_signed(&config_path)?;  // PQSIG-06: refuse to mutate an unsigned envelope
 
     let user = config.users.get_mut(username.as_str()).ok_or_else(|| {
         anyhow!("User '{}' not found in project", username)

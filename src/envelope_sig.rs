@@ -368,4 +368,67 @@ mod tests {
             verify_envelope_signature(&cfg, std::path::Path::new("/dev/null")).unwrap();
         }
     }
+
+    /// Test: all-fail path lists every attempted username in the error message (D-05).
+    ///
+    /// 3 users (alice, bob, carol) all advertise the *wrong* sig pubkey.
+    /// The real signer's pubkey is not present in the envelope.
+    /// verify_envelope_signature must return an error that names all three users
+    /// and includes "verification failed for all attempted users".
+    #[test]
+    fn verify_all_fail_lists_users() {
+        use crate::project::{EnvelopeMeta, ProjectConfig, UserConfig};
+        use std::collections::HashMap;
+
+        // Real signer — never advertised by any user.
+        let real_ed = Ed448Standard::generate().unwrap();
+        let real_pq = MlDsa65Fips204::generate().unwrap();
+
+        // Wrong signer — advertised by every user.
+        let wrong_ed = Ed448Standard::generate().unwrap();
+        let wrong_ed_pk_bytes = Ed448Standard::verifying_key_to_bytes(
+            &Ed448Standard::verifying_key(&wrong_ed),
+        );
+        let wrong_pq = MlDsa65Fips204::generate().unwrap();
+        let wrong_pq_pk_bytes = MlDsa65Fips204::verifying_key_to_bytes(
+            &MlDsa65Fips204::verifying_key(&wrong_pq),
+        );
+        let wrong_ed_pk_b64 = BASE64_STANDARD.encode(&wrong_ed_pk_bytes);
+        let wrong_pq_pk_b64 = BASE64_STANDARD.encode(&wrong_pq_pk_bytes);
+
+        let mut users = HashMap::new();
+        for name in &["alice", "bob", "carol"] {
+            users.insert((*name).to_string(), UserConfig {
+                public: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                sealed_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+                added: "2026-05-09T00:00:00Z".to_string(),
+                hybrid_public: None,
+                sig_ed448_public: Some(wrong_ed_pk_b64.clone()),
+                sig_mldsa65_public: Some(wrong_pq_pk_b64.clone()),
+            });
+        }
+        let mut cfg = ProjectConfig {
+            version: "2.0".to_string(),
+            format_version: 2,
+            created: "2026-05-09T00:00:00Z".to_string(),
+            users,
+            envelope: None,
+            ..ProjectConfig::default()
+        };
+        let payload = build_envelope_payload(&cfg);
+        // Sign with the real keypair (none of the users advertise it).
+        let sig = sign_envelope(&real_ed, &real_pq, &payload).unwrap();
+        cfg.envelope = Some(EnvelopeMeta { sig: Some(sig) });
+
+        let err = verify_envelope_signature(&cfg, std::path::Path::new("/dev/null"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("alice"), "error must list alice, got: {err}");
+        assert!(err.contains("bob"),   "error must list bob, got: {err}");
+        assert!(err.contains("carol"), "error must list carol, got: {err}");
+        assert!(
+            err.contains("verification failed for all attempted users"),
+            "error must announce all-fail, got: {err}"
+        );
+    }
 }

@@ -1032,7 +1032,157 @@ There is no soft-fail mode, no warning-only mode, and no `--ignore-signature-err
 - Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`, crates `trelis-primitives::Ed448Standard` (`crates/trelis-primitives/src/ed448_scheme.rs`) + `trelis-primitives::MlDsa65Fips204` (`crates/trelis-primitives/src/mldsa.rs`).
 - Test vectors: `vectors/hybrid-sig.json` in trelis upstream (sanity-check reference).
 
-Phase 19 will add a sibling `## .sss.toml Envelope Signatures (v2)` section using a different signing context (`b"sss-toml-envelope-sig-v1"`) and an envelope-level signing-key model.
+## Envelope Signatures (v2)
+
+Phase 19 introduces hybrid AND-composition signatures over the entire `.sss.toml`
+project envelope. The signed payload covers `version`, `created`, and the canonical
+(sorted-by-username) `users` table including each user's `public`, `sealed_key`,
+`added`, `hybrid_public`, `sig_ed448_public`, and `sig_mldsa65_public`.
+Verification at load time is non-negotiable for `format_version >= 2`; the legacy v1
+schema remains readable but is rejected for any mutating verb (see PQSIG-06 below).
+
+### Cryptographic Primitives
+
+- **Ed448** (RFC 8032 EdDSA): classical signature leg.
+- **ML-DSA-65** (FIPS 204): post-quantum signature leg.
+- Both legs MUST verify (AND-composition); single-leg success is rejected
+  (T-19-06 mitigation).
+
+### Domain-Separation Context
+
+The signed payload is prefixed with the byte-exact ASCII string used as the signing
+context (D-02):
+
+```rust
+pub const ENVELOPE_SIG_CONTEXT: &[u8] = b"sss-toml-envelope-sig-v1";
+```
+
+This MUST differ from the keystore entry signature context
+(`b"sss-keystore-entry-sig-v1"`) to prevent cross-context replay (T-19-01). Any
+change to either context requires a `format_version` bump and must update both this
+section and the corresponding drift-detector unit test.
+
+### Canonical Signed Payload (D-03)
+
+Field order is fixed; each variable-length field is preceded by a `u32`-BE length
+prefix to prevent length-extension / boundary-shift attacks (T-19-02):
+
+| # | Field | Width | Notes |
+|---|-------|-------|-------|
+| 1 | `version` | u32-BE length + UTF-8 bytes | e.g. `"1.0"` or `"2.0"` |
+| 2 | `created` | u32-BE length + UTF-8 bytes | RFC 3339 envelope creation timestamp |
+| 3..N | Per-user entries, sorted by username | — | See sub-table below |
+
+Per-user fields (each prefixed with u32-BE length):
+
+| Sub-field | Notes |
+|-----------|-------|
+| username | UTF-8 bytes |
+| `public` | base64 X25519 KEM pubkey (classic identity anchor) |
+| `sealed_key` | base64 sealed repository key (per-user) |
+| `added` | RFC 3339 timestamp |
+| `hybrid_public` | base64; zero-length prefix if `None` |
+| `sig_ed448_public` | base64 Ed448 verifying key; zero-length prefix if `None` |
+| `sig_mldsa65_public` | base64 ML-DSA-65 verifying key; zero-length prefix if `None` |
+
+The exact field list and order is defined by `src/envelope_sig.rs::build_envelope_payload`.
+Any change requires a `format_version` bump.
+
+### Real `.sss.toml` Schema (Post-Phase-19, Abridged)
+
+```toml
+version = "2.0"
+created = "2026-05-09T12:34:56Z"
+format_version = 2
+
+[users.alice]
+public = "..."              # base64 X25519 KEM pubkey (classic identity anchor)
+sealed_key = "..."          # base64 sealed repository key (per user)
+added = "2026-05-09T12:34:56Z"
+hybrid_public = "..."       # base64 hybrid KEM pubkey (Phase 18; Some in v2)
+sig_ed448_public = "..."    # base64 Ed448 verifying key (Phase 19; Some in v2)
+sig_mldsa65_public = "..."  # base64 ML-DSA-65 verifying key (Phase 19; Some in v2)
+
+[envelope.sig]
+ed448 = "..."     # base64 Ed448 signature over canonical payload (114 bytes)
+mldsa65 = "..."   # base64 ML-DSA-65 signature over canonical payload (3309 bytes)
+
+# rotation, hooks, ignore, key, secrets_filename, secrets_suffix all
+# preserved unchanged from v1 schema.
+```
+
+Fields `salt`, `recovery_share`, per-user `encrypted_share`, and `public_key` do NOT
+exist in `ProjectConfig` / `UserConfig` and MUST NOT appear in the schema.
+
+### Verification Algorithm (D-05 Try-All-Users)
+
+1. Build the canonical payload from the in-memory config using
+   `src/envelope_sig.rs::build_envelope_payload`.
+2. Extract `[envelope.sig]` — fail with "missing sig table" if absent.
+3. Iterate `users` in sorted-by-username order (BTreeMap-style determinism).
+4. For each user that has BOTH `sig_ed448_public` and `sig_mldsa65_public`:
+   base64-decode both, then attempt `verify_envelope(ed448_pk, mldsa_pk, payload, sig)`.
+5. The first successful verification wins; return `Ok(())`.
+6. If all users fail, return a hard error listing every attempted username and
+   the per-user failure reason (including which leg failed).
+
+### Sign-on-Write Call Sites (D-17)
+
+The envelope is re-signed on disk after every mutation:
+
+| Command | Writer |
+|---------|--------|
+| `sss init --crypto hybrid` | First user (the initialising user) |
+| `sss users add` | Invoking user |
+| `sss users remove` | Invoking user (sign AFTER `RotationManager` completes) |
+| `sss migrate` | Invoking user |
+| `sss envelope upgrade-sig` | First keystore-resolvable user |
+
+Atomic writes go through `tempfile::NamedTempFile::new_in(parent).persist(target)`
+to prevent torn files (D-13).
+
+### `format_version` Dispatch (D-09)
+
+| Version | Behaviour |
+|---------|-----------|
+| 1 (legacy / absent) | Read-only verbs allowed (classic envelopes); hybrid v1 envelopes are rejected for any mutating verb with the PQSIG-06 actionable error |
+| 2 (signed) | Verify-on-read; reject if any leg fails |
+| ≥ 3 (future) | Hard-rejected as forward-incompatible with "upgrade sss" message |
+
+### PQSIG-06 Actionable Error (D-10)
+
+Mutating verbs invoked against a v1 envelope return the byte-exact text:
+
+```
+<PATH>: unsigned envelope (format_version=1); run `sss envelope upgrade-sig` to sign in place
+```
+
+Where `<PATH>` is the resolved path passed to `require_signed` (typically the
+absolute path to `.sss.toml` discovered by `get_project_config_path()`).
+
+This string is asserted byte-exact by `neg_04_unsigned_v2_exact_string` in
+`tests/envelope_signature_negative_paths.rs`.
+
+### Threat Model
+
+| Threat ID | Description | Mitigation |
+|-----------|-------------|-----------|
+| T-19-01 | Cross-context replay (envelope ↔ keystore) | Distinct context bytes (`ENVELOPE_SIG_CONTEXT` ≠ `KEYSTORE_SIG_CONTEXT`); assert_ne unit test |
+| T-19-02 | Canonicalisation drift | u32-BE length-prefixed payload; determinism test |
+| T-19-03 | sign↔verify drift | proptest round-trip across 50 arbitrary envelopes |
+| T-19-04 | Unsigned write reaches disk | Sign-on-write at all 5 mutating sites + NEG-04 integration test |
+| T-19-05 | Verify-bypass on load | Single dispatch loader + verify-passes-round-trip test |
+| T-19-06 | Single-leg accept | AND-composition verifier + NEG-01/NEG-02 (each leg tamper is detected independently) |
+| T-19-07 | Canonicalisation bypass (payload tamper) | Length-prefixed payload + NEG-03 (per-user `sealed_key` tamper detected) |
+| T-19-08 | Vendor drift (Trelis dependency) | SHA pinned in `Cargo.toml` (`5374dff482ba94a94695794b5e4554f908eb0d4d`); CI grep invariant (count = 3) |
+
+### Cross-References
+
+- Canonical implementation: `src/envelope_sig.rs` (`ENVELOPE_SIG_CONTEXT`, `build_envelope_payload`, `sign_envelope`, `verify_envelope`, `verify_envelope_signature`).
+- Schema: `src/project.rs` (`ProjectConfig`, `UserConfig`, `EnvelopeMeta`, `EnvelopeSig`, `require_signed`).
+- Sign-on-write wiring: `src/commands/init.rs`, `src/commands/users.rs`, `src/commands/migrate.rs`, `src/commands/envelope.rs`.
+- Executable spec (regression tests): `tests/envelope_signature_negative_paths.rs` (7 sign-on-write + round-trip + upgrade-sig + 4 NEG tests).
+- Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`.
 
 ## References
 

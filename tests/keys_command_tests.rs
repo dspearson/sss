@@ -101,7 +101,15 @@ fn build_app() -> Command {
                     Command::new("remove-passphrase")
                         .arg(Arg::new("key-id").required(true)),
                 )
-                .subcommand(Command::new("show")),
+                .subcommand(Command::new("show"))
+                // Phase 18-04 / PQSIG-03 part 2: `upgrade` accepts ONLY a
+                // required `<uuid>` positional. D-17: NO `--allow-unsigned`
+                // flag — clap-level rejection is asserted in
+                // `keys_18_upgrade_rejects_allow_unsigned_flag` below.
+                .subcommand(
+                    Command::new("upgrade")
+                        .arg(Arg::new("uuid").required(true)),
+                ),
         )
 }
 
@@ -495,5 +503,140 @@ fn keys_13_rotate_outside_project_errors() {
     assert!(
         msg.contains("No project configuration found"),
         "expected project-config error, got: {msg}"
+    );
+}
+
+// ============================================================
+// Phase 18-04 / PQSIG-03 part 2 — `keys list` legacy tag &
+// `keys upgrade` CLI dispatch
+// ============================================================
+//
+// D-18: `keys list` adds a trailing ` (unsigned-legacy)` tag to v1 entries
+// and emits NO tag for v2 entries.
+// D-17: `keys upgrade <uuid>` has NO `--allow-unsigned` flag.
+//
+// IMPLEMENTATION NOTE: keys_14..16 do NOT capture process stdout. The
+// `gag::BufferRedirect::stdout()` helper that was tried first does not
+// cooperate with cargo's test harness (which has already taken control of
+// stdout fd before the test starts), so captured bytes were always empty.
+// Instead, the production handler `handle_keys_list` delegates per-line
+// rendering to `sss::commands::keys::format_list_entry`, a pure
+// `(key_id, &StoredKeyPair, is_current) -> String` function. We seed
+// real keystores via the same helpers production uses, then call
+// `keystore.list_key_ids()` + `format_list_entry()` directly. This tests
+// the exact rendering path without process-IO capture.
+
+#[test]
+#[serial]
+fn keys_14_list_v1_entry_shows_unsigned_legacy_tag() {
+    let tmp = TempDir::new().unwrap();
+    let id = seed_classic_unprotected(tmp.path()); // store_keypair → format_version=1
+
+    let ks = fast_keystore(tmp.path());
+    let entries = ks.list_key_ids().expect("list");
+    let stored = entries
+        .iter()
+        .find(|(k, _)| k == &id)
+        .map(|(_, s)| s)
+        .expect("seeded v1 id present in listing");
+    assert_eq!(stored.format_version, 1, "seed must produce v1 entry");
+
+    let line = sss::commands::keys::format_list_entry(&id, stored, true);
+    assert!(
+        line.contains("(unsigned-legacy)"),
+        "v1 entry must be tagged in `keys list` output, got: {line}"
+    );
+}
+
+#[cfg(feature = "hybrid")]
+#[test]
+#[serial]
+fn keys_15_list_v2_entry_omits_legacy_tag() {
+    let tmp = TempDir::new().unwrap();
+
+    // Seed a v2 entry directly via store_dual_keypair.
+    let ks = fast_keystore(tmp.path());
+    let classic = sss::crypto::ClassicKeyPair::generate().unwrap();
+    let hybrid = sss::crypto::hybrid::HybridKeyPair::generate().unwrap();
+    let id = ks
+        .store_dual_keypair(Some(&classic), Some(&hybrid), Some("v2_pw"))
+        .expect("seed v2 entry");
+
+    let entries = ks.list_key_ids().expect("list");
+    let stored = entries
+        .iter()
+        .find(|(k, _)| k == &id)
+        .map(|(_, s)| s)
+        .expect("seeded v2 id present in listing");
+    assert_eq!(stored.format_version, 2, "seed must produce v2 entry");
+
+    let line = sss::commands::keys::format_list_entry(&id, stored, true);
+    assert!(
+        !line.contains("(unsigned-legacy)"),
+        "v2 entry MUST NOT carry the legacy tag, got: {line}"
+    );
+}
+
+#[cfg(feature = "hybrid")]
+#[test]
+#[serial]
+fn keys_16_list_mixed_keystore_tags_per_entry() {
+    let tmp = TempDir::new().unwrap();
+
+    // Seed one v1 (classic store_keypair) and one v2 (store_dual_keypair).
+    let ks = fast_keystore(tmp.path());
+    let classic_v1 = KeyPair::generate().unwrap();
+    let v1_id = ks.store_keypair(&classic_v1, None).expect("seed v1");
+
+    let classic_v2 = sss::crypto::ClassicKeyPair::generate().unwrap();
+    let hybrid_v2 = sss::crypto::hybrid::HybridKeyPair::generate().unwrap();
+    let v2_id = ks
+        .store_dual_keypair(Some(&classic_v2), Some(&hybrid_v2), Some("v2pw"))
+        .expect("seed v2");
+
+    let entries = ks.list_key_ids().expect("list");
+    let v1_stored = entries
+        .iter()
+        .find(|(k, _)| k == &v1_id)
+        .map(|(_, s)| s)
+        .expect("v1 id present");
+    let v2_stored = entries
+        .iter()
+        .find(|(k, _)| k == &v2_id)
+        .map(|(_, s)| s)
+        .expect("v2 id present");
+    assert_eq!(v1_stored.format_version, 1);
+    assert_eq!(v2_stored.format_version, 2);
+
+    let v1_line = sss::commands::keys::format_list_entry(&v1_id, v1_stored, false);
+    let v2_line = sss::commands::keys::format_list_entry(&v2_id, v2_stored, false);
+    assert!(
+        v1_line.contains("(unsigned-legacy)"),
+        "v1 line must be tagged: {v1_line}"
+    );
+    assert!(
+        !v2_line.contains("(unsigned-legacy)"),
+        "v2 line must NOT be tagged: {v2_line}"
+    );
+}
+
+#[test]
+#[serial]
+fn keys_17_upgrade_rejects_allow_unsigned_flag() {
+    // D-17 / T-18-04-06: clap parser MUST reject `--allow-unsigned` on the
+    // `upgrade` subcommand because upgrade IS the upgrade path. We mirror
+    // the production registration (which has no such arg) and assert that
+    // try_get_matches_from returns an error when the flag is supplied.
+    let argv = &[
+        "sss",
+        "keys",
+        "upgrade",
+        "deadbeef",
+        "--allow-unsigned",
+    ];
+    let result = build_app().try_get_matches_from(argv);
+    assert!(
+        result.is_err(),
+        "clap MUST reject --allow-unsigned on `keys upgrade`; D-17"
     );
 }

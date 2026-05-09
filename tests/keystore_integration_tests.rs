@@ -751,3 +751,202 @@ fn test_load_hybrid_keypair_passwordless_roundtrip() -> Result<()> {
 
     Ok(())
 }
+
+// ============================================================
+// Phase 18-04 (PQSIG-03 part 2) — `upgrade_keypair_in_place`
+// ============================================================
+//
+// Tests the in-place v1 → v2 re-sign path:
+//   * v1 entry written by `store_keypair` (which still writes
+//     format_version=1 today — D-10),
+//   * call `keystore.upgrade_keypair_in_place(&key_id, password)`,
+//   * on disk we expect format_version=2 + 4 sig fields + a `[signature]`
+//     block; subsequent `load_keypair(.., None, false)` (NO --allow-unsigned)
+//     must succeed because the entry is now signed.
+//
+// All tests use `interactive` KDF for speed.
+
+/// Helper: read the on-disk TOML for a key id and parse it back to
+/// `StoredKeyPair` so we can assert structural properties without going
+/// through `load_keypair`.
+///
+/// `temp_dir_root` is the value passed to `Keystore::new_with_config_dir_and_kdf`
+/// (the temp_dir.path()). Keystore appends `sss/keys/` under it.
+#[cfg(feature = "hybrid")]
+fn read_stored(temp_dir_root: &std::path::Path, key_id: &str) -> sss::keystore::StoredKeyPair {
+    let path = temp_dir_root
+        .join("sss")
+        .join("keys")
+        .join(format!("{key_id}.toml"));
+    let content = std::fs::read_to_string(&path).expect("read key file");
+    toml::from_str(&content).expect("parse stored toml")
+}
+
+/// Test 1: upgrade v1 → v2 succeeds; subsequent load (no --allow-unsigned)
+/// works because the entry is now signed; signature verifies.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_v1_to_v2_signed_load_succeeds() -> Result<()> {
+    let (keystore, temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+    let password = "upgrade_pw";
+
+    // store_keypair writes v1 today (D-10).
+    let key_id = keystore.store_keypair(&keypair, Some(password))?;
+    let v1 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(v1.format_version, 1, "precondition: store_keypair must write v1");
+    assert!(v1.signature.is_none(), "precondition: v1 has no signature");
+
+    // Upgrade in place.
+    keystore.upgrade_keypair_in_place(&key_id, Some(password))?;
+
+    // On-disk shape: v2 + sig fields populated.
+    let v2 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(v2.format_version, 2, "post-upgrade format_version must be 2");
+    assert!(v2.sig_ed448_public_key.is_some(), "Ed448 pubkey must be present");
+    assert!(v2.sig_mldsa65_public_key.is_some(), "ML-DSA-65 pubkey must be present");
+    assert!(v2.sig_ed448_encrypted_secret_key.is_some(), "Ed448 SK must be present");
+    assert!(v2.sig_mldsa65_encrypted_secret_key.is_some(), "ML-DSA-65 SK must be present");
+    assert!(v2.signature.is_some(), "[signature] block must be present");
+
+    // Load WITHOUT --allow-unsigned: succeeds because entry is now signed.
+    let loaded = keystore.load_keypair(&key_id, Some(password), false)?;
+    assert_eq!(
+        loaded.public_key().to_base64(),
+        keypair.public_key().to_base64(),
+        "post-upgrade public key must match pre-upgrade byte-identically"
+    );
+
+    Ok(())
+}
+
+/// Test 2: upgrading an already-signed (v2) entry refuses with `already signed`.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_v2_refuses_with_already_signed_error() -> Result<()> {
+    let (keystore, _temp_dir) = create_temp_keystore()?;
+    let classic = ClassicKeyPair::generate()?;
+    let hybrid = HybridKeyPair::generate()?;
+    let password = "v2_pw";
+
+    // store_dual_keypair writes format_version=2.
+    let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some(password))?;
+
+    let err = keystore
+        .upgrade_keypair_in_place(&key_id, Some(password))
+        .expect_err("upgrade on v2 must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("already signed"),
+        "expected 'already signed' error, got: {msg}"
+    );
+
+    Ok(())
+}
+
+/// Test 3: wrong passphrase fails BEFORE any write — the v1 file is left
+/// untouched (T-18-04-04). This is the "fail fast" property: the keystore
+/// probes the existing KEK by decrypting `encrypted_secret_key` before
+/// generating new sig material.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_wrong_passphrase_fails_before_write() -> Result<()> {
+    let (keystore, temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+    let password = "right_pw";
+
+    let key_id = keystore.store_keypair(&keypair, Some(password))?;
+    let path = temp_dir
+        .path()
+        .join("sss")
+        .join("keys")
+        .join(format!("{key_id}.toml"));
+    let v1_bytes = std::fs::read(&path)?;
+
+    // Wrong passphrase — must error.
+    let err = keystore
+        .upgrade_keypair_in_place(&key_id, Some("wrong_pw"))
+        .expect_err("wrong passphrase must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("passphrase verification failed"),
+        "expected 'passphrase verification failed', got: {msg}"
+    );
+
+    // File untouched.
+    let after_bytes = std::fs::read(&path)?;
+    assert_eq!(
+        v1_bytes, after_bytes,
+        "v1 file must be byte-identical after a failed upgrade"
+    );
+
+    // Still parses as v1.
+    let still_v1 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(still_v1.format_version, 1);
+    assert!(still_v1.signature.is_none());
+
+    Ok(())
+}
+
+/// Test 4: identity-bearing fields (uuid, public_key, hybrid_public_key,
+/// created_at) are preserved byte-identically across the upgrade. This is
+/// the "upgrade is metadata-only re-signing, not a re-keying" invariant.
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_preserves_identity_fields_byte_identical() -> Result<()> {
+    let (keystore, temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+    let password = "identity_pw";
+
+    let key_id = keystore.store_keypair(&keypair, Some(password))?;
+    let v1 = read_stored(temp_dir.path(), &key_id);
+    let v1_uuid = v1.uuid.clone();
+    let v1_public_key = v1.public_key.clone();
+    let v1_hybrid_public_key = v1.hybrid_public_key.clone(); // None for classic-only
+    let v1_created_at = v1.created_at;
+
+    keystore.upgrade_keypair_in_place(&key_id, Some(password))?;
+
+    let v2 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(v2.uuid, v1_uuid, "uuid must be preserved");
+    assert_eq!(v2.public_key, v1_public_key, "public_key must be preserved");
+    assert_eq!(
+        v2.hybrid_public_key, v1_hybrid_public_key,
+        "hybrid_public_key must be preserved"
+    );
+    assert_eq!(v2.created_at, v1_created_at, "created_at must be preserved");
+
+    Ok(())
+}
+
+/// Test 5: passwordless v1 entry upgrades cleanly (no KEK probe needed,
+/// sig SKs stored as base64 raw).
+#[cfg(feature = "hybrid")]
+#[test]
+fn test_upgrade_passwordless_v1_to_v2() -> Result<()> {
+    let (keystore, temp_dir) = create_temp_keystore()?;
+    let keypair = KeyPair::generate()?;
+
+    // Passwordless v1.
+    let key_id = keystore.store_keypair(&keypair, None)?;
+    let v1 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(v1.format_version, 1);
+    assert!(!v1.is_password_protected);
+
+    // Upgrade with password=None (passwordless path skips KEK probe).
+    keystore.upgrade_keypair_in_place(&key_id, None)?;
+
+    let v2 = read_stored(temp_dir.path(), &key_id);
+    assert_eq!(v2.format_version, 2);
+    assert!(!v2.is_password_protected, "is_password_protected must be preserved");
+    assert!(v2.signature.is_some());
+
+    // Subsequent load without --allow-unsigned succeeds.
+    let loaded = keystore.load_keypair(&key_id, None, false)?;
+    assert_eq!(
+        loaded.public_key().to_base64(),
+        keypair.public_key().to_base64()
+    );
+
+    Ok(())
+}

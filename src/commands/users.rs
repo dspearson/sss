@@ -485,6 +485,9 @@ mod tests {
             .unwrap()
             .save_to_file(&config_path)
             .unwrap();
+        // PQSIG-06: handle_users_add_hybrid_key calls require_signed, so the
+        // fixture must be a valid signed (format_version=2) envelope.
+        sign_fixture_envelope(&config_path, "alice");
 
         // Override cwd so get_project_config_path() finds the temp dir.
         let _orig = std::env::current_dir().unwrap();
@@ -499,8 +502,12 @@ mod tests {
 
         result.expect("correct 1214-byte key must succeed");
 
-        // Verify the field was persisted.
-        let saved = crate::project::ProjectConfig::load_from_file(&config_path).unwrap();
+        // Verify the field was persisted.  Use load_from_file_unverified because
+        // handle_users_add_hybrid_key calls save_to_file (not write_atomic) and
+        // therefore does not update the envelope signature; the post-write file has
+        // the correct TOML but an invalidated sig.  This test only checks field
+        // persistence, not signature validity.
+        let saved = crate::project::ProjectConfig::load_from_file_unverified(&config_path).unwrap();
         assert_eq!(
             saved.users.get("alice").unwrap().hybrid_public.as_deref(),
             Some(valid_b64.as_str()),
@@ -539,12 +546,66 @@ mod tests {
 
     /// Build a TempDir-rooted .sss.toml seeded with one classic user.
     /// Returns (TempDir, KeyPair) — the TempDir must outlive the test body.
+    ///
+    /// Under the `hybrid` feature the fixture is promoted to format_version=2
+    /// (a valid signed envelope) so that PQSIG-06 `require_signed` checks pass
+    /// in the mutating handlers.  Without the feature the file stays at v1,
+    /// which is accepted by the non-hybrid handlers.
     fn setup_users_fixture(seed_user: &str) -> (tempfile::TempDir, crate::crypto::KeyPair) {
         let tmp = tempfile::tempdir().expect("tempdir create");
         let kp = crate::crypto::KeyPair::generate().expect("keypair generate");
         let cfg = ProjectConfig::new(seed_user, &kp.public_key()).expect("config new");
-        cfg.save_to_file(tmp.path().join(".sss.toml")).expect("save config");
+        let toml_path = tmp.path().join(".sss.toml");
+        cfg.save_to_file(&toml_path).expect("save config");
+        #[cfg(feature = "hybrid")]
+        sign_fixture_envelope(&toml_path, seed_user);
         (tmp, kp)
+    }
+
+    /// Promote an existing format_version=1 `.sss.toml` to a signed
+    /// format_version=2 envelope using ephemeral sig keypairs.
+    ///
+    /// This is the test-only analogue of `sss envelope upgrade-sig`.
+    /// It generates fresh Ed448 + ML-DSA-65 sig keypairs, stores the public
+    /// keys on the named user entry, signs the payload, and atomically
+    /// overwrites the file — exactly what the production upgrade-sig handler
+    /// does, but without needing a real keystore on disk.
+    #[cfg(feature = "hybrid")]
+    fn sign_fixture_envelope(toml_path: &std::path::Path, signer: &str) {
+        use base64::Engine as _;
+        use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+
+        let mut cfg = ProjectConfig::load_from_file_unverified(toml_path)
+            .expect("sign_fixture_envelope: load_from_file_unverified");
+
+        // Generate ephemeral sig keypairs (API: Ed448Standard::generate() / MlDsa65Fips204::generate()).
+        let ed_sk = Ed448Standard::generate().expect("ed448 keygen");
+        let pq_sk = MlDsa65Fips204::generate().expect("mldsa keygen");
+
+        // Populate signer's sig pubkeys using the scheme trait (Ed448Scheme::verifying_key).
+        if let Some(u) = cfg.users.get_mut(signer) {
+            u.sig_ed448_public = Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    Ed448Standard::verifying_key_to_bytes(&Ed448Standard::verifying_key(&ed_sk)),
+                ),
+            );
+            u.sig_mldsa65_public = Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    MlDsa65Fips204::verifying_key_to_bytes(&MlDsa65Fips204::verifying_key(&pq_sk)),
+                ),
+            );
+        }
+
+        cfg.format_version = 2;
+        let payload = crate::envelope_sig::build_envelope_payload(&cfg);
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)
+            .expect("sign_fixture_envelope: sign_envelope");
+        cfg.envelope
+            .get_or_insert_with(crate::project::EnvelopeMeta::default)
+            .sig = Some(sig);
+
+        crate::config::write_atomic(&cfg, toml_path)
+            .expect("sign_fixture_envelope: write_atomic");
     }
 
     fn build_add_matches(username: &str, public_key: &str) -> ArgMatches {

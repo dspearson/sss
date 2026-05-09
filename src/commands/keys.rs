@@ -1930,10 +1930,29 @@ mod tests {
         );
     }
 
+    // The "duplicate keypair" guard in handle_keys_generate_command uses
+    // get_current_keypair(None), which refuses format_version=1 (unsigned legacy)
+    // entries introduced by Phase 18.  seed_unprotected_classic produces a v1
+    // entry; upgrade_keypair_in_place promotes it to v2 so the guard can see it.
+    // This test therefore requires the hybrid feature.
+    #[cfg(feature = "hybrid")]
     #[test]
     fn test_generate_classic_existing_keypair_without_force_errors() {
         let tmp = TempDir::new().unwrap();
-        seed_unprotected_classic(tmp.path());
+        let key_id = seed_unprotected_classic(tmp.path());
+
+        // Promote the v1 entry to a signed v2 entry so get_current_keypair(None)
+        // can read it and the duplicate guard fires.
+        {
+            use crate::kdf::KdfParams;
+            let ks = crate::keystore::Keystore::new_with_config_dir_and_kdf(
+                tmp.path().to_path_buf(),
+                KdfParams::interactive(),
+                false,
+            )
+            .unwrap();
+            ks.upgrade_keypair_in_place(&key_id, None).unwrap();
+        }
 
         let argv = &[
             "sss",

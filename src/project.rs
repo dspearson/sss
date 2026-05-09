@@ -950,6 +950,48 @@ created = "2026-01-01T00:00:00Z"
         );
     }
 
+    // --- Phase 19 Plan 19-01-01: format_version + [envelope.sig] round-trip ---
+
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn envelope_round_trip() {
+        let keypair = KeyPair::generate().unwrap();
+        let mut config = ProjectConfig::new("alice", &keypair.public_key()).unwrap();
+
+        // Promote to format_version=2 and attach an envelope sig table.
+        config.format_version = 2;
+        config.envelope = Some(EnvelopeMeta {
+            sig: Some(EnvelopeSig {
+                ed448: "AQIDBA==".to_string(),    // 4-byte placeholder, base64
+                mldsa65: "BQYHCA==".to_string(),  // 4-byte placeholder, base64
+            }),
+        });
+
+        let toml = toml::to_string(&config).unwrap();
+        assert!(toml.contains("format_version = 2"), "missing format_version line:\n{toml}");
+        assert!(toml.contains("[envelope.sig]"), "missing [envelope.sig] header:\n{toml}");
+
+        let round: ProjectConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(round.format_version, 2);
+        assert!(round.envelope.is_some());
+        let sig = round.envelope.unwrap().sig.unwrap();
+        assert_eq!(sig.ed448, "AQIDBA==");
+        assert_eq!(sig.mldsa65, "BQYHCA==");
+
+        // Legacy v1 (no format_version, no envelope) still parses with defaults.
+        let legacy_toml = r#"version = "1.0"
+created = "2026-05-09T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-05-09T00:00:00Z"
+"#;
+        let legacy: ProjectConfig = toml::from_str(legacy_toml).unwrap();
+        assert_eq!(legacy.format_version, 1, "missing format_version must default to 1 (D-09)");
+        assert!(legacy.envelope.is_none());
+    }
+
     #[test]
     fn test_userconfig_hybrid_public_roundtrips() {
         // A v1-format file (no hybrid_public) deserialises with hybrid_public = None.

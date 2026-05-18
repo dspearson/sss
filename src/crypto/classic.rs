@@ -39,9 +39,14 @@ pub(crate) fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
     // SAFETY: see module-level comment above; `sodium_init()` is thread-safe and
     // `Once` enforces single-call semantics across the process.
+    #[cfg(not(miri))]
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });
+    // Miri stub: sodium_init() is FFI; AddressSanitizer (Phase 23 MEMSAFE-03) covers
+    // this path under non-miri builds. Under miri we no-op the Once.
+    #[cfg(miri)]
+    INIT.call_once(|| ());
 }
 
 /// Validate and decode base64 string with common checks
@@ -102,11 +107,17 @@ impl RepositoryKey {
         // Closes v2.1 Phase 8 HARDEN-03 documented gap at classic.rs:91.
         // SAFETY: libsodium init via preceding `ensure_sodium_init()`; output buffer
         // matches expected size.
+        #[cfg(not(miri))]
         unsafe {
             sodium::randombytes_buf(
                 key.as_mut_ptr().cast::<std::ffi::c_void>(),
                 SYMMETRIC_KEY_SIZE,
             );
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: randombytes_buf is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `key` stays zero-initialised.
         }
         Self(key)
     }
@@ -305,11 +316,18 @@ impl ClassicKeyPair {
         // SAFETY: `public_key` and `secret_key` are valid PUBLIC_KEY_SIZE / SECRET_KEY_SIZE
         // stack buffers; libsodium's `crypto_box_keypair` writes exactly those byte counts
         // and returns 0 on success. libsodium is initialised via `ensure_sodium_init()`.
+        #[cfg(not(miri))]
         unsafe {
             let ret = sodium::crypto_box_keypair(public_key.as_mut_ptr(), secret_key.as_mut_ptr());
             if ret != 0 {
                 return Err(anyhow!("Failed to generate keypair"));
             }
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: crypto_box_keypair is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. Buffers stay zero-initialised.
+            let _ret: i32 = 0;
         }
 
         Ok(Self {
@@ -337,6 +355,7 @@ impl ClassicKeyPair {
         // `crypto_box_SEEDBYTES`. Returns 0 on success.
         // SAFETY: libsodium init via caller-side ensure_sodium_init(); buffers and lengths
         // match the libsodium contract above.
+        #[cfg(not(miri))]
         unsafe {
             let ret = sodium::crypto_box_seed_keypair(
                 public_key.as_mut_ptr(),
@@ -346,6 +365,12 @@ impl ClassicKeyPair {
             if ret != 0 {
                 return Err(anyhow!("Failed to generate keypair from seed"));
             }
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: crypto_box_seed_keypair is FFI; AddressSanitizer (Phase 23
+            // MEMSAFE-03) covers this path under non-miri builds. Buffers stay zeroed.
+            let _ret: i32 = 0;
         }
 
         Ok(Self {
@@ -471,6 +496,7 @@ pub fn seal_repository_key(
     // exactly what `crypto_box_seal` writes; `repo_key_bytes`/`pk_bytes` are valid
     // pointers. libsodium returns 0 on success and no writes on failure.
     // SAFETY: libsodium init via preceding ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_box_seal(
             sealed.as_mut_ptr(),
@@ -481,6 +507,12 @@ pub fn seal_repository_key(
         if ret != 0 {
             return Err(anyhow!("Failed to seal repository key"));
         }
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_box_seal is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+        // covers this path under non-miri builds. `sealed` stays zero-initialised.
+        let _ret: i32 = 0;
     }
 
     Ok(BASE64_STANDARD.encode(sealed))
@@ -536,6 +568,7 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
     // count `crypto_box_seal_open` writes on success. Input/key pointers refer to live
     // data of validated lengths. Returns 0 on success, !=0 on MAC/decrypt failure.
     // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_box_seal_open(
             opened.as_mut_ptr(),
@@ -547,6 +580,14 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
         if ret != 0 {
             return Err(anyhow!("Failed to open sealed repository key"));
         }
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_box_seal_open is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+        // covers this path under non-miri builds. `opened` stays zero-initialised, which
+        // will fail the downstream base64 / UTF-8 validation — acceptable under miri
+        // because we are not testing crypto, we are testing pure-Rust pointer arithmetic.
+        let _ret: i32 = 0;
     }
 
     let repo_key_b64 = error_helpers::utf8_from_bytes(opened, "opened key")?;
@@ -600,6 +641,7 @@ fn derive_nonce(
     // consistent (ptr, len) pairs. `std::ptr::null()` is accepted by libsodium for the
     // unused salt parameter. Returns 0 on success.
     // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_generichash_blake2b_salt_personal(
             nonce.as_mut_ptr(),                      // output
@@ -616,6 +658,14 @@ fn derive_nonce(
             return Err(anyhow!("BLAKE2b nonce derivation failed"));
         }
     }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_generichash_blake2b_salt_personal is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `nonce` stays
+        // zero-initialised — sufficient for miri to exercise the surrounding pure-Rust
+        // buffer setup, length checks, and the Result<_> drop chain.
+        let _ret: i32 = 0;
+    }
 
     Ok(nonce)
 }
@@ -630,11 +680,17 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     // SAFETY: `nonce` is a valid SYMMETRIC_NONCE_SIZE (24-byte) stack buffer; libsodium's
     // `randombytes_buf` writes exactly SYMMETRIC_NONCE_SIZE bytes. Init guaranteed by
     // the preceding `ensure_sodium_init()` call.
+    #[cfg(not(miri))]
     unsafe {
         sodium::randombytes_buf(
             nonce.as_mut_ptr().cast::<std::ffi::c_void>(),
             SYMMETRIC_NONCE_SIZE,
         );
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: randombytes_buf is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+        // covers this path under non-miri builds. `nonce` stays zero-initialised.
     }
 
     // Allocate space for nonce + ciphertext + MAC
@@ -648,6 +704,7 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     // has matching length; `nonce`/`key.0` are valid pointers of libsodium-expected size.
     // Returns 0 on success.
     // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -660,6 +717,13 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
         if ret != 0 {
             return Err(anyhow!("Encryption failed"));
         }
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_secretbox_xchacha20poly1305_easy is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `result` keeps
+        // its zero-initialised tail (nonce-region already populated above).
+        let _ret: i32 = 0;
     }
 
     Ok(result)
@@ -693,6 +757,7 @@ pub fn encrypt(
     // allocation; `plaintext`/`nonce`/`key.0` are valid pointers. This is the
     // deterministic-nonce variant — nonce derived from project_timestamp/path/plaintext.
     // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -705,6 +770,13 @@ pub fn encrypt(
         if ret != 0 {
             return Err(anyhow!("Encryption failed"));
         }
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_secretbox_xchacha20poly1305_easy is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `result` keeps
+        // its zero-initialised tail.
+        let _ret: i32 = 0;
     }
 
     Ok(result)
@@ -729,6 +801,7 @@ pub fn decrypt(ciphertext_with_nonce: &[u8], key: &Key) -> Result<Vec<u8>> {
     // slices with consistent (ptr, len) pairs. Returns 0 on success; non-zero indicates
     // MAC/decrypt failure with no writes.
     // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
+    #[cfg(not(miri))]
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_open_easy(
             plaintext.as_mut_ptr(),  // plaintext output
@@ -741,6 +814,13 @@ pub fn decrypt(ciphertext_with_nonce: &[u8], key: &Key) -> Result<Vec<u8>> {
         if ret != 0 {
             return Err(anyhow!("Failed to decrypt: invalid ciphertext or key"));
         }
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_secretbox_xchacha20poly1305_open_easy is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `plaintext` keeps
+        // its zero-initialised state.
+        let _ret: i32 = 0;
     }
 
     Ok(plaintext)

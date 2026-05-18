@@ -32,10 +32,18 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     // `path_cstr` is a valid CString built from the file path; `stat` is a stack-allocated
     // `libc::statfs` (zeroed in-place is valid per the C ABI).
     // SAFETY: libc's `statfs` writes the struct on success (return 0) and leaves it
-    // untouched on failure (return -1 with errno set).
+    // untouched on failure (return -1 with errno set). `mem::zeroed::<libc::statfs>()` is
+    // valid because `libc::statfs` has no Drop and all-zero is a valid bit pattern for it.
     unsafe {
         let mut stat: libc::statfs = mem::zeroed();
+        #[cfg(not(miri))]
         let result = libc::statfs(path_cstr.as_ptr(), &raw mut stat);
+        // Miri stub: libc::statfs is FFI; AddressSanitizer (Phase 23 MEMSAFE-03) covers
+        // this path under non-miri builds. `stat` keeps its zeroed state — the downstream
+        // `stat.f_type as i64 == FUSE_SUPER_MAGIC` predicate then reads zeroed memory and
+        // returns false (sane non-FUSE default for miri).
+        #[cfg(miri)]
+        let result: i32 = 0;
 
         if result != 0 {
             return Err(anyhow!(
@@ -65,7 +73,14 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
     // SAFETY: invariants noted above.
     unsafe {
         let mut stat: libc::statfs = mem::zeroed();
+        #[cfg(not(miri))]
         let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
+        // Miri stub: libc::statfs is FFI; AddressSanitizer (Phase 23 MEMSAFE-03) covers
+        // this path under non-miri builds. miri runs on linux-x86_64 only per Phase 22
+        // CONTEXT scope so the macOS arm is dead-code under miri; the cfg-stub is here
+        // for symmetric audit-readiness with the Linux variant.
+        #[cfg(miri)]
+        let result: i32 = 0;
 
         if result != 0 {
             return Err(anyhow!(

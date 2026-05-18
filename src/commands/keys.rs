@@ -424,12 +424,20 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
         // `hash` is sized exactly crypto_hash_sha256_BYTES, the libsodium output count.
         // SAFETY: libsodium's `crypto_hash_sha256` is constant-time and non-failing for
         // this signature; pointer/length invariants noted above.
+        #[cfg(not(miri))]
         unsafe {
             crypto_hash_sha256(
                 hash.as_mut_ptr(),
                 pubkey_bytes.as_ptr(),
                 pubkey_bytes.len() as u64,
             );
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: crypto_hash_sha256 is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `hash` stays zero-initialised, which
+            // produces a non-load-bearing visual artefact downstream — acceptable under
+            // miri because we are not testing crypto output here.
         }
 
         // Generate visual randomart with hex fingerprint (like SSH's VisualHostKey)
@@ -994,12 +1002,18 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
     // SAFETY: `classic_key_bytes` is a valid &[u8] from a String; `classic_hash` is sized
     // exactly crypto_hash_sha256_BYTES (libsodium's output count). The SHA256 FFI is
     // constant-time and non-failing for this signature.
+    #[cfg(not(miri))]
     unsafe {
         crypto_hash_sha256(
             classic_hash.as_mut_ptr(),
             classic_key_bytes.as_ptr(),
             classic_key_bytes.len() as u64,
         );
+    }
+    #[cfg(miri)]
+    {
+        // Miri stub: crypto_hash_sha256 is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+        // covers this path under non-miri builds. `classic_hash` stays zero-initialised.
     }
     generate_randomart(&classic_hash, "CLASSIC");
 
@@ -1012,12 +1026,18 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
         // SAFETY: same invariants as the classic block above — `hybrid_key_bytes` is a
         // valid &[u8] from a String; `hybrid_hash` is sized exactly the libsodium output
         // count. SHA256 FFI is constant-time and non-failing.
+        #[cfg(not(miri))]
         unsafe {
             crypto_hash_sha256(
                 hybrid_hash.as_mut_ptr(),
                 hybrid_key_bytes.as_ptr(),
                 hybrid_key_bytes.len() as u64,
             );
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: crypto_hash_sha256 is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `hybrid_hash` stays zero-initialised.
         }
         generate_randomart(&hybrid_hash, "PQCRYPT");
     }

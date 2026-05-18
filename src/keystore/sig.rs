@@ -9,10 +9,11 @@
 //!
 //! See `docs/CRYPTOGRAPHY.md` §"Keystore Entry Signatures (v2)" for the
 //! authoritative format spec (added in plan unit 18-05).
-
-#![cfg(feature = "hybrid")]
-// Why: signing primitives use trelis-primitives types that are gated on the
-// `hybrid` feature in this crate's Cargo.toml.
+//!
+//! Note: this module is gated on `feature = "hybrid"` by its parent
+//! (`src/keystore/mod.rs`); the inner `#![cfg(...)]` attribute was removed
+//! in Phase 21 Plan 21-02 because it duplicated the parent gate (matches
+//! the Phase 19 D-19 closure pattern for `clippy::duplicated_attributes`).
 
 use anyhow::{anyhow, Result};
 use base64::prelude::BASE64_STANDARD;
@@ -169,7 +170,9 @@ mod tests {
         let payload = build_signed_payload("u", "p", None, None, None, "t");
         // u (4-len + 1 byte) + p (4+1) + None×3 (4+0 each) + "t" (4+1) = 16 + 12 + 5 = 33
         // [0,0,0,1, 'u', 0,0,0,1, 'p', 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,1, 't']
-        assert_eq!(payload.len(), 4 * 6 + 1 + 1 + 0 + 0 + 0 + 1);
+        // Original expression preserved arithmetic structure for readability:
+        // 4 * 6 (six 4-byte length prefixes) + 1 + 1 + 1 (three 1-byte payload chars 'u', 'p', 't').
+        assert_eq!(payload.len(), 4 * 6 + 1 + 1 + 1);
         assert_eq!(&payload[0..4], &[0, 0, 0, 1]);
         assert_eq!(payload[4], b'u');
         // hybrid_pk slot at byte offset 10 (after u + p): 4 zero bytes

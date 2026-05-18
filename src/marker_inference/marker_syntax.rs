@@ -39,10 +39,11 @@ impl MarkerFormat {
         }
     }
 
-    /// Length of the escaped form in bytes
-    // Why: paired companion to MarkerFormat::escaped, used as the byte-budget
-    // helper by inference passes that need to compute output buffer size before
-    // running the escape. External invariant: escaped_len(f) >= escaped(f).len().
+    /// Length of the escaped form in bytes.
+    /// Paired companion to MarkerFormat::escaped — byte-budget helper for
+    /// inference passes that compute output buffer size before running the
+    /// escape. External invariant: escaped_len(f) >= escaped(f).len().
+    // Why: currently exercised only via downstream property tests, so the lib-only compilation flags it as dead code.
     #[allow(dead_code)]
     pub fn escaped_len(self) -> usize {
         match self {
@@ -200,19 +201,14 @@ pub fn contains_nested_markers(content: &str) -> bool {
     let mut byte_pos = 0;
     while byte_pos < bytes.len() {
         let rest = &content[byte_pos..];
-        let after_prefix = if rest.starts_with("o+") {
-            Some(&rest[2..])
-        } else if rest.starts_with('⊕') {
-            Some(&rest['⊕'.len_utf8()..])
-        } else {
-            None
-        };
-        if let Some(after) = after_prefix {
-            if let Some(ch) = after.chars().next() {
-                if DELIMITER_PAIRS.iter().any(|(o, _)| *o == ch) {
-                    return true;
-                }
-            }
+        let after_prefix = rest
+            .strip_prefix("o+")
+            .or_else(|| rest.strip_prefix('⊕'));
+        if let Some(after) = after_prefix
+            && let Some(ch) = after.chars().next()
+            && DELIMITER_PAIRS.iter().any(|(o, _)| *o == ch)
+        {
+            return true;
         }
         // Advance one char
         // INVARIANT: loop guard `byte_pos < bytes.len()` guarantees rest is

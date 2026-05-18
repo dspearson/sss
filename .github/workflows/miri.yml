@@ -1,0 +1,111 @@
+# Miri — weekly UB detection on pure-Rust safe wrappers (MEMSAFE-02)
+#
+# Purpose
+# -------
+# Catch undefined behaviour in pure-Rust unsafe pointer arithmetic — primarily
+# the 5 `ptr::read_volatile` zeroisation sites in `src/crypto/hybrid.rs`, plus
+# the scanner regex compilation paths and the marker_inference pure-Rust
+# string-manipulation paths. Miri runs against the safe Rust wrappers under
+# a pinned nightly toolchain; the 17 production FFI sites (libsodium + libc
+# + trelis) are cfg-stubbed out so miri does NOT attempt to execute them.
+# Phase 23 MEMSAFE-03 covers the FFI surface via AddressSanitizer.
+#
+# Decision references
+# -------------------
+# - D-V23-05 (CONTEXT.md): cfg-stub strategy locked over `-Zmiri-native-lib`;
+#   `-Zmiri-native-lib` is too new in 2026-05 to bet on, revisit in v2.4.
+# - CONTEXT.md weekly cron lock: Sunday 03:00 UTC. Per-push miri was rejected
+#   at CONTEXT-lock time (cost-bounded + churn-prone); weekly catches regressions
+#   on a cadence aligned with audit-readiness rather than per-commit signal.
+# - Pinned nightly: `nightly-2026-04-15` = last-known-good for miri + Rust 2024
+#   edition + clippy compatibility verified at milestone-research time.
+#
+# Scope
+# -----
+# linux-x86_64 only (`ubuntu-24.04` matches ci-matrix.yml). macOS/aarch64
+# miri has known gaps (per CONTEXT.md deferred-ideas — v2.4+ scope).
+#
+# Refresh cadence
+# ---------------
+# The `nightly-2026-04-15` pin is bumped deliberately per milestone — never
+# silently floated to "latest nightly". When miri upstream introduces a
+# breaking change, the cron run starts failing and the maintainer notices
+# via the GitHub Actions email digest; the bump PR validates the new pin
+# against this same smoke harness before merging. v2.4 may unpin entirely
+# once `-Zmiri-native-lib` matures and the cfg-stub strategy can be retired.
+#
+# Cross-references
+# ----------------
+# - tests/miri_smoke.rs (Plan 22-02) — the smoke-test harness this workflow runs.
+# - .planning/phases/22-miri-on-safe-wrappers/22-01-SUMMARY.md — the 22 cfg-stub
+#   sites that let miri avoid libsodium/trelis FFI under `cfg(miri)`.
+# - docs/security-depth.md § Miri Coverage (Plan 22-04) — the auditor entry
+#   point documenting what miri DOES cover vs what AddressSanitizer covers.
+# - .github/workflows/ci-matrix.yml — the per-push regression net that runs on
+#   stable rust across the 3-platform × 2-feature-arm grid. Miri is a separate
+#   scheduled-only workflow because nightly-toolchain churn would be too noisy
+#   on every push.
+
+name: Miri
+
+on:
+  # Scheduled-only — weekly Sunday 03:00 UTC (CONTEXT.md cron lock).
+  # No `push:` or `pull_request:` triggers; cost-bounded by design.
+  schedule:
+    - cron: "0 3 * * 0"
+  # Manual trigger for iterating on the workflow itself or for re-running
+  # after a known-fix lands (avoids waiting up to 7 days for the next cron).
+  workflow_dispatch:
+
+# No `permissions:` block — defaults to read-only repo access (matches
+# ci-matrix.yml convention). The miri job never needs to push, comment,
+# or mutate state.
+
+jobs:
+  miri:
+    name: miri-smoke / linux-x86_64
+    runs-on: ubuntu-24.04
+    # Bounded so a stuck miri run does not stall the GitHub runner queue;
+    # weekly cadence absorbs the occasional re-run via workflow_dispatch.
+    timeout-minutes: 30
+    env:
+      # Strict-provenance + symbolic-alignment-check raise the bar miri
+      # enforces against unsafe pointer arithmetic; the 5 ptr::read_volatile
+      # sites in hybrid.rs use stack-pointer arithmetic that should pass
+      # both. If either flag flags a real issue, the cron run exits non-zero.
+      MIRIFLAGS: "-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain with miri + rust-src
+        # Pinned nightly per CONTEXT D-V23-05 + milestone-research lock 2026-05-17.
+        # nightly-2026-04-15 = last-known-good for miri + Rust 2024 edition.
+        # Refresh per milestone; v2.4 may unpin if -Zmiri-native-lib matures.
+        # `--profile minimal` keeps the toolchain attack surface small
+        # (matches the Phase 22 cfg-stub design — we only need miri + rust-src).
+        run: |
+          rustup toolchain install nightly-2026-04-15 --component miri --component rust-src --profile minimal
+          rustup run nightly-2026-04-15 rustc --version
+          rustup run nightly-2026-04-15 cargo miri --version
+
+      - name: cargo miri setup
+        # Builds miri's xargo-managed sysroot against the pinned nightly's
+        # rust-src. One-time per workflow run; subsequent miri invocations
+        # reuse the prepared sysroot.
+        run: cargo +nightly-2026-04-15 miri setup
+
+      - name: cargo miri test --test miri_smoke --features hybrid
+        # Primary test invocation. Pure-Rust paths only — FFI sites are
+        # cfg-stubbed (Plan 22-01); miri runs the safe-wrapper code only.
+        # AddressSanitizer (Phase 23 MEMSAFE-03) covers the FFI surface.
+        # `--features hybrid` is required because tests/miri_smoke.rs is
+        # `#![cfg(feature = "hybrid")]` per Plan 22-02.
+        # Clippy strictness is enforced via the [lints.clippy] block in
+        # Cargo.toml (Phase 21 / QUAL-01 SoT) — no per-invocation overrides.
+        run: cargo +nightly-2026-04-15 miri test --test miri_smoke --features hybrid
+
+      - name: cargo miri test --lib (default-features arm)
+        # Default-features arm — confirms cfg-stubs do not pull hybrid-only
+        # symbols when the `hybrid` feature is OFF. Lib-only here; the
+        # `miri_smoke` integration target is hybrid-gated and covered above.
+        run: cargo +nightly-2026-04-15 miri test --lib

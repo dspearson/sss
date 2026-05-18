@@ -13,8 +13,8 @@ use crate::{
 
 /// Core migration: re-seals K for every user under the hybrid suite.
 ///
-/// Returns the list of (username, new_sealed_key_b64) computed, or an error.
-/// When dry_run=false, also mutates config in memory (version + sealed_keys).
+/// Returns the list of (username, `new_sealed_key_b64`) computed, or an error.
+/// When `dry_run=false`, also mutates config in memory (version + `sealed_keys`).
 /// Does NOT touch disk — caller decides whether to save.
 ///
 /// MIGRATE-02 invariant: only .sss.toml changes. In-file AEAD ciphertexts
@@ -432,7 +432,7 @@ mod tests {
     // `use super::*` which brings them in scope without widening any public API.
     // -------------------------------------------------------------------------
 
-    /// Deep-copy a ProjectConfig via TOML round-trip. ProjectConfig does not
+    /// Deep-copy a `ProjectConfig` via TOML round-trip. `ProjectConfig` does not
     /// derive Clone (it has no need to outside of tests), so we serialise and
     /// deserialise to get an independent copy. Panics on serialisation failure.
     fn clone_project_config(cfg: &ProjectConfig) -> ProjectConfig {
@@ -442,8 +442,8 @@ mod tests {
             .expect("parse ProjectConfig clone")
     }
 
-    /// Strategy: a v1 ProjectConfig with N (1..=4) users. Each user has a fresh
-    /// classic public key and a fresh hybrid public key, so migrate_project_config
+    /// Strategy: a v1 `ProjectConfig` with N (1..=4) users. Each user has a fresh
+    /// classic public key and a fresh hybrid public key, so `migrate_project_config`
     /// has all the material it needs to seal new hybrid entries.
     ///
     /// Placed outside the proptest! blocks so the Strategy trait import is
@@ -561,7 +561,7 @@ mod tests {
         #[test]
         fn prop_migrate_dry_run_deterministic(cfg in v1_project_config_strategy()) {
             let repo_key = RepositoryKey::new();
-            let original_version = cfg.version.to_string();
+            let original_version = cfg.version.clone();
             let original_user_count = cfg.users.len();
             let mut cfg_mut = clone_project_config(&cfg);
 

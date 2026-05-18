@@ -3,11 +3,11 @@
 //! These benchmarks exercise the same code path that the FUSE `read()` handler invokes
 //! for every file access, without requiring an actual FUSE mount.
 //!
-//! FUSE read() call chain (from fuse_fs.rs):
+//! FUSE `read()` call chain (from `fuse_fs.rs)`:
 //!   1. Kernel hands control to `SssFs::read()`
 //!   2. If handle has `cached_content` → slice and reply (fast path)
 //!   3. If no handle → `read_and_render()` → `read_and_process()`
-//!      a. `read_file_via_fd()`  — disk I/O via openat() + BufReader
+//!      a. `read_file_via_fd()`  — disk I/O via `openat()` + `BufReader`
 //!      b. `has_any_markers_bytes()` — fast byte scan (early exit for plain files)
 //!      c. `String::from_utf8()` — validate UTF-8
 //!      d. `has_balanced_markers()` — check for `⊠{}` balanced pairs

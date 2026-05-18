@@ -16,7 +16,7 @@ use sss::secrets::SecretsCache;
 /// SECRETS-01: src/secrets.rs:248 — encrypted secrets file but no repository key in cache.
 ///
 /// Trigger: write a `secrets` file whose content is wrapped in the `⊠{...}` encrypted
-/// marker, then look up against a default `SecretsCache::new()` (no repository_key).
+/// marker, then look up against a default `SecretsCache::new()` (no `repository_key`).
 /// The encrypted-prefix branch at line 244 fires; `self.repository_key.is_none()`, so
 /// the `else` arm at line 248 returns `anyhow!("Secrets file is encrypted but no
 /// repository key provided")`.

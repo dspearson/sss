@@ -187,7 +187,7 @@ fn test_file_paths_with_special_characters() -> anyhow::Result<()> {
         std::fs::write(&file_path, "test content")?;
 
         // Verify file exists
-        assert!(file_path.exists(), "File should exist: {:?}", name);
+        assert!(file_path.exists(), "File should exist: {name:?}");
 
         // File paths with special chars should be handleable
         // without shell injection
@@ -425,7 +425,7 @@ fn test_git_config_directory_safety() -> anyhow::Result<()> {
 // Argument Parsing Security Tests
 // ============================================================================
 
-/// Test: Long argument handling (DoS prevention)
+/// Test: Long argument handling (`DoS` prevention)
 ///
 /// Verifies that:
 /// - Very long arguments don't cause buffer overflows
@@ -578,7 +578,7 @@ fn test_shell_metacharacter_neutralization() {
         // These should be treated as literal characters
         // when using Command::new() + .arg(), not as shell operators
         let mut cmd = Command::new("echo");
-        cmd.arg(format!("test{}arg", meta));
+        cmd.arg(format!("test{meta}arg"));
 
         let _ = cmd;
     }

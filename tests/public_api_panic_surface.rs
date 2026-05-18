@@ -82,7 +82,7 @@ fn repository_key_from_base64_empty_returns_err() {
 #[test]
 fn repository_key_from_base64_wrong_length_returns_err() {
     // Valid base64 of a 5-byte buffer — wrong length for RepositoryKey.
-    let s = base64::engine::general_purpose::STANDARD.encode(&[0u8; 5]);
+    let s = base64::engine::general_purpose::STANDARD.encode([0u8; 5]);
     let result = RepositoryKey::from_base64(&s);
     assert!(result.is_err());
 }
@@ -90,7 +90,7 @@ fn repository_key_from_base64_wrong_length_returns_err() {
 #[test]
 fn repository_key_from_base64_huge_returns_err() {
     // 100 KiB of base64; decodes cleanly but length != 32.
-    let s = base64::engine::general_purpose::STANDARD.encode(&vec![0u8; 100_000]);
+    let s = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 100_000]);
     let result = RepositoryKey::from_base64(&s);
     assert!(result.is_err());
 }

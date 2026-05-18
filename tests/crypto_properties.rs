@@ -378,8 +378,7 @@ mod deterministic_tests {
             // All ciphertexts should be unique
             assert!(
                 ciphertexts.insert(encrypted.clone()),
-                "Duplicate ciphertext found: {}",
-                encrypted
+                "Duplicate ciphertext found: {encrypted}"
             );
 
             // All should decrypt correctly
@@ -405,8 +404,7 @@ mod deterministic_tests {
             // Each key should produce different ciphertext
             assert!(
                 key_results.insert(encrypted.clone()),
-                "Duplicate ciphertext from different keys: {}",
-                encrypted
+                "Duplicate ciphertext from different keys: {encrypted}"
             );
         }
 

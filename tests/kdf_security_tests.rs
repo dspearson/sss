@@ -152,7 +152,7 @@ fn test_kdf_with_unicode_password() {
 
     for password in passwords {
         let key = DerivedKey::derive_with_params(password, &salt, &params);
-        assert!(key.is_ok(), "KDF should handle Unicode password: {}", password);
+        assert!(key.is_ok(), "KDF should handle Unicode password: {password}");
         assert_eq!(key.unwrap().as_bytes().len(), 32);
     }
 }

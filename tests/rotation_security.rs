@@ -47,10 +47,10 @@ fn create_test_project_with_files(
 
     // Create test files with encrypted content
     for i in 0..file_count {
-        let file_path = project_root.join(format!("test_file_{}.txt", i));
-        let plaintext = format!("Secret content {}", i);
+        let file_path = project_root.join(format!("test_file_{i}.txt"));
+        let plaintext = format!("Secret content {i}");
         let encrypted = sss::crypto::encrypt_to_base64(&plaintext, &repository_key)?;
-        let content = format!("⊠{{{}}}", encrypted);
+        let content = format!("⊠{{{encrypted}}}");
         fs::write(&file_path, content)?;
     }
 
@@ -109,7 +109,7 @@ fn test_end_to_end_key_rotation_workflow() -> Result<()> {
     // is preserved — all 5 created fixtures must appear in the backup.
     // TEST-06 / Phase 14 / D-01.
     let test_file_count = fs::read_dir(&backup_path)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with("test_file_"))
         .count();
     assert_eq!(test_file_count, 5);
@@ -168,7 +168,7 @@ fn test_dry_run_mode() -> Result<()> {
 
     // Verify no backup directory was created
     let backup_count = fs::read_dir(&project_root)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
@@ -216,19 +216,17 @@ fn test_backup_creation_and_verification() -> Result<()> {
     let backup_count = fs::read_dir(&backup_path)?.count();
     assert!(
         backup_count >= 4,
-        "Expected at least 4 files in backup, found {}",
-        backup_count
+        "Expected at least 4 files in backup, found {backup_count}"
     );
 
     // Verify all expected backup files exist and contain encrypted content
     for i in 0..4 {
-        let backup_file = backup_path.join(format!("test_file_{}.txt", i));
-        assert!(backup_file.exists(), "Backup file {} should exist", i);
+        let backup_file = backup_path.join(format!("test_file_{i}.txt"));
+        assert!(backup_file.exists(), "Backup file {i} should exist");
         let backup_content = fs::read_to_string(&backup_file)?;
         assert!(
             backup_content.starts_with("⊠{"),
-            "Backup file {} should contain encrypted content",
-            i
+            "Backup file {i} should contain encrypted content"
         );
     }
 
@@ -267,7 +265,7 @@ fn test_no_backup_mode() -> Result<()> {
 
     // Verify no backup directory exists
     let backup_count = fs::read_dir(&project_root)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
@@ -351,7 +349,7 @@ fn test_rotation_updates_all_user_sealed_keys() -> Result<()> {
     // Create an encrypted file
     let file_path = project_root.join("test.txt");
     let encrypted = sss::crypto::encrypt_to_base64("test", &repository_key)?;
-    fs::write(&file_path, format!("⊠{{{}}}", encrypted))?;
+    fs::write(&file_path, format!("⊠{{{encrypted}}}"))?;
 
     // Perform rotation
     let options = RotationOptions {

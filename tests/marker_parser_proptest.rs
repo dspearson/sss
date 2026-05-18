@@ -44,7 +44,7 @@ fn arb_brace_heavy() -> impl Strategy<Value = String> {
     .prop_map(|chars| chars.into_iter().collect())
 }
 
-/// Generate well-formed marker strings: prefix + `{` + content_without_unbalanced_braces + `}`.
+/// Generate well-formed marker strings: prefix + `{` + `content_without_unbalanced_braces` + `}`.
 /// Content is printable ASCII without `{` or `}`.
 fn arb_well_formed_marker() -> impl Strategy<Value = (String, String)> {
     let prefix_strategy = prop_oneof![

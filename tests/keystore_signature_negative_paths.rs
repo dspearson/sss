@@ -4,7 +4,7 @@
 //! 1. Generates a v2 signed keystore entry in a tempdir-isolated keystore via
 //!    the production `Keystore::store_dual_keypair` Case-A path (sign-on-write).
 //! 2. Surgically mutates ONE field on disk (TOML string-replace, not regenerate).
-//! 3. Reloads via `Keystore::load_keypair` (allow_unsigned=false → v2 hard-verify).
+//! 3. Reloads via `Keystore::load_keypair` (`allow_unsigned=false` → v2 hard-verify).
 //! 4. Asserts `Err(_)` whose message contains the canonical D-20 substring
 //!    `signature verification failed`.
 //!
@@ -376,8 +376,8 @@ fn neg_07_mutated_uuid_fails_verify() -> Result<()> {
     // old path so load by new_uuid hits the mutated entry.
     let original = fs::read_to_string(&orig_path)?;
     let mutated = original.replacen(
-        &format!("uuid = \"{}\"", orig_uuid),
-        &format!("uuid = \"{}\"", new_uuid),
+        &format!("uuid = \"{orig_uuid}\""),
+        &format!("uuid = \"{new_uuid}\""),
         1,
     );
     assert_ne!(

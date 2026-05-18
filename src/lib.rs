@@ -26,7 +26,7 @@
 //! - `rate_limiter` — token-bucket rate limiting (agent path)
 //!
 //! Configuration / project surface:
-//! - [`config`] — `.sss.toml` parsing + load_key family (public)
+//! - [`config`] — `.sss.toml` parsing + `load_key` family (public)
 //! - [`config_manager`] — user-settings layer (public, orthogonal to `config`)
 //! - `project` — `ProjectConfig` and project-root discovery (re-export
 //!   `ProjectConfig` is public)
@@ -51,7 +51,7 @@
 //! - `fuse` — FUSE filesystem (Linux/macOS, `feature = "fuse"`, `pub(crate)`);
 //!   the directory-module hosts `fs` (top-level `SssFS`), `inode_manager`,
 //!   `file_cache`, `virtual_fs`
-//! - `winfsp_fs` — WinFSP filesystem (Windows, `feature = "winfsp"`,
+//! - `winfsp_fs` — `WinFSP` filesystem (Windows, `feature = "winfsp"`,
 //!   `pub(crate)`)
 //! - `ninep_fs` — 9P server (`feature = "ninep"`, `pub(crate)`; the re-export
 //!   `SssNinepFS` is public — only reachable under `feature = "ninep"`)

@@ -1,9 +1,9 @@
 /// Tests for username resolution across all commands
 ///
-/// This test suite verifies that ConfigManager is properly integrated into all
+/// This test suite verifies that `ConfigManager` is properly integrated into all
 /// commands and that username precedence works correctly:
 /// 1. CLI override (--user flag)
-/// 2. Environment variable (SSS_USER)
+/// 2. Environment variable (`SSS_USER`)
 /// 3. User settings (configured default username)
 /// 4. System username ($USER/$USERNAME)
 use sss::config_manager::ConfigManager;
@@ -11,7 +11,7 @@ use std::env;
 use std::fs;
 use tempfile::TempDir;
 
-/// Test helper to create a ConfigManager with a temporary config directory
+/// Test helper to create a `ConfigManager` with a temporary config directory
 fn create_test_config_manager() -> (ConfigManager, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let config_dir = temp_dir.path().join("config");
@@ -191,7 +191,7 @@ fn test_username_validation_in_config_manager() {
         .set_default_username(Some("admin".to_string()))
         .is_err()); // Reserved
     assert!(manager
-        .set_default_username(Some("".to_string()))
+        .set_default_username(Some(String::new()))
         .is_err()); // Empty
     assert!(manager
         .set_default_username(Some("user@invalid".to_string()))

@@ -73,8 +73,7 @@ fn test_ssse_symlink_behaviour() -> Result<()> {
         // Should not fail due to username validation issues
         assert!(
             !stderr.contains("reserved"),
-            "ssse failed due to username issue: {}",
-            stderr
+            "ssse failed due to username issue: {stderr}"
         );
     }
 

@@ -41,8 +41,9 @@ pub struct KeystoreEntrySig {
 /// Canonical signed-payload encoding (D-08): length-prefixed concat of
 /// 6 identity-bearing fields. Absent optional fields encode as 4 zero bytes.
 ///
-/// Field order is FIXED: uuid, public_key, hybrid_public_key,
-/// sig_ed448_public_key, sig_mldsa65_public_key, created_at_rfc3339.
+/// Field order is FIXED: uuid, `public_key`, `hybrid_public_key`,
+/// `sig_ed448_public_key`, `sig_mldsa65_public_key`, `created_at_rfc3339`.
+#[must_use] 
 pub fn build_signed_payload(
     uuid: &str,
     public_key: &str,
@@ -60,7 +61,7 @@ pub fn build_signed_payload(
         sig_mldsa65_public_key.unwrap_or("").as_bytes(),
         created_at_rfc3339.as_bytes(),
     ];
-    for field in fields.iter() {
+    for field in &fields {
         buf.extend_from_slice(&(field.len() as u32).to_be_bytes());
         buf.extend_from_slice(field);
     }
@@ -87,7 +88,7 @@ pub fn sign_entry(
 /// Verify a `KeystoreEntrySig` against a payload + the two verifying keys.
 /// Returns `Err` if EITHER leg fails (AND-composition).
 ///
-/// CRITICAL: Ed448::verify_with_context returns `bool`; ML-DSA-65 returns `Result<()>`.
+/// CRITICAL: `Ed448::verify_with_context` returns `bool`; ML-DSA-65 returns `Result<()>`.
 /// Both shapes are wrapped into the same actionable error.
 pub fn verify_entry(
     ed448_pk: &Ed448VerifyingKey,

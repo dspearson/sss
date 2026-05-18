@@ -46,8 +46,8 @@ fn push_lp_opt(buf: &mut Vec<u8>, opt: Option<&str>) {
 ///   1. version
 ///   2. created
 ///   3. per-user (sorted by username):
-///      username, public, sealed_key, added, hybrid_public,
-///      sig_ed448_public, sig_mldsa65_public
+///      username, public, `sealed_key`, added, `hybrid_public`,
+///      `sig_ed448_public`, `sig_mldsa65_public`
 ///
 /// Each variable-length field is preceded by a `u32`-BE length prefix to
 /// prevent length-extension / boundary-shift attacks (T-19-02).
@@ -56,6 +56,7 @@ fn push_lp_opt(buf: &mut Vec<u8>, opt: Option<&str>) {
 /// Note: `ProjectConfig.users` is `HashMap` (see src/project.rs).
 /// Iteration order is non-deterministic, so we collect keys and sort
 /// before emitting (Pitfall 11 from 19-PATTERNS.md).
+#[must_use] 
 pub fn build_envelope_payload(config: &ProjectConfig) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4096);
     push_lp(&mut buf, config.version.as_bytes());
@@ -100,7 +101,7 @@ pub fn sign_envelope(
 /// Returns `Err` if EITHER leg fails (AND-composition).
 ///
 /// CRITICAL (mirrors src/keystore/sig.rs):
-///   - Ed448::verify_with_context returns `bool` (use `if !`)
+///   - `Ed448::verify_with_context` returns `bool` (use `if !`)
 ///   - ML-DSA-65::verify_with_context returns `Result<()>` (use `.map_err`)
 ///
 /// Both shapes are wrapped into the same `envelope:`-prefixed error so
@@ -200,8 +201,7 @@ pub fn verify_envelope_signature(config: &ProjectConfig, _path: &Path) -> Result
         .collect::<Vec<_>>()
         .join("; ");
     Err(anyhow!(
-        "envelope: signature verification failed for all attempted users: {}",
-        detail
+        "envelope: signature verification failed for all attempted users: {detail}"
     ))
 }
 
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(&p1[4..7], b"2.0");
     }
 
-    /// Test: verify_envelope_signature iterates users in sorted order (alice → bob → zelda),
+    /// Test: `verify_envelope_signature` iterates users in sorted order (alice → bob → zelda),
     /// skips users without sig pubkeys, tries wrong pubkeys and continues, then succeeds on
     /// the first user whose pubkey matches (zelda). Validates D-05 / Pitfall 4.
     #[test]
@@ -393,7 +393,7 @@ mod tests {
     ///
     /// 3 users (alice, bob, carol) all advertise the *wrong* sig pubkey.
     /// The real signer's pubkey is not present in the envelope.
-    /// verify_envelope_signature must return an error that names all three users
+    /// `verify_envelope_signature` must return an error that names all three users
     /// and includes "verification failed for all attempted users".
     #[test]
     fn verify_all_fail_lists_users() {

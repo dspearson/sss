@@ -12,7 +12,7 @@
 //! - Common password detection
 //!
 //! **IMPORTANT:** These tests validate the CURRENT behavior of the analyzer.
-//! Some behaviors may be unexpected (e.g., "abc" rated as VeryStrong).
+//! Some behaviors may be unexpected (e.g., "abc" rated as `VeryStrong`).
 //! Tests document actual behavior for regression detection, not ideal behavior.
 
 use sss::secure_memory::password::{analyze_password_strength, PasswordStrength};
@@ -24,8 +24,8 @@ use sss::secure_memory::password::{analyze_password_strength, PasswordStrength};
 /// - Single character type passwords are flagged
 /// - Common/obvious passwords are flagged
 ///
-/// **CRITICAL BUG DISCOVERED:** Analyzer rates 3-4 char strings as VeryStrong!
-/// Examples: "abc", "123", "aaa", "1111" all rated VeryStrong instead of VeryWeak.
+/// **CRITICAL BUG DISCOVERED:** Analyzer rates 3-4 char strings as `VeryStrong`!
+/// Examples: "abc", "123", "aaa", "1111" all rated `VeryStrong` instead of `VeryWeak`.
 /// Test adjusted to use 8+ char passwords to avoid this bug.
 #[test]
 fn test_very_weak_passwords_detected() {
@@ -42,9 +42,7 @@ fn test_very_weak_passwords_detected() {
         let strength = analyze_password_strength(pwd);
         assert!(
             matches!(strength, PasswordStrength::VeryWeak),
-            "Password '{}' should be VeryWeak, got {:?}",
-            pwd,
-            strength
+            "Password '{pwd}' should be VeryWeak, got {strength:?}"
         );
     }
 }
@@ -68,9 +66,7 @@ fn test_weak_passwords_detected() {
         let strength = analyze_password_strength(pwd);
         assert!(
             matches!(strength, PasswordStrength::Weak | PasswordStrength::VeryWeak),
-            "Password '{}' should be Weak or VeryWeak, got {:?}",
-            pwd,
-            strength
+            "Password '{pwd}' should be Weak or VeryWeak, got {strength:?}"
         );
     }
 }
@@ -100,9 +96,7 @@ fn test_moderate_passwords_detected() {
                     | PasswordStrength::Weak
                     | PasswordStrength::VeryWeak  // Adjusted for strict analyzer
             ),
-            "Password '{}' got {:?}",
-            pwd,
-            strength
+            "Password '{pwd}' got {strength:?}"
         );
     }
 }
@@ -130,9 +124,7 @@ fn test_strong_passwords_detected() {
                 strength,
                 PasswordStrength::Strong | PasswordStrength::VeryStrong | PasswordStrength::Moderate | PasswordStrength::Weak
             ),
-            "Password '{}' got {:?}",
-            pwd,
-            strength
+            "Password '{pwd}' got {strength:?}"
         );
     }
 }
@@ -157,9 +149,7 @@ fn test_very_strong_passwords_detected() {
                 strength,
                 PasswordStrength::VeryStrong | PasswordStrength::Strong
             ),
-            "Password '{}' should be at least Strong, got {:?}",
-            pwd,
-            strength
+            "Password '{pwd}' should be at least Strong, got {strength:?}"
         );
     }
 }
@@ -211,10 +201,10 @@ fn test_character_variety_impact() {
     let s_mixed_symbols = analyze_password_strength(mixed_symbols);
 
     // Document actual analyzer behavior (not necessarily logical)
-    println!("lowercase_only: {:?}", s_lowercase);
-    println!("mixed_case: {:?}", s_mixed_case);
-    println!("mixed_numbers: {:?}", s_mixed_numbers);
-    println!("mixed_symbols: {:?}", s_mixed_symbols);
+    println!("lowercase_only: {s_lowercase:?}");
+    println!("mixed_case: {s_mixed_case:?}");
+    println!("mixed_numbers: {s_mixed_numbers:?}");
+    println!("mixed_symbols: {s_mixed_symbols:?}");
 
     // More variety should generally increase strength, but analyzer may have quirks
     assert!(
@@ -247,7 +237,7 @@ fn test_unicode_password_strength() {
     for (pwd, description) in unicode_passwords {
         let strength = analyze_password_strength(pwd);
         // Should not crash and should give some strength rating
-        println!("{}: {:?}", description, strength);
+        println!("{description}: {strength:?}");
         // At minimum, should not be considered invalid
         assert!(
             matches!(
@@ -258,8 +248,7 @@ fn test_unicode_password_strength() {
                     | PasswordStrength::Strong
                     | PasswordStrength::VeryStrong
             ),
-            "Unicode password should have valid strength rating: {}",
-            description
+            "Unicode password should have valid strength rating: {description}"
         );
     }
 }
@@ -321,9 +310,7 @@ fn test_common_patterns_detected() {
                 strength,
                 PasswordStrength::VeryWeak | PasswordStrength::Weak
             ),
-            "Pattern password '{}' should be weak, got {:?}",
-            pwd,
-            strength
+            "Pattern password '{pwd}' should be weak, got {strength:?}"
         );
     }
 }
@@ -331,7 +318,7 @@ fn test_common_patterns_detected() {
 /// Test: Minimum strength threshold
 ///
 /// Verifies that:
-/// - PasswordStrength enum comparison works correctly
+/// - `PasswordStrength` enum comparison works correctly
 /// - Can enforce minimum strength requirements
 #[test]
 fn test_strength_comparison() {
@@ -366,7 +353,7 @@ fn test_edge_cases() {
 
     for (pwd, description) in edge_cases {
         let strength = analyze_password_strength(pwd);
-        println!("{}: {:?}", description, strength);
+        println!("{description}: {strength:?}");
         // Should not panic and should return a valid strength
         assert!(
             matches!(
@@ -377,8 +364,7 @@ fn test_edge_cases() {
                     | PasswordStrength::Strong
                     | PasswordStrength::VeryStrong
             ),
-            "Edge case should have valid strength: {}",
-            description
+            "Edge case should have valid strength: {description}"
         );
     }
 }
@@ -402,15 +388,12 @@ fn test_real_world_passwords() {
 
     for (pwd, expected_min, description) in passwords {
         let strength = analyze_password_strength(pwd);
-        println!("{}: {:?} (expected at least {:?})", description, strength, expected_min);
+        println!("{description}: {strength:?} (expected at least {expected_min:?})");
 
         // Should be at least the expected minimum strength
         assert!(
             strength >= expected_min,
-            "{} should be at least {:?}, got {:?}",
-            description,
-            expected_min,
-            strength
+            "{description} should be at least {expected_min:?}, got {strength:?}"
         );
     }
 }

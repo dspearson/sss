@@ -1,7 +1,7 @@
 #![allow(deprecated)]
 /// Integration tests for username resolution in actual command execution
 ///
-/// These tests verify that the fixed commands properly use ConfigManager
+/// These tests verify that the fixed commands properly use `ConfigManager`
 /// for username resolution instead of directly reading $USER/$USERNAME.
 ///
 /// Tests use passwordless keys to avoid interactive passphrase prompts.
@@ -57,7 +57,7 @@ struct TestEnv {
     _sss_user_guard: Option<SssUserGuard>,
 }
 
-/// Guard to temporarily clear SSS_USER environment variable during tests
+/// Guard to temporarily clear `SSS_USER` environment variable during tests
 struct SssUserGuard {
     old_value: Option<String>,
 }
@@ -83,8 +83,8 @@ impl TestEnv {
         Self::new_impl(false)
     }
 
-    /// Create test environment with optional SSS_USER clearing
-    /// Set clear_sss_user=true for tests that need pure config-based resolution
+    /// Create test environment with optional `SSS_USER` clearing
+    /// Set `clear_sss_user=true` for tests that need pure config-based resolution
     fn new_with_clear_sss_user() -> anyhow::Result<Self> {
         Self::new_impl(true)
     }

@@ -647,7 +647,7 @@ trailing_spaces: value with trailing
 
         // Encrypt (seal) the secrets with marker
         let encrypted_secrets = crate::crypto::encrypt_to_base64(plaintext_secrets, &key).unwrap();
-        let sealed_content = format!("⊠{{{}}}", encrypted_secrets);
+        let sealed_content = format!("⊠{{{encrypted_secrets}}}");
 
         // Write the encrypted secrets to a file
         let secrets_file = project_root.join("secrets");
@@ -681,7 +681,7 @@ trailing_spaces: value with trailing
         // Create and seal a secrets file - use "secrets" so it will be found
         let plaintext = "token: secret_token_123\n";
         let encrypted = crate::crypto::encrypt_to_base64(plaintext, &key).unwrap();
-        let sealed_content = format!("⊠{{{}}}", encrypted);
+        let sealed_content = format!("⊠{{{encrypted}}}");
 
         let secrets_file = project_root.join("secrets");
         std::fs::write(&secrets_file, &sealed_content).unwrap();
@@ -703,11 +703,11 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"private_key: |
+        let content = r"private_key: |
   -----BEGIN RSA PRIVATE KEY-----
   MIIEowIBAAKCAQEA
   -----END RSA PRIVATE KEY-----
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -722,13 +722,13 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"certificate: |
+        let content = r"certificate: |
   -----BEGIN CERTIFICATE-----
   line1
 
   line3
   -----END CERTIFICATE-----
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
         let cert = secrets.get("certificate").unwrap();
@@ -765,7 +765,7 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"# Mixed format test
+        let content = r"# Mixed format test
 simple_key: simple_value
 multiline_key: |
   line1
@@ -774,7 +774,7 @@ another_simple: another_value
 another_multiline: |
   block1
   block2
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -789,9 +789,9 @@ another_multiline: |
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"empty_multiline: |
+        let content = r"empty_multiline: |
 next_key: value
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -824,14 +824,14 @@ next_key: value
         let secrets_file = temp_dir.path().join("secrets");
 
         // Realistic SSH private key format
-        let content = r#"ssh_private_key: |
+        let content = r"ssh_private_key: |
   -----BEGIN OPENSSH PRIVATE KEY-----
   b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
   QyNTUxOQAAACDqZ3qJVZHqHQKBqQxFqH+jHqQxFqH+jHqQxFqH+jHqQxFqAAAAAJgM8uE
   -----END OPENSSH PRIVATE KEY-----
 
 api_key: simple_api_key_value
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -849,13 +849,13 @@ api_key: simple_api_key_value
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"database_config: |
+        let content = r"database_config: |
   host=localhost
   port=5432
   user=admin
   password=secret
   dbname=myapp
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
         let config = secrets.get("database_config").unwrap();

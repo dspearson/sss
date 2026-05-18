@@ -794,7 +794,7 @@ mod tests {
 
     // ---- 16b-04 Tier 1: handle_hooks dispatcher routing ----
 
-    /// Build ArgMatches matching the real `sss hooks <subcommand>` clap tree.
+    /// Build `ArgMatches` matching the real `sss hooks <subcommand>` clap tree.
     fn build_hooks_matches(args: &[&str]) -> ArgMatches {
         use clap::{Arg, Command};
         let app = Command::new("hooks")

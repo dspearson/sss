@@ -300,8 +300,8 @@ fn test_multiple_keys_different_passwords() -> Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// KEYSTORE-01: A classic-only TOML file deserializes with hybrid fields = None.
-/// Verifies that the #[serde(default)] guards on hybrid_public_key and
-/// hybrid_encrypted_secret_key prevent parse errors on pre-Phase-3 identity files.
+/// Verifies that the #[serde(default)] guards on `hybrid_public_key` and
+/// `hybrid_encrypted_secret_key` prevent parse errors on pre-Phase-3 identity files.
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_classic_only_backward_compat() -> Result<()> {
@@ -324,8 +324,8 @@ fn test_classic_only_backward_compat() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-01: store_dual_keypair with both classic and hybrid, then load_hybrid_keypair
-/// returns a HybridKeyPair whose public_key().bytes match the original.
+/// KEYSTORE-01: `store_dual_keypair` with both classic and hybrid, then `load_hybrid_keypair`
+/// returns a `HybridKeyPair` whose `public_key().bytes` match the original.
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_dual_suite_roundtrip() -> Result<()> {
@@ -348,8 +348,8 @@ fn test_dual_suite_roundtrip() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-03: store classic first, then upgrade with store_dual_keypair(None, hybrid, pass).
-/// The public_key and encrypted_secret_key fields must be byte-for-byte identical after upgrade.
+/// KEYSTORE-03: store classic first, then upgrade with `store_dual_keypair(None`, hybrid, pass).
+/// The `public_key` and `encrypted_secret_key` fields must be byte-for-byte identical after upgrade.
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_upgrade_classic_to_both_preserves_classic() -> Result<()> {
@@ -444,7 +444,7 @@ fn test_dual_suite_single_passphrase() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-01 error path: load_hybrid_keypair on a classic-only identity file
+/// KEYSTORE-01 error path: `load_hybrid_keypair` on a classic-only identity file
 /// returns Err with the exact error string "your keystore has no hybrid keypair".
 #[cfg(feature = "hybrid")]
 #[test]
@@ -480,8 +480,8 @@ fn test_load_hybrid_no_hybrid_key_errors() -> Result<()> {
 // remain valid passing tests; they just don't add net coverage lift.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// KEYSTORE-05: Case C delegates to store_keypair — `store_dual_keypair(Some(classic), None, Some(pw))`
-/// returns Ok(key_id), and the stored classic keypair byte-identically round-trips
+/// KEYSTORE-05: Case C delegates to `store_keypair` — `store_dual_keypair(Some(classic), None, Some(pw))`
+/// returns `Ok(key_id)`, and the stored classic keypair byte-identically round-trips
 /// through `load_keypair`. Targets src/keystore.rs:657-659 (Case C delegation arm).
 #[cfg(feature = "hybrid")]
 #[test]
@@ -513,7 +513,7 @@ fn test_store_dual_keypair_case_c_delegates_to_store_keypair() -> Result<()> {
 }
 
 /// KEYSTORE-06: Case A passwordless round-trip — `store_dual_keypair(Some(classic), Some(hybrid), None)`
-/// returns Ok(key_id); both `load_hybrid_keypair` and `load_keypair` recover
+/// returns `Ok(key_id)`; both `load_hybrid_keypair` and `load_keypair` recover
 /// byte-identically. Targets src/keystore.rs:692-701 (Case A passwordless else arm).
 /// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
 /// regression anchor for branch logic (lines 692-701 already green per survey).
@@ -594,7 +594,7 @@ fn test_store_dual_keypair_case_b_rejects_already_present_hybrid() -> Result<()>
 
 /// KEYSTORE-08: Case B passwordless upgrade — store classic-only passwordless first,
 /// then upgrade by adding hybrid via `store_dual_keypair(None, Some(hybrid), None)`,
-/// assert Ok(key_id) and both classic + hybrid load back byte-identically.
+/// assert `Ok(key_id)` and both classic + hybrid load back byte-identically.
 /// Targets src/keystore.rs:783-786 (Case B passwordless else arm).
 /// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
 /// regression anchor (lines 783-786 already green per survey).
@@ -665,7 +665,7 @@ fn test_store_dual_keypair_neither_key_errors() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-10: load_hybrid_keypair on a non-existent key_id returns Err with
+/// KEYSTORE-10: `load_hybrid_keypair` on a non-existent `key_id` returns Err with
 /// "Key file not found" (src/keystore.rs:834-836). Targets the file-not-found arm.
 #[cfg(feature = "hybrid")]
 #[test]
@@ -688,9 +688,9 @@ fn test_load_hybrid_keypair_nonexistent_key_id_errors() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-11: load_hybrid_keypair on a password-protected dual identity with
+/// KEYSTORE-11: `load_hybrid_keypair` on a password-protected dual identity with
 /// `password=None` returns Err containing "Password required". Targets
-/// src/keystore.rs:857-859 (password-required ok_or_else arm on protected key).
+/// src/keystore.rs:857-859 (password-required `ok_or_else` arm on protected key).
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_load_hybrid_keypair_password_required_errors() -> Result<()> {
@@ -723,8 +723,8 @@ fn test_load_hybrid_keypair_password_required_errors() -> Result<()> {
     Ok(())
 }
 
-/// KEYSTORE-12: load_hybrid_keypair passwordless round-trip — store dual identity
-/// without password; load_hybrid_keypair returns Ok with public_key bytes matching
+/// KEYSTORE-12: `load_hybrid_keypair` passwordless round-trip — store dual identity
+/// without password; `load_hybrid_keypair` returns Ok with `public_key` bytes matching
 /// the stored hybrid byte-identically. Targets src/keystore.rs:880-882
 /// (passwordless-load else arm).
 /// Note (per 16-01-SUMMARY.md): LIKELY-ALREADY-COVERED — landed as documentation-grade
@@ -771,7 +771,7 @@ fn test_load_hybrid_keypair_passwordless_roundtrip() -> Result<()> {
 /// through `load_keypair`.
 ///
 /// `temp_dir_root` is the value passed to `Keystore::new_with_config_dir_and_kdf`
-/// (the temp_dir.path()). Keystore appends `sss/keys/` under it.
+/// (the `temp_dir.path()`). Keystore appends `sss/keys/` under it.
 #[cfg(feature = "hybrid")]
 fn read_stored(temp_dir_root: &std::path::Path, key_id: &str) -> sss::keystore::StoredKeyPair {
     let path = temp_dir_root
@@ -888,8 +888,8 @@ fn test_upgrade_wrong_passphrase_fails_before_write() -> Result<()> {
     Ok(())
 }
 
-/// Test 4: identity-bearing fields (uuid, public_key, hybrid_public_key,
-/// created_at) are preserved byte-identically across the upgrade. This is
+/// Test 4: identity-bearing fields (uuid, `public_key`, `hybrid_public_key`,
+/// `created_at`) are preserved byte-identically across the upgrade. This is
 /// the "upgrade is metadata-only re-signing, not a re-keying" invariant.
 #[cfg(feature = "hybrid")]
 #[test]

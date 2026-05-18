@@ -197,8 +197,7 @@ impl CryptoSuite for HybridCryptoSuite {
         };
         if ret != 0 {
             return Err(anyhow!(
-                "hybrid AEAD seal failed (libsodium returned {})",
-                ret
+                "hybrid AEAD seal failed (libsodium returned {ret})"
             ));
         }
 

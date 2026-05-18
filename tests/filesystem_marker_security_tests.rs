@@ -9,7 +9,7 @@
 //! - Mixed marker type handling
 //! - Binary data with markers
 //! - Malformed marker handling
-//! - Very long marker content (DoS prevention)
+//! - Very long marker content (`DoS` prevention)
 //! - Marker bypass attempts
 //! - UTF-8 encoding attacks
 //! - Concurrent marker detection
@@ -47,13 +47,11 @@ fn test_marker_injection_prevention() {
     for text in partial_markers {
         assert!(
             !has_any_markers(text),
-            "Partial marker should NOT be detected: {:?}",
-            text
+            "Partial marker should NOT be detected: {text:?}"
         );
         assert!(
             !has_any_markers_bytes(text.as_bytes()),
-            "Partial marker bytes should NOT be detected: {:?}",
-            text
+            "Partial marker bytes should NOT be detected: {text:?}"
         );
     }
 
@@ -68,8 +66,7 @@ fn test_marker_injection_prevention() {
     for text in lookalikes {
         assert!(
             !has_any_markers(text),
-            "Look-alike should NOT be detected: {:?}",
-            text
+            "Look-alike should NOT be detected: {text:?}"
         );
     }
 }
@@ -94,13 +91,11 @@ fn test_valid_marker_detection() {
     for (text, description) in valid_markers {
         assert!(
             has_any_markers(text),
-            "{} should be detected (string)",
-            description
+            "{description} should be detected (string)"
         );
         assert!(
             has_any_markers_bytes(text.as_bytes()),
-            "{} should be detected (bytes)",
-            description
+            "{description} should be detected (bytes)"
         );
     }
 
@@ -134,7 +129,7 @@ fn test_marker_boundary_conditions() {
 
     // Very long marker content (DoS test)
     let very_long_content = "x".repeat(1_000_000);
-    let very_long_marker = format!("⊠{{{}}}", very_long_content);
+    let very_long_marker = format!("⊠{{{very_long_content}}}");
     assert!(has_any_markers(&very_long_marker));
     assert!(has_any_markers_bytes(very_long_marker.as_bytes()));
 
@@ -162,13 +157,11 @@ fn test_mixed_marker_types() {
     for text in mixed_cases {
         assert!(
             has_any_markers(text),
-            "Mixed markers should be detected: {:?}",
-            text
+            "Mixed markers should be detected: {text:?}"
         );
         assert!(
             has_any_markers_bytes(text.as_bytes()),
-            "Mixed markers (bytes) should be detected: {:?}",
-            text
+            "Mixed markers (bytes) should be detected: {text:?}"
         );
     }
 }
@@ -265,8 +258,7 @@ fn test_marker_bypass_attempts() {
     for encoded in url_encoded {
         assert!(
             !has_any_markers(encoded),
-            "URL-encoded markers should not be detected: {:?}",
-            encoded
+            "URL-encoded markers should not be detected: {encoded:?}"
         );
     }
 
@@ -279,8 +271,7 @@ fn test_marker_bypass_attempts() {
     for entity in html_entities {
         assert!(
             !has_any_markers(entity),
-            "HTML entities should not be detected: {:?}",
-            entity
+            "HTML entities should not be detected: {entity:?}"
         );
     }
 
@@ -289,7 +280,7 @@ fn test_marker_bypass_attempts() {
     assert!(has_any_markers("⊕{plaintext}"));
 }
 
-/// Test: Very long content with markers (DoS prevention)
+/// Test: Very long content with markers (`DoS` prevention)
 ///
 /// Verifies that:
 /// - Detection works on large files
@@ -356,23 +347,21 @@ fn test_utf8_boundary_edge_cases() {
 /// Test: Marker pattern consistency
 ///
 /// Verifies that:
-/// - MARKER_PATTERNS constant matches detection logic
+/// - `MARKER_PATTERNS` constant matches detection logic
 /// - All patterns in array are detected
 /// - Detection is symmetric
 #[test]
 fn test_marker_pattern_consistency() {
     // Verify all patterns in MARKER_PATTERNS are detected
     for pattern in MARKER_PATTERNS {
-        let test_str = format!("{}secret}}", pattern);
+        let test_str = format!("{pattern}secret}}");
         assert!(
             has_any_markers(&test_str),
-            "Pattern '{}' should be detected",
-            pattern
+            "Pattern '{pattern}' should be detected"
         );
         assert!(
             has_any_markers_bytes(test_str.as_bytes()),
-            "Pattern '{}' should be detected (bytes)",
-            pattern
+            "Pattern '{pattern}' should be detected (bytes)"
         );
     }
 
@@ -462,15 +451,13 @@ fn test_concurrent_marker_detection() {
                 let result = has_any_markers(text);
                 assert_eq!(
                     result, *expected,
-                    "Thread {}: '{}' expected {}, got {}",
-                    i, text, expected, result
+                    "Thread {i}: '{text}' expected {expected}, got {result}"
                 );
 
                 let result_bytes = has_any_markers_bytes(text.as_bytes());
                 assert_eq!(
                     result_bytes, *expected,
-                    "Thread {}: '{}' (bytes) expected {}, got {}",
-                    i, text, expected, result_bytes
+                    "Thread {i}: '{text}' (bytes) expected {expected}, got {result_bytes}"
                 );
             }
         });
@@ -506,9 +493,7 @@ fn test_marker_detection_performance() {
         // Detection should be very fast (< 200ms even for 1MB to account for system variability)
         assert!(
             duration.as_millis() < 200,
-            "Detection took too long for {} bytes: {:?}",
-            size,
-            duration
+            "Detection took too long for {size} bytes: {duration:?}"
         );
     }
 
@@ -525,8 +510,7 @@ fn test_marker_detection_performance() {
         assert!(result, "Marker should be detected");
         assert!(
             duration.as_millis() < 100,
-            "Detection with marker took too long: {:?}",
-            duration
+            "Detection with marker took too long: {duration:?}"
         );
     }
 }

@@ -84,10 +84,7 @@ fn handle_keys_generate_command_with_prompt(
 
     // Feature-absent guard: hybrid and both require the hybrid feature flag.
     // clap still parses the value; this runtime gate fires immediately.
-    match suite {
-        Some("hybrid") | Some("both") => {}
-        _ => {}
-    }
+    if let Some("hybrid" | "both") = suite {}
 
     let keystore = create_keystore(main_matches)?;
 
@@ -292,7 +289,8 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
 ///
 /// Returns the rendered line without a trailing newline. Used by both
 /// `handle_keys_list` (production) and `tests/keys_command_tests.rs` (D-18
-/// tag tests keys_14..16).
+/// tag tests `keys_14..16`).
+#[must_use] 
 pub fn format_list_entry(
     key_id: &str,
     stored: &crate::keystore::StoredKeyPair,
@@ -824,7 +822,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     let (full_id, _) = keys
         .iter()
         .find(|(id, _)| id.starts_with(uuid))
-        .ok_or_else(|| anyhow!("export: no keystore entry matching uuid prefix '{}'", uuid))?;
+        .ok_or_else(|| anyhow!("export: no keystore entry matching uuid prefix '{uuid}'"))?;
 
     let src = keystore.keys_dir.join(format!("{full_id}.toml"));
     if !src.exists() {
@@ -844,9 +842,8 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
         1 => {
             if !allow_unsigned {
                 return Err(anyhow!(
-                    "keystore: entry {} is unsigned legacy format (format_version=1); \
-                     pass --allow-unsigned to export or re-sign first",
-                    full_id
+                    "keystore: entry {full_id} is unsigned legacy format (format_version=1); \
+                     pass --allow-unsigned to export or re-sign first"
                 ));
             }
             // Proceed without verify.
@@ -867,8 +864,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
         }
         v => {
             return Err(anyhow!(
-                "keystore: unsupported format_version {} for {}; upgrade sss",
-                v, full_id
+                "keystore: unsupported format_version {v} for {full_id}; upgrade sss"
             ));
         }
     }
@@ -917,7 +913,7 @@ pub fn handle_keys_upgrade(main_matches: &ArgMatches, sub_matches: &ArgMatches) 
     let (full_id, stored) = keys
         .iter()
         .find(|(id, _)| id.starts_with(uuid))
-        .ok_or_else(|| anyhow!("upgrade: no keystore entry matching uuid prefix '{}'", uuid))?;
+        .ok_or_else(|| anyhow!("upgrade: no keystore entry matching uuid prefix '{uuid}'"))?;
 
     // Prompt for the existing passphrase only if the entry is protected.
     // The keystore layer probes the KEK before any write, so a wrong

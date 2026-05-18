@@ -1,11 +1,11 @@
 //! Property test: the shared-AEAD byte-identical invariant (TEST-01).
 //!
-//! For any random K, project_timestamp, file_path and plaintext:
-//!   ClassicSuite.seal + open -> K_classic
-//!   HybridCryptoSuite.seal + open -> K_hybrid
-//!   K_classic == K_hybrid == original K (bit-for-bit)
-//!   encrypt_to_base64_deterministic(plaintext, K_classic, ts, path)
-//!     == encrypt_to_base64_deterministic(plaintext, K_hybrid, ts, path)
+//! For any random K, `project_timestamp`, `file_path` and plaintext:
+//!   ClassicSuite.seal + open -> `K_classic`
+//!   HybridCryptoSuite.seal + open -> `K_hybrid`
+//!   `K_classic` == `K_hybrid` == original K (bit-for-bit)
+//!   `encrypt_to_base64_deterministic(plaintext`, `K_classic`, ts, path)
+//!     == `encrypt_to_base64_deterministic(plaintext`, `K_hybrid`, ts, path)
 //!
 //! Failure: proptest shrinks the (K, path, ts, plaintext) tuple to a minimal
 //! counter-example and prints it.
@@ -25,10 +25,10 @@ use sss::crypto::{HybridCryptoSuite, HybridKeyPair};
 // Strategies
 // ---------------------------------------------------------------------------
 
-/// Strategy: a fresh random RepositoryKey (libsodium randombytes internally).
-/// proptest cannot generate arbitrary byte arrays as RepositoryKey directly
-/// without an Arbitrary impl, so we use any::<u8>() as a seed to invoke
-/// ::new() once per case. Each proptest case gets a freshly-generated key.
+/// Strategy: a fresh random `RepositoryKey` (libsodium randombytes internally).
+/// proptest cannot generate arbitrary byte arrays as `RepositoryKey` directly
+/// without an Arbitrary impl, so we use `any::`<u8>() as a seed to invoke
+/// `::new()` once per case. Each proptest case gets a freshly-generated key.
 fn repo_key_strategy() -> impl Strategy<Value = RepositoryKey> {
     any::<u8>().prop_map(|_| RepositoryKey::new())
 }

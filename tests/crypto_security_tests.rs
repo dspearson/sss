@@ -88,12 +88,12 @@ fn test_no_nonce_reuse_across_large_dataset() {
     let mut nonces = HashSet::new();
 
     for i in 0..1000 {
-        let plaintext = format!("secret_{}", i);
+        let plaintext = format!("secret_{i}");
         let encrypted = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, "test.txt").unwrap();
         let nonce = encrypted[0..24].to_vec();
 
         // Each nonce should be unique
-        assert!(nonces.insert(nonce), "Nonce reuse detected at iteration {}", i);
+        assert!(nonces.insert(nonce), "Nonce reuse detected at iteration {i}");
     }
 
     // Verify we got 1000 unique nonces

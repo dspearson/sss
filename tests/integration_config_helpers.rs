@@ -1,6 +1,6 @@
 //! Integration tests for configuration loading helpers
 //!
-//! Tests the new load_project_config() and load_project_config_from() helpers
+//! Tests the new `load_project_config()` and `load_project_config_from()` helpers
 //! to ensure they provide consistent error messages and proper functionality.
 
 use anyhow::Result;
@@ -11,13 +11,13 @@ use sss::config::{load_project_config, load_project_config_from};
 use sss::crypto::KeyPair;
 use sss::project::ProjectConfig;
 
-/// Helper to create a test ProjectConfig
+/// Helper to create a test `ProjectConfig`
 fn create_test_config() -> Result<ProjectConfig> {
     let keypair = KeyPair::generate()?;
     ProjectConfig::new("testuser", &keypair.public_key())
 }
 
-/// Test that load_project_config() finds config in current directory
+/// Test that `load_project_config()` finds config in current directory
 #[test]
 #[serial_test::serial]
 fn test_load_project_config_current_dir() -> Result<()> {
@@ -50,7 +50,7 @@ fn test_load_project_config_current_dir() -> Result<()> {
     Ok(())
 }
 
-/// Test that load_project_config() searches upward
+/// Test that `load_project_config()` searches upward
 #[test]
 #[serial_test::serial]
 fn test_load_project_config_searches_upward() -> Result<()> {
@@ -81,7 +81,7 @@ fn test_load_project_config_searches_upward() -> Result<()> {
     Ok(())
 }
 
-/// Test that load_project_config() returns helpful error when no config found
+/// Test that `load_project_config()` returns helpful error when no config found
 #[test]
 #[serial_test::serial]
 fn test_load_project_config_no_config_error() -> Result<()> {
@@ -107,14 +107,13 @@ fn test_load_project_config_no_config_error() -> Result<()> {
     // Should contain helpful message
     assert!(
         err_msg.contains("No SSS project found") || err_msg.contains(".sss.toml"),
-        "Error message: {}",
-        err_msg
+        "Error message: {err_msg}"
     );
 
     Ok(())
 }
 
-/// Test load_project_config_from() with specific directory
+/// Test `load_project_config_from()` with specific directory
 #[test]
 fn test_load_project_config_from_specific_dir() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -136,7 +135,7 @@ fn test_load_project_config_from_specific_dir() -> Result<()> {
     Ok(())
 }
 
-/// Test load_project_config_from() searches upward from specified dir
+/// Test `load_project_config_from()` searches upward from specified dir
 #[test]
 fn test_load_project_config_from_searches_upward() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -206,18 +205,15 @@ fn test_error_messages_are_helpful() -> Result<()> {
     // Error should mention key information
     assert!(
         err_msg.contains("SSS") || err_msg.contains("sss"),
-        "Should mention SSS: {}",
-        err_msg
+        "Should mention SSS: {err_msg}"
     );
     assert!(
         err_msg.contains(".sss.toml") || err_msg.contains("config"),
-        "Should mention config file: {}",
-        err_msg
+        "Should mention config file: {err_msg}"
     );
     assert!(
         err_msg.contains("init") || err_msg.contains("found"),
-        "Should suggest action: {}",
-        err_msg
+        "Should suggest action: {err_msg}"
     );
 
     Ok(())

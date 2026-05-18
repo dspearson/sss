@@ -38,7 +38,7 @@ impl MultiUserProject {
 
         // Create keystore and keypair for first user
         let first_username = usernames[0];
-        let keystore_dir = project_root.join(format!("keystore_{}", first_username));
+        let keystore_dir = project_root.join(format!("keystore_{first_username}"));
         let keystore = Keystore::new_with_config_dir(keystore_dir)?;
         let keypair = KeyPair::generate()?;
         keystore.store_keypair(&keypair, None)?;
@@ -61,7 +61,7 @@ impl MultiUserProject {
 
         // Add remaining users
         for &username in &usernames[1..] {
-            let keystore_dir = project_root.join(format!("keystore_{}", username));
+            let keystore_dir = project_root.join(format!("keystore_{username}"));
             let keystore = Keystore::new_with_config_dir(keystore_dir)?;
 
             let keypair = KeyPair::generate()?;
@@ -140,11 +140,11 @@ fn test_multiple_users_collaborate_on_file() -> anyhow::Result<()> {
     let processor = Processor::new(project.repository_key.clone())?;
 
     // Simulate a shared config file with secrets from multiple users
-    let shared_config = r#"# Team Configuration
+    let shared_config = r"# Team Configuration
 alice_api_key: ⊕{alice_key_xyz}
 bob_db_password: ⊕{bob_pass_123}
 charlie_token: ⊕{charlie_token_abc}
-"#;
+";
 
     // Encrypt the file
     let encrypted = processor.process_content(shared_config)?;
@@ -465,7 +465,7 @@ fn test_complex_multiuser_workflow() -> anyhow::Result<()> {
     let processor = Processor::new(project.repository_key.clone())?;
 
     // Alice creates a config file with secrets
-    let config_content = r#"
+    let config_content = r"
 # Production Configuration
 database:
   host: prod.example.com
@@ -474,7 +474,7 @@ database:
 api:
   key: ⊕{prod_api_key}
   secret: ⊕{prod_api_secret}
-"#;
+";
 
     // Alice encrypts it
     let encrypted = processor.process_content(config_content)?;

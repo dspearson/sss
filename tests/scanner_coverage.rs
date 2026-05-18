@@ -5,7 +5,7 @@
 //! - Negation pattern overrides
 //! - Recursive traversal with project boundary detection
 //! - Symlink handling (valid file symlinks, directory symlinks, dangling, circular)
-//! - scan_with_stats accuracy
+//! - `scan_with_stats` accuracy
 //! - Extension filter combined with ignore patterns
 
 use anyhow::Result;
@@ -19,7 +19,7 @@ use tempfile::TempDir;
 // Helper
 // ============================================================================
 
-/// Build a GlobSet from a slice of literal glob pattern strings.
+/// Build a `GlobSet` from a slice of literal glob pattern strings.
 fn make_glob_set(patterns: &[&str]) -> GlobSet {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
@@ -140,7 +140,7 @@ fn test_multiple_overlapping_ignore_patterns() -> Result<()> {
 // Directory traversal / project boundary tests
 // ============================================================================
 
-/// Test: scan_directory finds marker files 5 levels deep.
+/// Test: `scan_directory` finds marker files 5 levels deep.
 #[test]
 fn test_deep_recursive_traversal_five_levels() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -165,7 +165,7 @@ fn test_deep_recursive_traversal_five_levels() -> Result<()> {
     Ok(())
 }
 
-/// Test: with_project_boundaries(true) stops recursion at subdirectory that
+/// Test: `with_project_boundaries(true)` stops recursion at subdirectory that
 /// contains its own .sss.toml.
 #[test]
 fn test_project_boundaries_stops_at_nested_sss_toml() -> Result<()> {
@@ -197,7 +197,7 @@ fn test_project_boundaries_stops_at_nested_sss_toml() -> Result<()> {
     Ok(())
 }
 
-/// Test: with_project_boundaries(false) DOES recurse into subdirs with .sss.toml.
+/// Test: `with_project_boundaries(false)` DOES recurse into subdirs with .sss.toml.
 #[test]
 fn test_no_project_boundaries_includes_nested_project_files() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -340,17 +340,14 @@ fn test_circular_symlinks_terminate() -> Result<()> {
     // Must return (not hang) — either Ok or Err is acceptable
     let result = scanner.scan_directory(root);
 
-    match result {
-        Ok(files) => {
-            // anchor.txt must be reachable from dir_a (not through the circular link)
-            assert!(
-                files.iter().any(|p| p.file_name().unwrap() == "anchor.txt"),
-                "anchor.txt must be found"
-            );
-        }
-        Err(_) => {
-            // Acceptable: scanner chose to surface the error instead of silently skipping
-        }
+    if let Ok(files) = result {
+        // anchor.txt must be reachable from dir_a (not through the circular link)
+        assert!(
+            files.iter().any(|p| p.file_name().unwrap() == "anchor.txt"),
+            "anchor.txt must be found"
+        );
+    } else {
+        // Acceptable: scanner chose to surface the error instead of silently skipping
     }
 
     Ok(())
@@ -360,7 +357,7 @@ fn test_circular_symlinks_terminate() -> Result<()> {
 // scan_with_stats accuracy test
 // ============================================================================
 
-/// Test: scan_with_stats returns accurate files_count() for a known tree.
+/// Test: `scan_with_stats` returns accurate `files_count()` for a known tree.
 #[test]
 fn test_scan_with_stats_accurate_file_count() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -394,7 +391,7 @@ fn test_scan_with_stats_accurate_file_count() -> Result<()> {
 // Extension filter + ignore pattern interaction
 // ============================================================================
 
-/// Test: set_allowed_extensions combined with ignore_patterns — extension filter
+/// Test: `set_allowed_extensions` combined with `ignore_patterns` — extension filter
 /// and glob filter interact correctly (intersection semantics: both must pass).
 #[test]
 fn test_extension_filter_and_ignore_patterns_interact() -> Result<()> {

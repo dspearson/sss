@@ -1,4 +1,4 @@
-//! Comprehensive error handling tests for SssError types
+//! Comprehensive error handling tests for `SssError` types
 //!
 //! This test suite covers error type behavior:
 //! - Display formatting
@@ -112,7 +112,7 @@ fn test_io_error_conversion() {
 #[test]
 fn test_error_debug_output() {
     let error = SssError::Crypto("test".to_string());
-    let debug_str = format!("{:?}", error);
+    let debug_str = format!("{error:?}");
     assert!(debug_str.contains("Crypto"));
     assert!(debug_str.contains("test"));
 }
@@ -148,7 +148,7 @@ fn test_error_messages_with_unicode() {
 
 #[test]
 fn test_empty_error_messages() {
-    let error = SssError::Crypto("".to_string());
+    let error = SssError::Crypto(String::new());
     assert_eq!(error.to_string(), "Cryptographic error: ");
 }
 

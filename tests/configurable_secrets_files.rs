@@ -6,7 +6,7 @@ use sss::crypto::KeyPair;
 use sss::project::ProjectConfig;
 use sss::secrets::SecretsCache;
 
-/// Test that project config secrets_filename takes precedence
+/// Test that project config `secrets_filename` takes precedence
 #[test]
 fn test_project_config_secrets_filename_precedence() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -36,7 +36,7 @@ fn test_project_config_secrets_filename_precedence() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that user settings secrets_filename is used when project config doesn't specify
+/// Test that user settings `secrets_filename` is used when project config doesn't specify
 #[test]
 fn test_user_settings_secrets_filename_fallback() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -64,7 +64,7 @@ fn test_user_settings_secrets_filename_fallback() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that default secrets_filename is used when neither project nor user config specifies
+/// Test that default `secrets_filename` is used when neither project nor user config specifies
 #[test]
 fn default_secrets_filename_is_secrets() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -87,7 +87,7 @@ fn default_secrets_filename_is_secrets() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that project config secrets_suffix takes precedence
+/// Test that project config `secrets_suffix` takes precedence
 #[test]
 fn test_project_config_secrets_suffix_precedence() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -117,7 +117,7 @@ fn test_project_config_secrets_suffix_precedence() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that user settings secrets_suffix is used when project config doesn't specify
+/// Test that user settings `secrets_suffix` is used when project config doesn't specify
 #[test]
 fn test_user_settings_secrets_suffix_fallback() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -145,7 +145,7 @@ fn test_user_settings_secrets_suffix_fallback() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test that default secrets_suffix is used when neither project nor user config specifies
+/// Test that default `secrets_suffix` is used when neither project nor user config specifies
 #[test]
 fn default_secrets_suffix_is_dot_secrets() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -168,7 +168,7 @@ fn default_secrets_suffix_is_dot_secrets() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test SecretsCache with custom suffix finds the right file
+/// Test `SecretsCache` with custom suffix finds the right file
 #[test]
 fn test_secrets_cache_custom_suffix() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
@@ -193,7 +193,7 @@ fn test_secrets_cache_custom_suffix() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Test SecretsCache with custom filename finds the right file
+/// Test `SecretsCache` with custom filename finds the right file
 #[test]
 fn test_secrets_cache_custom_filename() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;

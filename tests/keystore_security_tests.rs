@@ -4,7 +4,7 @@
 //! - File permissions (ensure 0o700 on keys directory)
 //! - Concurrent access safety (thread safety, race conditions)
 //! - Malformed file handling (tampering detection, corruption)
-//! - DoS prevention (excessive keys, large files)
+//! - `DoS` prevention (excessive keys, large files)
 //! - Path traversal prevention
 //! - Secure deletion (key material wiping)
 //! - Symlink attack prevention
@@ -59,8 +59,7 @@ fn test_keystore_directory_permissions() -> Result<()> {
 
     assert_eq!(
         perms, 0o700,
-        "Keys directory should have 0o700 permissions, got 0o{:o}",
-        perms
+        "Keys directory should have 0o700 permissions, got 0o{perms:o}"
     );
 
     Ok(())
@@ -84,7 +83,7 @@ fn test_key_file_permissions() -> Result<()> {
 
     // Find the key file
     let keys_dir = temp_dir.path().join("sss").join("keys");
-    let key_file = keys_dir.join(format!("{}.toml", key_id));
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
 
     let metadata = fs::metadata(&key_file)?;
     let permissions = metadata.permissions();
@@ -94,8 +93,7 @@ fn test_key_file_permissions() -> Result<()> {
     // Should be 0o600 or 0o700 (owner read/write only)
     assert!(
         perms == 0o600 || perms == 0o700,
-        "Key file should have 0o600 or 0o700 permissions, got 0o{:o}",
-        perms
+        "Key file should have 0o600 or 0o700 permissions, got 0o{perms:o}"
     );
 
     Ok(())
@@ -121,7 +119,7 @@ fn test_concurrent_key_storage() -> Result<()> {
         let keystore_clone = Arc::clone(&keystore);
         let handle = thread::spawn(move || {
             let keypair = KeyPair::generate().unwrap();
-            let password = format!("password_{}", i);
+            let password = format!("password_{i}");
             keystore_clone.store_keypair(&keypair, Some(&password))
         });
         handles.push(handle);
@@ -226,7 +224,7 @@ fn test_tampered_key_detection() -> Result<()> {
 
     // Tamper with the key file
     let keys_dir = temp_dir.path().join("sss").join("keys");
-    let key_file = keys_dir.join(format!("{}.toml", key_id));
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
     let mut content = fs::read_to_string(&key_file)?;
 
     // Find and corrupt the encrypted_secret_key field (TOML format)
@@ -264,13 +262,13 @@ fn test_missing_salt_field() -> Result<()> {
 
     // Manually remove the salt field from TOML
     let keys_dir = temp_dir.path().join("sss").join("keys");
-    let key_file = keys_dir.join(format!("{}.toml", key_id));
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
     let mut content = fs::read_to_string(&key_file)?;
 
     // Remove salt line (simple text replacement for test)
     if let Some(pos) = content.find("salt = ")
         && let Some(newline) = content[pos..].find('\n') {
-            content.replace_range(pos..pos + newline + 1, "");
+            content.replace_range(pos..=(pos + newline), "");
         }
     fs::write(&key_file, &content)?;
 
@@ -281,7 +279,7 @@ fn test_missing_salt_field() -> Result<()> {
     Ok(())
 }
 
-/// Test: DoS prevention with excessive keys
+/// Test: `DoS` prevention with excessive keys
 ///
 /// Verifies that:
 /// - Can handle many keys without performance degradation
@@ -295,8 +293,8 @@ fn test_excessive_keys_handling() -> Result<()> {
     let mut key_ids = Vec::new();
     for i in 0..20 {
         let keypair = KeyPair::generate()?;
-        let key_id = keystore.store_keypair(&keypair, Some(&format!("pass{}", i)))?;
-        key_ids.push((key_id, format!("pass{}", i)));
+        let key_id = keystore.store_keypair(&keypair, Some(&format!("pass{i}")))?;
+        key_ids.push((key_id, format!("pass{i}")));
     }
 
     // Should be able to list all keys
@@ -374,7 +372,7 @@ fn test_special_characters_in_key_id() -> Result<()> {
     for malicious_id in path_traversal_attempts {
         let result = keystore.load_keypair(malicious_id, Some("password"), true);
         // Should fail (either doesn't exist or path is invalid)
-        assert!(result.is_err(), "Path traversal attempt should fail: {}", malicious_id);
+        assert!(result.is_err(), "Path traversal attempt should fail: {malicious_id}");
     }
 
     Ok(())
@@ -421,7 +419,7 @@ fn test_deletion_removes_file() -> Result<()> {
 
     // Verify file exists
     let keys_dir = temp_dir.path().join("sss").join("keys");
-    let key_file = keys_dir.join(format!("{}.toml", key_id));
+    let key_file = keys_dir.join(format!("{key_id}.toml"));
     assert!(key_file.exists(), "Key file should exist before deletion");
 
     // Delete key
@@ -511,7 +509,7 @@ fn test_mixed_concurrent_operations() -> Result<()> {
     // Pre-create some keys
     for i in 0..5 {
         let keypair = KeyPair::generate()?;
-        keystore.store_keypair(&keypair, Some(&format!("pass{}", i)))?;
+        keystore.store_keypair(&keypair, Some(&format!("pass{i}")))?;
     }
 
     let keystore = Arc::new(keystore);

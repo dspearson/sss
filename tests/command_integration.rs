@@ -185,8 +185,7 @@ fn test_security_validation_coverage() {
     for username in invalid_usernames {
         assert!(
             validate_username(username).is_err(),
-            "Should reject username: {}",
-            username
+            "Should reject username: {username}"
         );
     }
 
@@ -195,8 +194,7 @@ fn test_security_validation_coverage() {
     for username in valid_usernames {
         assert!(
             validate_username(username).is_ok(),
-            "Should accept username: {}",
-            username
+            "Should accept username: {username}"
         );
     }
 
@@ -245,8 +243,7 @@ fn test_config_manager_with_custom_confdir() {
     let settings_path = custom_confdir.join("settings.toml");
     assert!(
         settings_path.exists(),
-        "Settings file should exist in custom confdir: {:?}",
-        settings_path
+        "Settings file should exist in custom confdir: {settings_path:?}"
     );
 }
 
@@ -336,7 +333,7 @@ fn test_hex_fingerprint_formatting() {
     let test_hash = [0x12, 0x34, 0x56, 0x78, 0xab, 0xcd, 0xef, 0x90];
     let hex_string: String = test_hash
         .iter()
-        .map(|b| format!("{:02x}", b))
+        .map(|b| format!("{b:02x}"))
         .collect::<Vec<_>>()
         .join(":");
 

@@ -3,7 +3,7 @@
 //! Targets two reachable surface points in the survey-uncovered ranges flagged in
 //! `coverage-before.txt`:
 //!   - PROC-01: `process_file` size-error branch (lines 640-651)
-//!   - PROC-02: `process_content_with_path` is_secrets_file dispatch + content-too-large
+//!   - PROC-02: `process_content_with_path` `is_secrets_file` dispatch + content-too-large
 //!              guard (lines 545-590, 676-682)
 //!
 //! Allowed file (per 16-04 plan whitelist).
@@ -23,8 +23,8 @@ use sss::Processor;
 /// `metadata.len() > MAX_FILE_SIZE`. To exercise the branch deterministically
 /// without allocating 100MB, we point `process_file` at a path whose metadata
 /// read succeeds but content is empty, and assert the SUCCESS path
-/// (file ≤ MAX_FILE_SIZE, no error). This anchors the surrounding code (metadata
-/// fetch, file open, BufReader creation) and prevents regression of the
+/// (file ≤ `MAX_FILE_SIZE`, no error). This anchors the surrounding code (metadata
+/// fetch, file open, `BufReader` creation) and prevents regression of the
 /// guard-or-success bifurcation. The size-error arm itself is exercised by
 /// PROC-02 via the parallel `process_content_with_path` content-size check
 /// (same constant, same arm-shape, no 100MB allocation needed).
@@ -54,7 +54,7 @@ fn proc_01_process_file_handles_normal_sized_file_metadata_path() -> Result<()> 
 /// dispatch arm (lines 684-687) — both flagged uncovered in coverage-before.txt.
 ///
 /// Trigger: pass a `.secrets`-suffixed file path with plaintext content so the
-/// is_secrets_file check returns true, dispatching to the encrypt path which
+/// `is_secrets_file` check returns true, dispatching to the encrypt path which
 /// returns ⊠{...}-wrapped output.
 #[test]
 fn proc_02_process_content_secrets_file_dispatch() -> Result<()> {

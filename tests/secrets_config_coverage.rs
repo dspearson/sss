@@ -1,8 +1,8 @@
-//! Edge-case and coverage tests for the secrets and config_manager modules.
+//! Edge-case and coverage tests for the secrets and `config_manager` modules.
 //!
 //! These tests target parsing edge cases (TEST-04) and settings precedence / corruption
 //! handling (TEST-05) that are not exercised by the inline unit tests in secrets.rs and
-//! config_manager.rs or by the existing integration tests.
+//! `config_manager.rs` or by the existing integration tests.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,8 +87,7 @@ fn test_parse_crlf_line_endings() -> Result<()> {
     let value = secrets.get("CRLF_KEY").expect("CRLF_KEY should be present");
     assert!(
         !value.contains('\r'),
-        "Parsed value must not contain carriage-return character, got: {:?}",
-        value
+        "Parsed value must not contain carriage-return character, got: {value:?}"
     );
     Ok(())
 }
@@ -156,8 +155,7 @@ fn test_interpolation_missing_key_preserves_marker() -> Result<()> {
     // The missing marker must be preserved in the output (not silently dropped).
     assert!(
         result.contains("MISSING_KEY"),
-        "Missing secret marker should be preserved, got: {:?}",
-        result
+        "Missing secret marker should be preserved, got: {result:?}"
     );
     Ok(())
 }
@@ -196,8 +194,8 @@ fn test_find_secrets_file_walks_hierarchy() -> Result<()> {
 // Config manager edge cases (TEST-05)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Helper: create a ConfigManager backed by a fresh temporary config directory,
-/// optionally pre-populating it with UserSettings written via the proper
+/// Helper: create a `ConfigManager` backed by a fresh temporary config directory,
+/// optionally pre-populating it with `UserSettings` written via the proper
 /// serialization path (guarantees valid TOML).
 fn make_manager(
     f: impl FnOnce(&mut UserSettings),
@@ -230,7 +228,7 @@ impl UserSettingsSaveHelper for UserSettings {
     }
 }
 
-/// CLI override takes precedence over user settings and SSS_USER env var.
+/// CLI override takes precedence over user settings and `SSS_USER` env var.
 #[test]
 fn test_cli_username_wins_over_settings() -> Result<()> {
     let (manager, _dir) = make_manager(|s| {
@@ -258,7 +256,7 @@ fn test_user_settings_editor_used_when_no_env() -> Result<()> {
     Ok(())
 }
 
-/// KDF level from user settings is used when no CLI override and no SSS_KDF_LEVEL env var.
+/// KDF level from user settings is used when no CLI override and no `SSS_KDF_LEVEL` env var.
 #[test]
 fn test_kdf_level_from_settings_used_when_no_override() -> Result<()> {
     let (manager, _dir) = make_manager(|s| {
@@ -293,7 +291,7 @@ fn test_malformed_settings_toml_returns_error_no_panic() {
     );
 }
 
-/// When settings.toml is absent, ConfigManager creates successfully with defaults.
+/// When settings.toml is absent, `ConfigManager` creates successfully with defaults.
 #[test]
 fn test_missing_settings_toml_uses_defaults() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -366,7 +364,7 @@ fn test_save_load_settings_roundtrip() -> Result<()> {
     Ok(())
 }
 
-/// Secrets filename set in user settings is returned via ConfigManager.
+/// Secrets filename set in user settings is returned via `ConfigManager`.
 #[test]
 fn test_user_settings_secrets_filename_returned() -> Result<()> {
     let (mut manager, _dir) = make_manager(|_| {})?;
@@ -376,7 +374,7 @@ fn test_user_settings_secrets_filename_returned() -> Result<()> {
     Ok(())
 }
 
-/// Secrets suffix set in user settings is returned via ConfigManager.
+/// Secrets suffix set in user settings is returned via `ConfigManager`.
 #[test]
 fn test_user_settings_secrets_suffix_returned() -> Result<()> {
     let (mut manager, _dir) = make_manager(|_| {})?;

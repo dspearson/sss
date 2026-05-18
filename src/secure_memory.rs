@@ -530,12 +530,12 @@ mod tests {
     #[test]
     fn test_debug_redaction() {
         let s = SecureString::new("secret");
-        let debug_str = format!("{:?}", s);
+        let debug_str = format!("{s:?}");
         assert!(debug_str.contains("REDACTED"));
         assert!(!debug_str.contains("secret"));
 
         let buf = SecureBuffer::from_bytes(vec![1, 2, 3, 4]);
-        let debug_str = format!("{:?}", buf);
+        let debug_str = format!("{buf:?}");
         assert!(debug_str.contains("REDACTED"));
     }
 }

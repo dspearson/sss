@@ -3,7 +3,7 @@
 //! Drives the real sss binary through the complete migration workflow:
 //!   3-user v1 repo → sss migrate → v2 repo → each user renders with byte-identical plaintext.
 //!
-//! Only compiled and run with --features hybrid (requires HybridCryptoSuite + sss migrate).
+//! Only compiled and run with --features hybrid (requires `HybridCryptoSuite` + sss migrate).
 
 #![cfg(feature = "hybrid")]
 
@@ -23,10 +23,10 @@ struct UserEnv {
     home_dir: TempDir,
     pub username: String,
     /// Classic (X25519) base64 public key, captured from `keys generate --suite classic`.
-    /// Empty string until generate_keys() is called.
+    /// Empty string until `generate_keys()` is called.
     classic_pk: String,
     /// Hybrid base64 public key, captured from stdout of `keys generate --suite hybrid`.
-    /// Empty string until generate_keys() is called.
+    /// Empty string until `generate_keys()` is called.
     hybrid_pk: String,
 }
 
@@ -59,8 +59,8 @@ impl UserEnv {
     ///
     /// Captures stdout of `keys generate --suite hybrid` and parses the
     /// "Hybrid public key: <base64>" line (1 space after colon, as printed
-    /// by src/commands/keys.rs handle_keys_generate_command --suite hybrid).
-    /// Stores the result in self.hybrid_pk for later use by hybrid_pubkey().
+    /// by src/commands/keys.rs `handle_keys_generate_command` --suite hybrid).
+    /// Stores the result in `self.hybrid_pk` for later use by `hybrid_pubkey()`.
     ///
     /// Do NOT call `sss keys show` to retrieve the hybrid pubkey — keys show
     /// only emits ASCII randomart and never prints the "Hybrid public key:" line.
@@ -132,7 +132,7 @@ impl UserEnv {
     }
 
     /// Return the classic (X25519) base64 public key for this user.
-    /// Value is captured from `keys generate --suite classic` stdout; call generate_keys() first.
+    /// Value is captured from `keys generate --suite classic` stdout; call `generate_keys()` first.
     fn classic_pubkey(&self) -> String {
         assert!(
             !self.classic_pk.is_empty(),
@@ -144,7 +144,7 @@ impl UserEnv {
 
     /// Return the hybrid base64 public key for this user.
     ///
-    /// Returns the value captured during generate_keys(). Panics if generate_keys()
+    /// Returns the value captured during `generate_keys()`. Panics if `generate_keys()`
     /// was not called first.
     fn hybrid_pubkey(&self) -> String {
         assert!(
@@ -195,8 +195,7 @@ fn e2e_migrate_three_user_repo_all_users_can_render() {
     let config_content = std::fs::read_to_string(project_path.join(".sss.toml")).unwrap();
     assert!(
         config_content.contains("version = \"1.0\""),
-        "init must produce v1.0 config; got: {}",
-        config_content
+        "init must produce v1.0 config; got: {config_content}"
     );
 
     // -----------------------------------------------------------------------
@@ -276,8 +275,7 @@ fn e2e_migrate_three_user_repo_all_users_can_render() {
     let sealed_content_before = String::from_utf8_lossy(&sealed_bytes_before).to_string();
     assert!(
         sealed_content_before.contains("\u{22A0}{"),
-        "file must be sealed before migration; content: {}",
-        sealed_content_before
+        "file must be sealed before migration; content: {sealed_content_before}"
     );
 
     // -----------------------------------------------------------------------
@@ -300,8 +298,7 @@ fn e2e_migrate_three_user_repo_all_users_can_render() {
     let config_after = std::fs::read_to_string(project_path.join(".sss.toml")).unwrap();
     assert!(
         config_after.contains("version = \"2.0\""),
-        ".sss.toml must be version 2.0 after migration; got: {}",
-        config_after
+        ".sss.toml must be version 2.0 after migration; got: {config_after}"
     );
 
     // -----------------------------------------------------------------------

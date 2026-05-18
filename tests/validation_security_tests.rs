@@ -90,16 +90,14 @@ fn test_null_byte_injection() -> Result<()> {
         let result = validate_file_path(path);
         assert!(
             result.is_err(),
-            "Null byte path should be rejected: {:?}",
-            path
+            "Null byte path should be rejected: {path:?}"
         );
 
         if let Err(e) = result {
             let err_msg = e.to_string();
             assert!(
                 err_msg.contains("null byte"),
-                "Error should mention null bytes: {}",
-                err_msg
+                "Error should mention null bytes: {err_msg}"
             );
         }
     }
@@ -107,7 +105,7 @@ fn test_null_byte_injection() -> Result<()> {
     Ok(())
 }
 
-/// Test: Very long path handling (DoS prevention)
+/// Test: Very long path handling (`DoS` prevention)
 ///
 /// Verifies that:
 /// - Very long paths don't cause buffer overflows
@@ -253,8 +251,7 @@ fn test_username_injection_attacks() -> Result<()> {
         let result = validate_username(username);
         assert!(
             result.is_err(),
-            "Injection attempt should be rejected: {:?}",
-            username
+            "Injection attempt should be rejected: {username:?}"
         );
     }
 
@@ -317,8 +314,7 @@ fn test_reserved_username_bypasses() -> Result<()> {
     for name in reserved {
         assert!(
             validate_username(name).is_err(),
-            "Reserved name should be rejected: {}",
-            name
+            "Reserved name should be rejected: {name}"
         );
     }
 
@@ -394,8 +390,7 @@ fn test_key_id_tampering_attacks() -> Result<()> {
         let result = validate_key_id(key_id);
         assert!(
             result.is_err(),
-            "Tampering attempt should be rejected: {:?}",
-            key_id
+            "Tampering attempt should be rejected: {key_id:?}"
         );
     }
 
@@ -481,8 +476,7 @@ fn test_base64_padding_attacks() -> Result<()> {
         let result = validate_base64(input, max_len);
         assert!(
             result.is_err(),
-            "Invalid padding should be rejected: {:?}",
-            input
+            "Invalid padding should be rejected: {input:?}"
         );
     }
 
@@ -516,8 +510,7 @@ fn test_base64_character_injection() -> Result<()> {
         let result = validate_base64(input, max_len);
         assert!(
             result.is_err(),
-            "Non-base64 character should be rejected: {:?}",
-            input
+            "Non-base64 character should be rejected: {input:?}"
         );
     }
 
@@ -529,7 +522,7 @@ fn test_base64_character_injection() -> Result<()> {
 /// Verifies that:
 /// - Empty input is rejected
 /// - Maximum length is enforced
-/// - Length enforcement prevents DoS
+/// - Length enforcement prevents `DoS`
 #[test]
 fn test_base64_length_limits() -> Result<()> {
     // Empty input
@@ -578,8 +571,7 @@ fn test_base64_valid_encoding() -> Result<()> {
         let result = validate_base64(input, max_len);
         assert!(
             result.is_ok(),
-            "Valid base64 should be accepted: {:?}",
-            input
+            "Valid base64 should be accepted: {input:?}"
         );
     }
 
@@ -620,7 +612,7 @@ fn test_concurrent_username_validation() -> Result<()> {
                 let result = validate_username(username);
                 // Verify reserved/invalid names fail consistently
                 if *username == "root" || *username == ".invalid" {
-                    assert!(result.is_err(), "Thread {}: {} should be invalid", i, username);
+                    assert!(result.is_err(), "Thread {i}: {username} should be invalid");
                 }
             }
         });
@@ -663,7 +655,7 @@ fn test_concurrent_path_validation() -> Result<()> {
                 let result = validate_file_path(path);
                 // Null byte paths should always fail
                 if path.contains('\0') {
-                    assert!(result.is_err(), "Null byte path should fail: {}", path);
+                    assert!(result.is_err(), "Null byte path should fail: {path}");
                 }
             }
         });

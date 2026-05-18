@@ -203,7 +203,7 @@ fn test_long_pattern_list() -> Result<()> {
     // Create 50 patterns
     let mut pattern_vec = Vec::new();
     for i in 0..50 {
-        pattern_vec.push(format!("*.ext{}", i));
+        pattern_vec.push(format!("*.ext{i}"));
     }
     let pattern_str = pattern_vec.join(" ");
 

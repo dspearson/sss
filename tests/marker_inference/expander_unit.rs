@@ -81,7 +81,7 @@ fn test_multiple_spaces_preservation() {
 fn test_tabs_and_spaces_mixed() {
     // Mixed whitespace
     let result = infer_markers("o+{a\tb\tc}", "a\tb\tc").expect("Should handle tabs");
-    assert!(result.output.contains("\t"));
+    assert!(result.output.contains('\t'));
 }
 
 #[test]
@@ -119,21 +119,21 @@ fn test_three_adjacent_markers() {
 
     // Should apply left-bias twice: x merges with a, second x merges with resulting marker
     // Or they stay separate - either way, content should be preserved
-    assert!(result.output.contains("a") && result.output.contains("b") && result.output.contains("c"));
+    assert!(result.output.contains('a') && result.output.contains('b') && result.output.contains('c'));
 }
 
 #[test]
 fn test_insertion_between_three_markers() {
     // Insert between second and third marker
     let result = infer_markers("o+{a}o+{b}o+{c}", "abXc").expect("Should handle insertion");
-    assert!(result.output.contains("X") || result.output.contains("x"));
+    assert!(result.output.contains('X') || result.output.contains('x'));
 }
 
 #[test]
 fn test_very_long_marker_content() {
     // Large content in marker
     let long_content = "a".repeat(10000);
-    let source = format!("o+{{{}}}", long_content);
+    let source = format!("o+{{{long_content}}}");
     let result = infer_markers(&source, &long_content).expect("Should handle long content");
     assert!(result.output.contains(&long_content));
 }
@@ -144,8 +144,8 @@ fn test_many_small_markers() {
     let mut source = String::new();
     let mut expected = String::new();
     for i in 0..100 {
-        source.push_str(&format!("o+{{x{}}} ", i));
-        expected.push_str(&format!("x{} ", i));
+        source.push_str(&format!("o+{{x{i}}} "));
+        expected.push_str(&format!("x{i} "));
     }
     let result = infer_markers(&source, &expected).expect("Should handle many markers");
     assert!(result.output.contains("x0") && result.output.contains("x99"));
@@ -366,7 +366,7 @@ fn test_warning_generation() {
 fn test_special_unicode_spaces() {
     // Non-breaking space and other unicode spaces
     let nbsp = "\u{00A0}";
-    let result = infer_markers(&format!("o+{{value{}}}", nbsp), &format!("value{}", nbsp))
+    let result = infer_markers(&format!("o+{{value{nbsp}}}"), &format!("value{nbsp}"))
         .expect("Should handle unicode spaces");
     assert!(result.output.contains("value"));
 }
@@ -375,7 +375,7 @@ fn test_special_unicode_spaces() {
 fn test_zero_width_characters() {
     // Zero-width joiner/non-joiner
     let zwj = "\u{200D}";
-    let result = infer_markers(&format!("o+{{val{}ue}}", zwj), &format!("val{}ue", zwj))
+    let result = infer_markers(&format!("o+{{val{zwj}ue}}"), &format!("val{zwj}ue"))
         .expect("Should handle zero-width chars");
     assert!(result.output.contains("val") && result.output.contains("ue"));
 }

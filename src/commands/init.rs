@@ -50,8 +50,7 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
     // actionable error rather than a panic.
     let crypto = match matches
         .get_one::<String>("crypto")
-        .map(String::as_str)
-        .unwrap_or("hybrid")
+        .map_or("hybrid", String::as_str)
     {
         "classic" => crate::crypto::Suite::Classic,
         "hybrid" => crate::crypto::Suite::Hybrid,

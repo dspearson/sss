@@ -930,7 +930,7 @@ mod tests {
         let app = create_cli_app();
 
         // Core subcommands that should always be present
-        let subcommands: Vec<_> = app.get_subcommands().map(|s| s.get_name()).collect();
+        let subcommands: Vec<_> = app.get_subcommands().map(clap::Command::get_name).collect();
 
         assert!(subcommands.contains(&"init"), "init subcommand should exist");
         assert!(subcommands.contains(&"keys"), "keys subcommand should exist");
@@ -958,7 +958,7 @@ mod tests {
     #[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "fuse")))]
     fn test_fuse_commands_unavailable_when_disabled() {
         let app = create_cli_app();
-        let subcommands: Vec<_> = app.get_subcommands().map(|s| s.get_name()).collect();
+        let subcommands: Vec<_> = app.get_subcommands().map(clap::Command::get_name).collect();
 
         assert!(!subcommands.contains(&"mount"), "mount subcommand should not exist without fuse feature");
     }
@@ -976,7 +976,7 @@ mod tests {
     #[cfg(not(feature = "ninep"))]
     fn test_ninep_commands_unavailable_when_disabled() {
         let app = create_cli_app();
-        let subcommands: Vec<_> = app.get_subcommands().map(|s| s.get_name()).collect();
+        let subcommands: Vec<_> = app.get_subcommands().map(clap::Command::get_name).collect();
 
         assert!(!subcommands.contains(&"serve9p"), "serve9p subcommand should not exist without ninep feature");
     }
@@ -984,7 +984,7 @@ mod tests {
     #[test]
     fn test_deprecated_keygen_command_exists() {
         let app = create_cli_app();
-        let subcommands: Vec<_> = app.get_subcommands().map(|s| s.get_name()).collect();
+        let subcommands: Vec<_> = app.get_subcommands().map(clap::Command::get_name).collect();
 
         // Verify deprecated keygen command still exists for backwards compatibility
         assert!(subcommands.contains(&"keygen"), "deprecated keygen subcommand should exist");

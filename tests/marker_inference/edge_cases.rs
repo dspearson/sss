@@ -358,10 +358,10 @@ fn test_emoji_in_marker() {
 #[test]
 fn test_very_long_content() {
     let long_content = "x".repeat(10000);
-    let source = format!("o+{{{}}}", long_content);
+    let source = format!("o+{{{long_content}}}");
     let edited = long_content.clone();
     let result = infer_markers(&source, &edited).unwrap();
-    assert!(result.output.contains(&format!("⊕{{{}}}", long_content)));
+    assert!(result.output.contains(&format!("⊕{{{long_content}}}")));
 }
 
 #[test]
@@ -369,13 +369,13 @@ fn test_many_small_markers() {
     let mut source = String::new();
     let mut edited = String::new();
     for i in 0..100 {
-        source.push_str(&format!("o+{{s{}}} ", i));
-        edited.push_str(&format!("s{} ", i));
+        source.push_str(&format!("o+{{s{i}}} "));
+        edited.push_str(&format!("s{i} "));
     }
     let result = infer_markers(&source, &edited).unwrap();
     // All should be marked
     for i in 0..100 {
-        assert!(result.output.contains(&format!("⊕{{s{}}}", i)));
+        assert!(result.output.contains(&format!("⊕{{s{i}}}")));
     }
 }
 
@@ -468,8 +468,8 @@ fn test_large_file_with_many_markers() {
     let mut edited = String::new();
 
     for i in 0..100 {
-        source.push_str(&format!("key{}: o+{{secret{}}} ", i, i));
-        edited.push_str(&format!("key{}: newsecret{} ", i, i));
+        source.push_str(&format!("key{i}: o+{{secret{i}}} "));
+        edited.push_str(&format!("key{i}: newsecret{i} "));
     }
 
     let start = std::time::Instant::now();
@@ -488,8 +488,8 @@ fn test_many_small_changes() {
     let mut edited = String::new();
 
     for i in 0..50 {
-        source.push_str(&format!("o+{{val{}}} ", i));
-        edited.push_str(&format!("new{} ", i));
+        source.push_str(&format!("o+{{val{i}}} "));
+        edited.push_str(&format!("new{i} "));
     }
 
     let result = infer_markers(&source, &edited).unwrap();

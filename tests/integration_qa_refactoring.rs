@@ -2,7 +2,7 @@
 //!
 //! This test module validates the end-to-end functionality of the QA audit
 //! refactoring, ensuring that:
-//! - FileSystemOps trait works correctly for both standard and fd-based operations
+//! - `FileSystemOps` trait works correctly for both standard and fd-based operations
 //! - Secret interpolation is consistent between CLI and FUSE paths
 //! - Marker detection is comprehensive
 //! - Configuration loading helpers work correctly
@@ -15,7 +15,7 @@ use sss::crypto::RepositoryKey;
 use sss::filesystem_common::{has_any_markers, has_any_markers_bytes, MARKER_PATTERNS};
 use sss::secrets::{interpolate_secrets, FileSystemOps, SecretsCache, StdFileSystemOps};
 
-/// Test that StdFileSystemOps correctly implements FileSystemOps
+/// Test that `StdFileSystemOps` correctly implements `FileSystemOps`
 #[test]
 fn test_std_filesystem_ops_implementation() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -41,7 +41,7 @@ fn test_std_filesystem_ops_implementation() -> Result<()> {
     Ok(())
 }
 
-/// Test that unified interpolation works with StdFileSystemOps
+/// Test that unified interpolation works with `StdFileSystemOps`
 #[test]
 fn test_unified_interpolation_with_std_ops() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -72,7 +72,7 @@ fn test_unified_interpolation_with_std_ops() -> Result<()> {
     Ok(())
 }
 
-/// Test all marker types are detected by has_any_markers
+/// Test all marker types are detected by `has_any_markers`
 #[test]
 fn test_all_marker_types_detected() {
     let test_cases = vec![
@@ -91,8 +91,7 @@ fn test_all_marker_types_detected() {
         assert_eq!(
             has_any_markers(content),
             expected,
-            "Failed for: {}",
-            content
+            "Failed for: {content}"
         );
     }
 }
@@ -116,8 +115,7 @@ fn test_all_marker_types_detected_bytes() {
         assert_eq!(
             has_any_markers_bytes(content),
             expected,
-            "Failed for: {:?}",
-            content
+            "Failed for: {content:?}"
         );
     }
 }
@@ -126,21 +124,19 @@ fn test_all_marker_types_detected_bytes() {
 #[test]
 fn test_marker_detection_consistency() {
     for marker in MARKER_PATTERNS {
-        let content = format!("test {}secret}}", marker);
+        let content = format!("test {marker}secret}}");
 
         // Both string and byte versions should agree
         assert_eq!(
             has_any_markers(&content),
             has_any_markers_bytes(content.as_bytes()),
-            "String and byte detection differ for marker: {}",
-            marker
+            "String and byte detection differ for marker: {marker}"
         );
 
         // Both should detect the marker
         assert!(
             has_any_markers(&content),
-            "Marker not detected: {}",
-            marker
+            "Marker not detected: {marker}"
         );
     }
 }

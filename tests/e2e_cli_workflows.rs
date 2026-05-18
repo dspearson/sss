@@ -34,7 +34,7 @@ impl SssTestEnv {
         }
     }
 
-    /// Base command with full isolation (HOME, XDG_CONFIG_HOME, kdf-level).
+    /// Base command with full isolation (HOME, `XDG_CONFIG_HOME`, kdf-level).
     fn cmd(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_sss"));
         cmd.env("HOME", self.home_dir.path())
@@ -118,10 +118,7 @@ impl SssTestEnv {
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(
             out.status.success(),
-            "Expected success for {:?}\nstdout: {}\nstderr: {}",
-            args,
-            stdout,
-            stderr
+            "Expected success for {args:?}\nstdout: {stdout}\nstderr: {stderr}"
         );
         (stdout, stderr)
     }
@@ -133,10 +130,7 @@ impl SssTestEnv {
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
         assert!(
             !out.status.success(),
-            "Expected failure for {:?}\nstdout: {}\nstderr: {}",
-            args,
-            stdout,
-            stderr
+            "Expected failure for {args:?}\nstdout: {stdout}\nstderr: {stderr}"
         );
         (stdout, stderr)
     }
@@ -176,10 +170,10 @@ fn insert_toml_top_level(toml_content: &str, line: &str) -> String {
     if let Some(pos) = toml_content.find("\n[") {
         // Insert just before the first table header
         let (before, after) = toml_content.split_at(pos + 1);
-        format!("{}{}\n{}", before, line, after)
+        format!("{before}{line}\n{after}")
     } else {
         // No table headers — just append
-        format!("{}{}\n", toml_content, line)
+        format!("{toml_content}{line}\n")
     }
 }
 
@@ -207,8 +201,7 @@ fn e2e_workflow_full_roundtrip_seal_open_render() {
     let opened = env.read_file("secret.txt");
     assert!(
         opened.contains("\u{2295}{my_secret_value}"),
-        "expected open marker with original value, got: {}",
-        opened
+        "expected open marker with original value, got: {opened}"
     );
 
     // Render in-place
@@ -239,8 +232,7 @@ fn e2e_workflow_open_to_stdout() {
     let (stdout, _) = env.run_ok(&["open", "a.txt"]);
     assert!(
         stdout.contains("\u{2295}{abc}"),
-        "stdout should have open marker, got: {}",
-        stdout
+        "stdout should have open marker, got: {stdout}"
     );
 }
 
@@ -264,8 +256,7 @@ fn e2e_workflow_seal_in_place_message() {
     let (_, stderr) = env.run_ok(&["seal", "-x", "f.txt"]);
     assert!(
         stderr.contains("processed in-place") || stderr.contains("in-place"),
-        "expected in-place confirmation on stderr, got: {}",
-        stderr
+        "expected in-place confirmation on stderr, got: {stderr}"
     );
 }
 
@@ -365,8 +356,7 @@ fn e2e_keys_generate_duplicate_without_force_fails() {
     let (_, stderr) = env.run_fail(&["keys", "generate", "--suite", "classic", "--no-password"]);
     assert!(
         stderr.contains("already exists") || stderr.contains("--force"),
-        "expected duplicate key error, got: {}",
-        stderr
+        "expected duplicate key error, got: {stderr}"
     );
 }
 
@@ -377,8 +367,7 @@ fn e2e_keys_list_shows_key() {
     let (stdout, _) = env.run_ok(&["keys", "list"]);
     assert!(
         stdout.contains("1 keypair") || stdout.contains("keypair(s)"),
-        "expected keypair listing, got: {}",
-        stdout
+        "expected keypair listing, got: {stdout}"
     );
     assert!(stdout.contains("(current)"), "expected current marker");
 }
@@ -392,14 +381,12 @@ fn e2e_keys_pubkey_outputs_base64() {
     // NaCl public keys are 32 bytes -> 44 chars base64
     assert!(
         pubkey.len() >= 40,
-        "public key seems too short: {}",
-        pubkey
+        "public key seems too short: {pubkey}"
     );
     // Should be valid base64 characters
     assert!(
         pubkey.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='),
-        "public key contains non-base64 chars: {}",
-        pubkey
+        "public key contains non-base64 chars: {pubkey}"
     );
 }
 
@@ -410,9 +397,8 @@ fn e2e_keys_pubkey_fingerprint() {
     let (stdout, _) = env.run_ok(&["keys", "pubkey", "--fingerprint"]);
     // Fingerprint output includes randomart box
     assert!(
-        stdout.contains("+") && stdout.contains("|"),
-        "expected randomart borders, got: {}",
-        stdout
+        stdout.contains('+') && stdout.contains('|'),
+        "expected randomart borders, got: {stdout}"
     );
     assert!(stdout.contains("SSS KEY"), "expected key type label");
 }
@@ -424,8 +410,7 @@ fn e2e_keys_current_show() {
     let (stdout, _) = env.run_ok(&["keys", "current"]);
     assert!(
         stdout.contains("Current key ID:"),
-        "expected current key info, got: {}",
-        stdout
+        "expected current key info, got: {stdout}"
     );
     assert!(stdout.contains("Public key:"), "expected public key");
 }
@@ -450,8 +435,7 @@ fn e2e_keys_rotate_dry_run() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("Dry run") || stdout.contains("dry run"),
-        "expected dry-run indication, got: {}",
-        stdout
+        "expected dry-run indication, got: {stdout}"
     );
 }
 
@@ -481,8 +465,7 @@ fn e2e_init_without_keys_fails() {
     let (_, stderr) = env.run_fail(&["init", "testuser"]);
     assert!(
         stderr.contains("No keypair") || stderr.contains("Generate a keypair"),
-        "expected missing keypair error, got: {}",
-        stderr
+        "expected missing keypair error, got: {stderr}"
     );
 }
 
@@ -512,16 +495,14 @@ fn e2e_settings_set_username() {
     let (stdout, _) = env.run_ok(&["settings", "set", "--username", "newuser"]);
     assert!(
         stdout.contains("Set default username to: newuser"),
-        "expected confirmation, got: {}",
-        stdout
+        "expected confirmation, got: {stdout}"
     );
 
     // Verify by reading settings
     let (show_out, _) = env.run_ok(&["settings", "show"]);
     assert!(
         show_out.contains("newuser"),
-        "username should appear in settings, got: {}",
-        show_out
+        "username should appear in settings, got: {show_out}"
     );
 }
 
@@ -531,8 +512,7 @@ fn e2e_settings_location() {
     let (stdout, _) = env.run_ok(&["settings", "location"]);
     assert!(
         stdout.contains("User config:") && stdout.contains("settings.toml"),
-        "expected config path, got: {}",
-        stdout
+        "expected config path, got: {stdout}"
     );
 }
 
@@ -545,8 +525,7 @@ fn e2e_settings_reset_with_confirm() {
     let (stdout, _) = env.run_ok(&["settings", "reset", "--confirm"]);
     assert!(
         stdout.contains("reset to defaults"),
-        "expected reset confirmation, got: {}",
-        stdout
+        "expected reset confirmation, got: {stdout}"
     );
 }
 
@@ -556,8 +535,7 @@ fn e2e_settings_reset_without_confirm_warns() {
     let (stdout, _) = env.run_ok(&["settings", "reset"]);
     assert!(
         stdout.contains("--confirm"),
-        "expected confirmation hint, got: {}",
-        stdout
+        "expected confirmation hint, got: {stdout}"
     );
 }
 
@@ -568,8 +546,7 @@ fn e2e_project_enable_render() {
     let (stdout, _) = env.run_ok(&["project", "enable", "render"]);
     assert!(
         stdout.contains("Enabled automatic rendering"),
-        "expected enable confirmation, got: {}",
-        stdout
+        "expected enable confirmation, got: {stdout}"
     );
 }
 
@@ -581,8 +558,7 @@ fn e2e_project_disable_render() {
     let (stdout, _) = env.run_ok(&["project", "disable", "render"]);
     assert!(
         stdout.contains("Disabled automatic rendering"),
-        "expected disable confirmation, got: {}",
-        stdout
+        "expected disable confirmation, got: {stdout}"
     );
 }
 
@@ -607,8 +583,7 @@ fn e2e_project_list() {
     let (stdout, _) = env.run_ok(&["project", "list"]);
     assert!(
         stdout.contains("auto-render=enabled") || stdout.contains("Configured Projects"),
-        "expected project in list, got: {}",
-        stdout
+        "expected project in list, got: {stdout}"
     );
 }
 
@@ -623,8 +598,7 @@ fn e2e_users_list_shows_init_user() {
     let (stdout, _) = env.run_ok(&["users", "list"]);
     assert!(
         stdout.contains("testuser"),
-        "expected init user in list, got: {}",
-        stdout
+        "expected init user in list, got: {stdout}"
     );
 }
 
@@ -637,8 +611,7 @@ fn e2e_users_add_with_pubkey() {
     let (stdout, _) = env.run_ok(&["users", "add", "alice", &other_pubkey]);
     assert!(
         stdout.contains("Added user 'alice'"),
-        "expected add confirmation, got: {}",
-        stdout
+        "expected add confirmation, got: {stdout}"
     );
 
     // Verify user appears in list
@@ -653,8 +626,7 @@ fn e2e_users_info() {
     let (stdout, _) = env.run_ok(&["users", "info", "testuser"]);
     assert!(
         stdout.contains("User: testuser"),
-        "expected user info, got: {}",
-        stdout
+        "expected user info, got: {stdout}"
     );
     assert!(stdout.contains("Public key:"), "expected public key info");
 }
@@ -666,8 +638,7 @@ fn e2e_users_info_nonexistent_fails() {
     let (_, stderr) = env.run_fail(&["users", "info", "nobody"]);
     assert!(
         stderr.contains("not found"),
-        "expected not-found error, got: {}",
-        stderr
+        "expected not-found error, got: {stderr}"
     );
 }
 
@@ -685,15 +656,14 @@ fn e2e_project_seal_recursive() {
     let (stdout, _) = env.run_ok(&["seal", "--project"]);
     assert!(
         stdout.contains("Sealed") || stdout.contains("sealed"),
-        "expected seal confirmation, got: {}",
-        stdout
+        "expected seal confirmation, got: {stdout}"
     );
 
     // Both files should now contain sealed markers
     let a = env.read_file("a.txt");
     let b = env.read_file("sub/b.txt");
-    assert!(a.contains("\u{22A0}{"), "a.txt not sealed: {}", a);
-    assert!(b.contains("\u{22A0}{"), "sub/b.txt not sealed: {}", b);
+    assert!(a.contains("\u{22A0}{"), "a.txt not sealed: {a}");
+    assert!(b.contains("\u{22A0}{"), "sub/b.txt not sealed: {b}");
 }
 
 #[test]
@@ -707,8 +677,7 @@ fn e2e_project_open_denied_without_permission() {
     let (_, stderr) = env.run_fail(&["open", "--project"]);
     assert!(
         stderr.contains("disabled") || stderr.contains("enable open"),
-        "expected permission error, got: {}",
-        stderr
+        "expected permission error, got: {stderr}"
     );
 }
 
@@ -722,8 +691,7 @@ fn e2e_project_render_denied_without_permission() {
     let (_, stderr) = env.run_fail(&["render", "--project"]);
     assert!(
         stderr.contains("disabled") || stderr.contains("enable render"),
-        "expected permission error, got: {}",
-        stderr
+        "expected permission error, got: {stderr}"
     );
 }
 
@@ -746,8 +714,7 @@ fn e2e_project_open_with_env_bypass() {
     let content = env.read_file("s.txt");
     assert!(
         content.contains("\u{2295}{secret}"),
-        "file should be opened, got: {}",
-        content
+        "file should be opened, got: {content}"
     );
 }
 
@@ -790,8 +757,7 @@ fn e2e_project_ignore_patterns() {
     let log = env.read_file("debug.log");
     assert!(
         log.contains("\u{2295}{ignore_me}"),
-        "ignored file should be untouched, got: {}",
-        log
+        "ignored file should be untouched, got: {log}"
     );
 
     // Remove pattern
@@ -843,8 +809,7 @@ fn e2e_hooks_install_in_git_repo() {
     let (stdout, _) = env.run_ok(&["hooks", "install"]);
     assert!(
         stdout.contains("Installed") || stdout.contains("installed"),
-        "expected install confirmation, got: {}",
-        stdout
+        "expected install confirmation, got: {stdout}"
     );
 
     // Verify hook files exist
@@ -861,16 +826,14 @@ fn e2e_hooks_export() {
     let (stdout, _) = env.run_ok(&["hooks", "export"]);
     assert!(
         stdout.contains("Exported") || stdout.contains("exported"),
-        "expected export confirmation, got: {}",
-        stdout
+        "expected export confirmation, got: {stdout}"
     );
 
     // Verify hooks exported to config dir
     let hooks_dir = env.home_dir.path().join(".config").join("sss").join("hooks");
     assert!(
         hooks_dir.join("pre-commit").exists(),
-        "pre-commit should be exported to {:?}",
-        hooks_dir
+        "pre-commit should be exported to {hooks_dir:?}"
     );
     assert!(hooks_dir.join("post-merge").exists());
     assert!(hooks_dir.join("post-checkout").exists());
@@ -906,8 +869,7 @@ fn e2e_stdin_seal() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\u{22A0}{"),
-        "stdin seal should produce sealed marker, got: {}",
-        stdout
+        "stdin seal should produce sealed marker, got: {stdout}"
     );
 }
 
@@ -959,8 +921,7 @@ fn e2e_stdin_pipe_seal_to_open() {
     let opened = String::from_utf8_lossy(&open_out.stdout);
     assert!(
         opened.contains("\u{2295}{hello}"),
-        "piped open should recover original, got: {}",
-        opened
+        "piped open should recover original, got: {opened}"
     );
 }
 
@@ -1023,8 +984,7 @@ fn e2e_error_seal_nonexistent_file() {
     let (_, stderr) = env.run_fail(&["seal", "no_such_file.txt"]);
     assert!(
         stderr.contains("does not exist") || stderr.contains("No such file"),
-        "expected file-not-found error, got: {}",
-        stderr
+        "expected file-not-found error, got: {stderr}"
     );
 }
 
@@ -1035,8 +995,7 @@ fn e2e_error_open_nonexistent_file() {
     let (_, stderr) = env.run_fail(&["open", "no_such_file.txt"]);
     assert!(
         stderr.contains("does not exist") || stderr.contains("No such file"),
-        "got: {}",
-        stderr
+        "got: {stderr}"
     );
 }
 
@@ -1047,8 +1006,7 @@ fn e2e_error_render_nonexistent_file() {
     let (_, stderr) = env.run_fail(&["render", "no_such_file.txt"]);
     assert!(
         stderr.contains("does not exist") || stderr.contains("No such file"),
-        "got: {}",
-        stderr
+        "got: {stderr}"
     );
 }
 
@@ -1074,8 +1032,7 @@ fn e2e_help_flag() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("Secret String Substitution"),
-        "expected app description in help, got: {}",
-        stdout
+        "expected app description in help, got: {stdout}"
     );
     assert!(stdout.contains("seal"), "expected seal subcommand in help");
     assert!(stdout.contains("open"), "expected open subcommand in help");
@@ -1118,8 +1075,7 @@ fn e2e_error_no_subcommand_shows_help() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("seal") || stdout.contains("Usage"),
-        "no-subcommand should show help, got: {}",
-        stdout
+        "no-subcommand should show help, got: {stdout}"
     );
 }
 
@@ -1142,8 +1098,7 @@ fn e2e_edge_unicode_content() {
     let opened = env.read_file("uni.txt");
     assert!(
         opened.contains("\u{65E5}\u{672C}\u{8A9E}123"),
-        "unicode should survive roundtrip, got: {}",
-        opened
+        "unicode should survive roundtrip, got: {opened}"
     );
 }
 
@@ -1158,8 +1113,7 @@ fn e2e_edge_multiline_secret() {
     let opened = env.read_file("ml.txt");
     assert!(
         opened.contains("line1\nline2\nline3"),
-        "multiline should survive roundtrip, got: {}",
-        opened
+        "multiline should survive roundtrip, got: {opened}"
     );
 }
 
@@ -1191,8 +1145,7 @@ fn e2e_edge_ascii_marker_variant() {
     let (stdout, _) = env.run_ok(&["seal", "ascii.txt"]);
     assert!(
         stdout.contains("\u{22A0}{"),
-        "ASCII marker should be sealed, got: {}",
-        stdout
+        "ASCII marker should be sealed, got: {stdout}"
     );
 
     // File should be unchanged (stdout mode)
@@ -1243,8 +1196,7 @@ fn e2e_edge_confdir_override() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("1 keypair") || stdout.contains("keypair(s)"),
-        "confdir should contain our key, got: {}",
-        stdout
+        "confdir should contain our key, got: {stdout}"
     );
 }
 
@@ -1263,12 +1215,12 @@ fn e2e_edge_large_secret() {
     let env = SssTestEnv::new();
     env.setup();
     let big_secret = "x".repeat(4096);
-    env.write_file("big.txt", &format!("data=\u{2295}{{{}}}", big_secret));
+    env.write_file("big.txt", &format!("data=\u{2295}{{{big_secret}}}"));
 
     env.run_ok(&["seal", "-x", "big.txt"]);
     env.run_ok(&["render", "-x", "big.txt"]);
     let rendered = env.read_file("big.txt");
-    assert_eq!(rendered, format!("data={}", big_secret));
+    assert_eq!(rendered, format!("data={big_secret}"));
 }
 
 // ===========================================================================
@@ -1297,7 +1249,7 @@ impl SssTestEnv {
     }
 
     /// Create a nested project in `subdir/` with a DIFFERENT user's keys
-    /// (inaccessible to the current user).  Returns the TempDir holding
+    /// (inaccessible to the current user).  Returns the `TempDir` holding
     /// the other user's HOME so its keys remain on disk during the test.
     fn setup_nested_project_other_user(&self, subdir: &str) -> TempDir {
         let sub_path = self.project_dir.path().join(subdir);
@@ -1545,8 +1497,7 @@ fn e2e_nested_ignore_patterns_per_project() {
     let root_log = env.read_file("root.log");
     assert!(
         root_log.contains("\u{2295}{log_secret}"),
-        "root.log should be left untouched (ignored), got: {}",
-        root_log
+        "root.log should be left untouched (ignored), got: {root_log}"
     );
 
     // child/child.txt should be sealed
@@ -1557,16 +1508,14 @@ fn e2e_nested_ignore_patterns_per_project() {
     let child_tmp = env.read_file("child/child.tmp");
     assert!(
         child_tmp.contains("\u{2295}{tmp_secret}"),
-        "child/child.tmp should be left untouched (ignored by child), got: {}",
-        child_tmp
+        "child/child.tmp should be left untouched (ignored by child), got: {child_tmp}"
     );
 
     // child/child.log SHOULD be sealed (not in child's ignore patterns)
     let child_log = env.read_file("child/child.log");
     assert!(
         child_log.contains("\u{22A0}{"),
-        "child/child.log should be sealed (not ignored by child), got: {}",
-        child_log
+        "child/child.log should be sealed (not ignored by child), got: {child_log}"
     );
 }
 
@@ -1584,20 +1533,17 @@ fn e2e_cli_seal_in_place_stdout_empty() {
     assert_eq!(
         stdout.trim(),
         "",
-        "seal --in-place must produce no stdout output; got: {:?}",
-        stdout
+        "seal --in-place must produce no stdout output; got: {stdout:?}"
     );
     assert!(
         stderr.contains("in-place"),
-        "seal --in-place confirmation must appear on stderr; got: {:?}",
-        stderr
+        "seal --in-place confirmation must appear on stderr; got: {stderr:?}"
     );
     // Confirm the file was actually rewritten with sealed marker
     let on_disk = env.read_file("secret.txt");
     assert!(
         on_disk.contains("\u{22A0}{"),
-        "sealed file on disk must contain sealed marker \u{22A0}{{; got: {:?}",
-        on_disk
+        "sealed file on disk must contain sealed marker \u{22A0}{{; got: {on_disk:?}"
     );
 }
 
@@ -1631,8 +1577,7 @@ fn e2e_cli_render_auth_failure_exits_nonzero() {
     assert_eq!(
         stdout,
         "",
-        "render must produce no stdout on auth failure; got: {:?}",
-        stdout
+        "render must produce no stdout on auth failure; got: {stdout:?}"
     );
     assert!(
         !stderr.is_empty(),
@@ -1643,7 +1588,7 @@ fn e2e_cli_render_auth_failure_exits_nonzero() {
 /// Remove a TOML section (and all its key=value pairs) by section name.
 /// Handles `[section]` style headers until the next `[` or end-of-file.
 fn strip_toml_section(toml: &str, section_name: &str) -> String {
-    let header = format!("[{}]", section_name);
+    let header = format!("[{section_name}]");
     let mut result = Vec::new();
     let mut in_section = false;
 
@@ -1690,20 +1635,17 @@ fn e2e_cli_non_interactive_flag_render() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         out.status.success(),
-        "--non-interactive render must exit 0; stderr: {}",
-        stderr
+        "--non-interactive render must exit 0; stderr: {stderr}"
     );
     assert_eq!(
         stdout.trim(),
         "api_key: abc123",
-        "--non-interactive render must output decrypted plaintext; got: {:?}",
-        stdout
+        "--non-interactive render must output decrypted plaintext; got: {stdout:?}"
     );
     assert_eq!(
         stderr.trim(),
         "",
-        "--non-interactive render must produce no stderr on success; got: {:?}",
-        stderr
+        "--non-interactive render must produce no stderr on success; got: {stderr:?}"
     );
 }
 
@@ -1950,7 +1892,7 @@ api_key: \u{2295}{abc-123}
 /// without requiring migration.
 ///
 /// A v1 repo has `version = "1.0"` in .sss.toml; the v2 binary (this binary)
-/// must dispatch to ClassicSuite automatically and perform the full
+/// must dispatch to `ClassicSuite` automatically and perform the full
 /// seal -> open -> render round-trip with byte-identical plaintext recovery.
 #[test]
 fn e2e_v2_binary_reads_v1_repo_without_migration() {
@@ -1961,8 +1903,7 @@ fn e2e_v2_binary_reads_v1_repo_without_migration() {
     let config_content = env.read_file(".sss.toml");
     assert!(
         config_content.contains("version = \"1.0\""),
-        "setup must produce a v1.0 config; got: {}",
-        config_content
+        "setup must produce a v1.0 config; got: {config_content}"
     );
 
     // Seal a file
@@ -1977,8 +1918,7 @@ fn e2e_v2_binary_reads_v1_repo_without_migration() {
     let opened = env.read_file("secret.txt");
     assert!(
         opened.contains("\u{2295}{hunter2}"),
-        "v2 binary must open v1 repo file byte-identically; got: {}",
-        opened
+        "v2 binary must open v1 repo file byte-identically; got: {opened}"
     );
 
     // Render — the full seal->render round-trip must work
@@ -2088,8 +2028,7 @@ added = "2026-01-01T00:00:00Z"
 
     assert!(
         !stderr.contains("hybrid feature") && !stderr.contains("hybrid suite"),
-        "hybrid binary must NOT emit the hybrid-feature error for a v2 config; stderr: {}",
-        stderr
+        "hybrid binary must NOT emit the hybrid-feature error for a v2 config; stderr: {stderr}"
     );
     // The .sss.toml must be untouched.
     let config_after = env.read_file(".sss.toml");

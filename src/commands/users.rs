@@ -393,7 +393,7 @@ fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
     let mut config = ProjectConfig::load_from_file(&config_path)?;
 
     let user = config.users.get_mut(username.as_str()).ok_or_else(|| {
-        anyhow!("User '{}' not found in project", username)
+        anyhow!("User '{username}' not found in project")
     })?;
     user.hybrid_public = Some(hybrid_b64.clone());
 
@@ -440,7 +440,7 @@ mod tests {
 
     // --- Plan 04-01: handle_users_add_hybrid_key unit tests ---
 
-    /// Build a minimal ArgMatches for the add-hybrid-key subcommand.
+    /// Build a minimal `ArgMatches` for the add-hybrid-key subcommand.
     #[cfg(feature = "hybrid")]
     fn make_add_hybrid_key_matches(username: &str, hybrid_b64: &str) -> ArgMatches {
         use clap::{Arg, Command};
@@ -551,9 +551,9 @@ mod tests {
     }
 
     /// Build a TempDir-rooted .sss.toml seeded with one classic user.
-    /// Returns (TempDir, KeyPair) — the TempDir must outlive the test body.
+    /// Returns (`TempDir`, `KeyPair`) — the `TempDir` must outlive the test body.
     ///
-    /// Under the `hybrid` feature the fixture is promoted to format_version=2
+    /// Under the `hybrid` feature the fixture is promoted to `format_version=2`
     /// (a valid signed envelope) so that PQSIG-06 `require_signed` checks pass
     /// in the mutating handlers.  Without the feature the file stays at v1,
     /// which is accepted by the non-hybrid handlers.
@@ -568,8 +568,8 @@ mod tests {
         (tmp, kp)
     }
 
-    /// Promote an existing format_version=1 `.sss.toml` to a signed
-    /// format_version=2 envelope using ephemeral sig keypairs.
+    /// Promote an existing `format_version=1` `.sss.toml` to a signed
+    /// `format_version=2` envelope using ephemeral sig keypairs.
     ///
     /// This is the test-only analogue of `sss envelope upgrade-sig`.
     /// It generates fresh Ed448 + ML-DSA-65 sig keypairs, stores the public

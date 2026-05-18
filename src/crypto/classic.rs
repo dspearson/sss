@@ -1128,7 +1128,7 @@ mod tests {
             let plaintext = "A".repeat(size);
             let encrypted = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
             let decrypted = decrypt(&encrypted, &key).unwrap();
-            assert_eq!(decrypted, plaintext.as_bytes(), "Failed at size {}", size);
+            assert_eq!(decrypted, plaintext.as_bytes(), "Failed at size {size}");
         }
 
         // Test with binary data
@@ -1207,13 +1207,11 @@ mod tests {
             // Critical: Base64 output must never contain { or }
             assert!(
                 !encrypted.contains('{'),
-                "Base64 output contains '{{': {}",
-                encrypted
+                "Base64 output contains '{{': {encrypted}"
             );
             assert!(
                 !encrypted.contains('}'),
-                "Base64 output contains '}}': {}",
-                encrypted
+                "Base64 output contains '}}': {encrypted}"
             );
 
             // Verify it still decrypts correctly
@@ -1231,8 +1229,7 @@ mod tests {
         for ch in encrypted.chars() {
             assert!(
                 ch.is_ascii_alphanumeric() || ch == '+' || ch == '/' || ch == '=',
-                "Base64 output contains unsafe character: '{}'",
-                ch
+                "Base64 output contains unsafe character: '{ch}'"
             );
         }
     }

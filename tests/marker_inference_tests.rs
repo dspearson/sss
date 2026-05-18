@@ -89,8 +89,8 @@ fn test_section_8_3_example_3_nested_delimiters() {
 
     // Ensure single quotes are not inside the marker
     assert!(
-        !result.output.contains(r#"⊕{'modified'}"#)
-            && !result.output.contains(r#"o+{'modified'}"#),
+        !result.output.contains(r"⊕{'modified'}")
+            && !result.output.contains(r"o+{'modified'}"),
         "Single quotes should NOT be inside marker. Got: {}",
         result.output
     );

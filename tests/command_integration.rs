@@ -1,6 +1,11 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: this test file exercises libsodium FFI (crypto_hash_sha256) directly to
+// validate fingerprint determinism. All unsafe blocks pass the same valid
+// pointer/length triple per the libsodium contract; init guaranteed by the
+// test fixture's earlier sodium_init() call.
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use std::env;
 use std::fs;

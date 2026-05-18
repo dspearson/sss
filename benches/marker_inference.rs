@@ -1,3 +1,8 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Performance benchmarks for marker inference
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

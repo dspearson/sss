@@ -1,6 +1,15 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: this test file exercises env::set_var (unsafe since Rust 1.83) to set
+// EDITOR and HOME variables before invoking the editor module. All unsafe blocks
+// share the same SAFETY invariant: single-threaded test process, no concurrent
+// readers of these env vars between the set_var call and the test assertion.
+// File-top blanket allow is the audit-discoverable opt-out per Option B convention.
+#![allow(clippy::undocumented_unsafe_blocks)]
+// Why: tests/crypto_security_tests.rs style — verbose bit mask check is more
+// readable as an idiomatic Unix mode test than .trailing_zeros() rewrite.
+#![allow(clippy::verbose_bit_mask)]
 
 //! Process and command execution security tests
 //!

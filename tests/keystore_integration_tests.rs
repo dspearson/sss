@@ -177,10 +177,10 @@ fn test_list_all_keys() -> Result<()> {
     let keys = keystore.list_key_ids()?;
 
     assert_eq!(keys.len(), 3);
-    let key_ids: Vec<String> = keys.iter().map(|(id, _)| id.clone()).collect();
-    assert!(key_ids.contains(&key_id1));
-    assert!(key_ids.contains(&key_id2));
-    assert!(key_ids.contains(&key_id3));
+    let stored_ids: Vec<String> = keys.iter().map(|(id, _)| id.clone()).collect();
+    assert!(stored_ids.contains(&key_id1));
+    assert!(stored_ids.contains(&key_id2));
+    assert!(stored_ids.contains(&key_id3));
 
     Ok(())
 }
@@ -238,14 +238,14 @@ fn test_is_password_protected() -> Result<()> {
     let keypair1 = KeyPair::generate()?;
     let keypair2 = KeyPair::generate()?;
 
-    let _key_id1 = keystore.store_keypair(&keypair1, Some("password"))?;
+    let key_id1 = keystore.store_keypair(&keypair1, Some("password"))?;
     let _key_id2 = keystore.store_keypair(&keypair2, None)?;
 
     // Test current key (most recently stored is key2)
     assert!(!keystore.is_current_key_password_protected()?);
 
     // Set to key1 and test
-    keystore.set_current_key(&_key_id1)?;
+    keystore.set_current_key(&key_id1)?;
     assert!(keystore.is_current_key_password_protected()?);
 
     Ok(())
@@ -309,12 +309,12 @@ fn test_multiple_keys_different_passwords() -> Result<()> {
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_classic_only_backward_compat() -> Result<()> {
-    let (keystore, _temp_dir) = create_temp_keystore()?;
+    let (keystore, temp_dir) = create_temp_keystore()?;
     let keypair = KeyPair::generate()?;
     let key_id = keystore.store_keypair(&keypair, None)?;
 
     // Read the TOML from disk directly and parse it
-    let keys_dir = _temp_dir.path().join("sss").join("keys");
+    let keys_dir = temp_dir.path().join("sss").join("keys");
     let key_file = keys_dir.join(format!("{key_id}.toml"));
     let content = std::fs::read_to_string(&key_file)?;
 
@@ -357,7 +357,7 @@ fn test_dual_suite_roundtrip() -> Result<()> {
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_upgrade_classic_to_both_preserves_classic() -> Result<()> {
-    let (keystore, _temp_dir) = create_temp_keystore()?;
+    let (keystore, temp_dir) = create_temp_keystore()?;
 
     let classic = ClassicKeyPair::generate()?;
     let hybrid = HybridKeyPair::generate()?;
@@ -366,7 +366,7 @@ fn test_upgrade_classic_to_both_preserves_classic() -> Result<()> {
     let key_id = keystore.store_keypair(&KeyPair::Classic(classic.clone()), Some("test_pass"))?;
 
     // Capture pre-upgrade TOML values
-    let keys_dir = _temp_dir.path().join("sss").join("keys");
+    let keys_dir = temp_dir.path().join("sss").join("keys");
     let key_file = keys_dir.join(format!("{key_id}.toml"));
 
     let pre_content = std::fs::read_to_string(&key_file)?;

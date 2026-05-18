@@ -1,6 +1,11 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: every unsafe block in this file wraps env::{set_var,remove_var} (unsafe
+// since Rust 1.83); each call is in a #[serial_test::serial]-gated test
+// preventing concurrent env-var access. File-top blanket allow with serial-test
+// rationale is the audit-discoverable opt-out.
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 /// Tests for username resolution across all commands
 ///

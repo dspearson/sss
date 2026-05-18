@@ -530,10 +530,11 @@ fn sss_error_from_io_does_not_panic() {
 
 #[test]
 fn reexport_compile_check() {
+    fn assert_type<T>() {}
+
     // src/lib.rs:39 — config::{load_key, load_key_for_user, Config}
     let _: fn() -> anyhow::Result<crypto::Key> = config::load_key;
     let _: fn(&str) -> anyhow::Result<crypto::Key> = config::load_key_for_user;
-    fn assert_type<T>() {}
     assert_type::<Config>();
 
     // src/lib.rs:40 — crypto::{KeyPair, RepositoryKey}

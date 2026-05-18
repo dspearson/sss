@@ -1,3 +1,8 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! FUSE read-path latency benchmarks
 //!
 //! These benchmarks exercise the same code path that the FUSE `read()` handler invokes
@@ -57,7 +62,8 @@ fn make_sealed_content(processor: &Processor, filler_kb: usize, n_markers: usize
             content.push_str(line);
             let _ = j; // suppress warning
         }
-        content.push_str(&format!("secret_{i} = o+{{plaintext-secret-value-{i:04}}}\n"));
+        use std::fmt::Write as _;
+        writeln!(content, "secret_{i} = o+{{plaintext-secret-value-{i:04}}}").unwrap();
     }
 
     // Remaining filler after last marker

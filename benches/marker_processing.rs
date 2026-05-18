@@ -1,3 +1,8 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Performance benchmarks for single-file marker processing with 100+ markers.
 //!
 //! Exercises `find_balanced_markers`, `seal_content_with_path`, and
@@ -15,9 +20,10 @@ use std::path::PathBuf;
 
 /// Build a string containing `n` plaintext markers.
 fn build_plaintext_content(n: usize) -> String {
+    use std::fmt::Write as _;
     let mut s = String::with_capacity(n * 50);
     for i in 0..n {
-        s.push_str(&format!("line {i:04}: api_key_{i} = o+{{secret-value-{i:04}}}\n"));
+        writeln!(s, "line {i:04}: api_key_{i} = o+{{secret-value-{i:04}}}").unwrap();
     }
     s
 }

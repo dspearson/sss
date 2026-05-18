@@ -120,7 +120,7 @@ fn test_very_long_path_handling() -> Result<()> {
     // Test paths of various extreme lengths
     let path_1k = "a".repeat(1000) + ".txt";
     let path_10k = "b".repeat(10000) + ".txt";
-    let path_100k = "c".repeat(100000) + ".txt";
+    let path_100k = "c".repeat(100_000) + ".txt";
 
     // Very long paths may succeed or fail depending on OS limits
     // Main goal: ensure no crash/panic

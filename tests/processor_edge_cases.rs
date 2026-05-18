@@ -185,7 +185,8 @@ fn test_detect_many_patterns() -> Result<()> {
     // 100 patterns
     let mut content = String::new();
     for i in 0..100 {
-        content.push_str(&format!("secret{i}=⊕{{value{i}}}\n"));
+        use std::fmt::Write as _;
+        writeln!(content, "secret{i}=⊕{{value{i}}}").unwrap();
     }
 
     fs::write(root.join("many.txt"), content)?;
@@ -348,7 +349,8 @@ fn test_performance_with_large_file() -> Result<()> {
     // Large file with 1000 patterns
     let mut content = String::new();
     for i in 0..1000 {
-        content.push_str(&format!("secret{i}=⊕{{value{i}}}\n"));
+        use std::fmt::Write as _;
+        writeln!(content, "secret{i}=⊕{{value{i}}}").unwrap();
     }
 
     fs::write(root.join("large.txt"), content)?;

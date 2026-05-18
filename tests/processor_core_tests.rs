@@ -6,9 +6,9 @@
 //!
 //! Targets two reachable surface points in the survey-uncovered ranges flagged in
 //! `coverage-before.txt`:
-//!   - PROC-01: `process_file` size-error branch (lines 640-651)
-//!   - PROC-02: `process_content_with_path` `is_secrets_file` dispatch + content-too-large
-//!              guard (lines 545-590, 676-682)
+//! - PROC-01: `process_file` size-error branch (lines 640-651)
+//! - PROC-02: `process_content_with_path` `is_secrets_file` dispatch + content-too-large
+//!   guard (lines 545-590, 676-682)
 //!
 //! Allowed file (per 16-04 plan whitelist).
 

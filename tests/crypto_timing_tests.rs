@@ -1,6 +1,12 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: timing tests measure u128 nanoseconds and compute variance as f64;
+// precision loss is acceptable for "variance < 50%" assertions. Test scope.
+#![allow(clippy::cast_precision_loss)]
+// Why: timing-test fixtures use start_time/start_iter type names which are
+// flagged by similar_names; renaming would obscure the timing instrumentation.
+#![allow(clippy::similar_names)]
 
 #![allow(deprecated)]
 //! Cryptography security and timing tests

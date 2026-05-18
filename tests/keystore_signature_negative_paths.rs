@@ -1,6 +1,9 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: crypto-idiomatic naming uses _sk/_vk/_pk suffixes; renaming would obscure
+// the AND-composition signature-verification negative-path fixtures.
+#![allow(clippy::similar_names)]
 
 //! Negative-path tests for keystore entry signature verification (Phase 18 / PQSIG-01..03).
 //!
@@ -13,8 +16,10 @@
 //!    `signature verification failed`.
 //!
 //! Belt-and-braces feature gating (Phase 15 D-13 + D-11 precedent):
-//!   - source-level `#![cfg(feature = "hybrid")]` (this file) AND
-//!   - `Cargo.toml` `[[test]] required-features = ["hybrid"]`
+//!
+//! - source-level `#![cfg(feature = "hybrid")]` (this file) AND
+//! - `Cargo.toml` `[[test]] required-features = ["hybrid"]`
+//!
 //! → default `cargo test` cleanly skips this binary.
 //!
 //! NEG-02 vs NEG-03 are SEPARATE test functions to prove AND-composition

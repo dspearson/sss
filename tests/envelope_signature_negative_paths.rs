@@ -418,8 +418,10 @@ fn upgrade_sig_round_trip() {
 
 /// Init with --crypto hybrid (`format_version=2`, signed). Snapshot bytes. Re-run
 /// upgrade-sig. Assert:
+///
 /// 1. Exit code 0 (clean).
 /// 2. On-disk .sss.toml bytes unchanged (no re-sign, no whitespace shuffle).
+///
 /// This validates the "no-op skip" idempotency semantic chosen in envelope.rs:
 /// `format_version` >= 2 → print "already signed" and return Ok without file touch.
 /// mtime is preserved because we never call `write_atomic` on already-signed envelopes.

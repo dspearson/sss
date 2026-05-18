@@ -1,3 +1,8 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Performance benchmarks for project-wide seal/open operations on 1000+ files.
 //!
 //! This benchmark exercises the per-file processing path that is the hot path

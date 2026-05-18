@@ -1411,7 +1411,7 @@ fn e2e_nested_no_keys_passthrough() {
     env.setup();
 
     // Create nested project with a DIFFERENT user (inaccessible)
-    let _other_home = env.setup_nested_project_other_user("private");
+    let other_home = env.setup_nested_project_other_user("private");
 
     // Write files: root has markers, private has markers sealed by someone else
     env.write_file("root.txt", "root=\u{2295}{open_secret}");
@@ -1421,7 +1421,7 @@ fn e2e_nested_no_keys_passthrough() {
     );
 
     // Seal the private file using the other user's keys
-    env.seal_file_as_other(&_other_home, "private/secret.txt");
+    env.seal_file_as_other(&other_home, "private/secret.txt");
 
     // Now seal from root as the main user
     env.run_ok(&["seal", "--project"]);

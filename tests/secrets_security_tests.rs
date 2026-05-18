@@ -83,9 +83,10 @@ fn test_dos_prevention_large_file() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create a large secrets file (1MB of data)
+    use std::fmt::Write as _;
     let mut large_content = String::with_capacity(1_000_000);
-    for i in 0..10000 {
-        large_content.push_str(&format!("key_{}: value_{}\n", i, "x".repeat(90)));
+    for i in 0..10_000 {
+        writeln!(large_content, "key_{}: value_{}", i, "x".repeat(90)).unwrap();
     }
 
     let secrets_file = project_root.join("secrets");
@@ -119,9 +120,10 @@ fn test_dos_prevention_deep_nesting() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create a secrets file with deeply nested multi-line content
+    use std::fmt::Write as _;
     let mut nested_content = String::from("deep_secret: |\n");
     for depth in 0..100 {
-        nested_content.push_str(&format!("  level_{depth}\n"));
+        writeln!(nested_content, "  level_{depth}").unwrap();
     }
 
     let secrets_file = project_root.join("secrets");
@@ -311,16 +313,17 @@ fn test_excessive_interpolation_markers() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create secrets file
+    use std::fmt::Write as _;
     let mut secrets_content = String::new();
     for i in 0..1000 {
-        secrets_content.push_str(&format!("key_{i}: value_{i}\n"));
+        writeln!(secrets_content, "key_{i}: value_{i}").unwrap();
     }
     fs::write(project_root.join("secrets"), &secrets_content)?;
 
     // Create content with many interpolation markers
     let mut content_with_markers = String::new();
     for i in 0..1000 {
-        content_with_markers.push_str(&format!("⊲{{key_{i}}}\n"));
+        writeln!(content_with_markers, "⊲{{key_{i}}}").unwrap();
     }
 
     let test_file = project_root.join("test.txt");

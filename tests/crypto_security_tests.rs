@@ -1,6 +1,10 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: timing-attack tests compute variance from u128 nanosecond durations cast
+// to f64. Precision loss is acceptable here — the test asserts variance < 50%
+// which doesn't require f64-mantissa-level precision. Test scope only.
+#![allow(clippy::cast_precision_loss)]
 
 //! Cryptographic security tests
 //!

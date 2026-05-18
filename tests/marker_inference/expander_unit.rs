@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Unit tests for marker inference expander module
 //!
 //! These tests focus on internal expander logic, edge cases,

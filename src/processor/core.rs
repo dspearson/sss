@@ -110,16 +110,16 @@ fn unescape_default_delimiter(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some('{' | '}' | '\\') = chars.clone().next() {
-                // Escaped brace or backslash — emit the literal.
-                // Why: chars.clone().next() returned Some(_) at the match arm above,
-                // so the un-cloned chars iterator yields the same value. .unwrap is
-                // unreachable. HARDEN-01 / 08-01.
-                #[allow(clippy::unwrap_used)]
-                out.push(chars.next().unwrap());
-                continue;
-            }
+        if ch == '\\'
+            && let Some('{' | '}' | '\\') = chars.clone().next()
+        {
+            // Escaped brace or backslash — emit the literal.
+            // Why: chars.clone().next() returned Some(_) at the match arm above,
+            // so the un-cloned chars iterator yields the same value. .unwrap is
+            // unreachable. HARDEN-01 / 08-01.
+            #[allow(clippy::unwrap_used)]
+            out.push(chars.next().unwrap());
+            continue;
         }
         out.push(ch);
     }

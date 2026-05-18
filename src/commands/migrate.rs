@@ -90,7 +90,7 @@ pub fn migrate_project_config(
         // INVARIANT: every username in new_sealed originates from
         // config.users.keys() (see the loop at line ~55), so
         // config.users.get_mut(username) is always Some. HARDEN-01 / 08-01.
-        config.users.get_mut(username).unwrap().sealed_key = sealed.clone();
+        config.users.get_mut(username).unwrap().sealed_key.clone_from(sealed);
     }
     config.version = "2.0".to_string();
 

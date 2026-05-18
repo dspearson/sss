@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Negative-path tests for keystore entry signature verification (Phase 18 / PQSIG-01..03).
 //!
 //! Each test:

@@ -763,6 +763,13 @@ impl Keystore {
     ///
     /// - **Case C** (`classic_keypair = Some`, `hybrid_keypair = None`): delegates to
     ///   the existing `store_keypair` by wrapping the classic keypair in `KeyPair::Classic`.
+    // Why: 267 lines is the natural shape of store_dual_keypair — the function
+    // covers Cases A (both classic+hybrid), B (hybrid-only), and C (classic-only)
+    // with KDF derivation, AEAD encryption, dual-suite signature generation, and
+    // atomic disk write. Each case has its own logical block that maps to the
+    // doc-comment cases above. Splitting into sub-fns would duplicate the
+    // KDF/encrypt/sign/write sequence three times.
+    #[allow(clippy::too_many_lines)]
     #[cfg(feature = "hybrid")]
     pub fn store_dual_keypair(
         &self,
@@ -1364,6 +1371,11 @@ impl Keystore {
     ///
     /// T-18-04-03: raw sig SK bytes are wrapped in `Zeroizing<Vec<u8>>` and
     /// dropped at end-of-scope.
+    // Why: 129 lines is the natural shape of in-place upgrade — read stored
+    // keypair → decrypt → generate fresh sig keypairs → build signed payload →
+    // re-encrypt with current KDF → atomic write-and-replace. Sequential
+    // narrative; splitting would obscure the transactional sequence.
+    #[allow(clippy::too_many_lines)]
     #[cfg(feature = "hybrid")]
     pub fn upgrade_keypair_in_place(
         &self,
@@ -1551,7 +1563,12 @@ impl Keystore {
     ///
     /// `pub(crate)` so the import/export handlers in `commands/keys.rs` can
     /// invoke it without re-implementing the dispatch logic.
+    // Why: kept as &self method for API parity with other KeyStore methods that
+    // dispatch verification; the call sites at lines 369 and 1144 already pass
+    // self. Refactoring to associated fn would require call-site rewrites
+    // across the keystore module without semantic gain.
     #[cfg(feature = "hybrid")]
+    #[allow(clippy::unused_self)]
     pub(crate) fn verify_stored_signature(
         &self,
         stored: &StoredKeyPair,

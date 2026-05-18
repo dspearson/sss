@@ -328,7 +328,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
         }
 
         // Verify the key was migrated
-        let retrieved_key = if let Ok(key) = helper.get_key() { key } else {
+        let Ok(retrieved_key) = helper.get_key() else {
             eprintln!(
                 "Skipping keyring test: keyring store/retrieve not working in this environment"
             );

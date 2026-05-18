@@ -76,6 +76,10 @@ fn handle_users_list() -> Result<()> {
     Ok(())
 }
 
+// Why: 107 lines is the natural shape of users-add — clap parsing + dual-suite
+// public-key length dispatch (32 vs 1214 bytes) + project-config mutation +
+// re-seal-for-existing-users. The linear flow maps directly to docs/USAGE.md.
+#[allow(clippy::too_many_lines)]
 fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     use base64::Engine as _;
 
@@ -504,7 +508,7 @@ mod tests {
         sign_fixture_envelope(&config_path, "alice");
 
         // Override cwd so get_project_config_path() finds the temp dir.
-        let _orig = std::env::current_dir().unwrap();
+        let orig_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let valid_b64 = base64::prelude::BASE64_STANDARD.encode(vec![0x42u8; HYBRID_PUBLIC_KEY_SIZE]);
@@ -512,7 +516,7 @@ mod tests {
         let result = handle_users_add_hybrid_key(&matches);
 
         // Restore cwd regardless
-        std::env::set_current_dir(_orig).unwrap();
+        std::env::set_current_dir(orig_cwd).unwrap();
 
         result.expect("correct 1214-byte key must succeed");
 

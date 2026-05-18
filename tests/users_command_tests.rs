@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Phase 16b — USERS-NN integration tests for `src/commands/users.rs`.
 //!
 //! Tier 2 placement per phase 16b D-18 (sibling integration tests). These

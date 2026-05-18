@@ -73,6 +73,11 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
     handle_keys_generate_command_with_prompt(main_matches, matches, &RealPromptReader)
 }
 
+// Why: 118 lines is the natural shape of the command dispatcher — clap parsing
+// + feature gating + KDF param resolution + dual-suite branching + interactive
+// passphrase prompting. Breaking into smaller fns would obscure the linear
+// command-flow narrative that maps to docs/USAGE.md.
+#[allow(clippy::too_many_lines)]
 fn handle_keys_generate_command_with_prompt(
     main_matches: &ArgMatches,
     matches: &ArgMatches,
@@ -1452,7 +1457,12 @@ mod tests {
     fn test_relative_luminance_black() {
         // Black should have zero luminance
         let lum = relative_luminance(0, 0, 0);
-        assert_eq!(lum, 0.0);
+        // Why: black (0,0,0) maps to exactly 0.0 by the relative_luminance
+        // formula (no floating-point rounding intermediates); exact equality
+        // is the correct assertion here. Test-only.
+        #[allow(clippy::float_cmp)]
+        let is_zero = lum == 0.0;
+        assert!(is_zero, "expected exact 0.0 for black; got {lum}");
     }
 
     #[test]
@@ -1753,7 +1763,7 @@ mod tests {
     fn test_real_prompt_reader_is_unit_struct() {
         // RealPromptReader is the production seam target; ensure we can
         // instantiate it without arguments.  Trivial but pins the type shape.
-        let _r = RealPromptReader;
+        let _ = RealPromptReader;
     }
 
     #[test]

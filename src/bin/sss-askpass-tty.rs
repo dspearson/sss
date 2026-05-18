@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 // Why: askpass-tty is a thin CLI shim; pedantic noise has no audit benefit and would force trivial // Why: overhead for tiny shims (per REQUIREMENTS.md agent-binary carve-out).
 #![allow(clippy::pedantic)]
+// Why: askpass-tty has no error-handling surface beyond program-termination;
+// .unwrap()/.expect() failures are appropriate for missing config/user-cancel.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use anyhow::{anyhow, Result};
 use clap::Parser;

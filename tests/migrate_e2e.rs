@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! End-to-end migration test (TEST-04).
 //!
 //! Drives the real sss binary through the complete migration workflow:

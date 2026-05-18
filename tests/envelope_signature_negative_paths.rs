@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Sign-on-write integration tests (Phase 19-02, PQSIG-05).
 //!
 //! Drives the real sss binary through each mutating CLI verb and asserts the

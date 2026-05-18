@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Sibling integration tests for `src/commands/process.rs` handlers.
 //!
 //! Phase 16b-03 / TEST-11 — direct in-process exercise of the verb-level

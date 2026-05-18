@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Phase 16 Plan 04 — D-07.3 candidate-pool branch coverage for `src/secrets.rs`.
 //!
 //! Targets two reachable error arms in `SecretsCache::lookup_secret_with_ops` that

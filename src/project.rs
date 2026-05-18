@@ -116,6 +116,10 @@ fn default_envelope_format_version() -> u32 {
     1
 }
 
+// Why: serde's skip_serializing_if predicate requires `fn(&T) -> bool`
+// signature, so &u32 is mandatory here — passing by value would not match
+// the trait. See line 73's #[serde(skip_serializing_if = ...)] attribute.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_format_version(v: &u32) -> bool {
     *v == 1
 }

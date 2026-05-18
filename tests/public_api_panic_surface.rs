@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! HARDEN-05 — public-API panic-surface regression suite (Phase 8 / Plan 05).
 //!
 //! Goal: every type re-exported from `src/lib.rs` is exercised with caller-facing

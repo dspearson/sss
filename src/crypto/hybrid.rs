@@ -67,7 +67,7 @@ impl HybridPublicKey {
     /// length-checked path.
     #[cfg(test)]
     #[must_use]
-    pub fn from_bytes_unchecked(bytes: Vec<u8>) -> Self {
+    pub fn from_bytes_unchecked(bytes: &[u8]) -> Self {
         let mut arr = [0u8; HYBRID_PUBLIC_KEY_SIZE];
         let n = bytes.len().min(HYBRID_PUBLIC_KEY_SIZE);
         arr[..n].copy_from_slice(&bytes[..n]);
@@ -300,9 +300,9 @@ mod tests {
 
     #[test]
     fn test_hybrid_public_key_is_clone_and_send_sync() {
-        fn _assert_send_sync<T: Send + Sync + 'static>() {}
-        _assert_send_sync::<HybridPublicKey>();
-        _assert_send_sync::<HybridKeyPair>();
+        fn assert_send_sync<T: Send + Sync + 'static>() {}
+        assert_send_sync::<HybridPublicKey>();
+        assert_send_sync::<HybridKeyPair>();
     }
 
     #[test]
@@ -663,9 +663,11 @@ mod tests {
 
         // The pre-drop value is some BLAKE3 output (not our choice), but it
         // is NOT zero — confirm that before dropping.
-        // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
-        // allocation is live and we are only reading bytes we own.
         let pre_drop_nonzero = (0..32).any(|i| {
+            // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
+            // allocation is live and we are only reading bytes we own. The
+            // raw_ptr.add(i) offset is bounded by the (0..32) iterator against
+            // the 32-byte Zeroizing<[u8; 32]> allocation.
             let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
             byte != 0
         });

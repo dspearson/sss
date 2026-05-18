@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 // Comprehensive tests for ignore patterns functionality in .sss.toml
 //
 // Tests ProjectConfig.ignore field integration with FileScanner for

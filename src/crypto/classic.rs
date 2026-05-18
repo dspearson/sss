@@ -1505,7 +1505,7 @@ mod classic_suite_tests {
         use crate::crypto::hybrid::HybridPublicKey;
         let repo_key = RepositoryKey::new();
         let hybrid_pk = PublicKey::Hybrid(
-            HybridPublicKey::from_bytes_unchecked(vec![0u8; HYBRID_PUBLIC_KEY_SIZE]),
+            HybridPublicKey::from_bytes_unchecked(&vec![0u8; HYBRID_PUBLIC_KEY_SIZE]),
         );
         let err = ClassicSuite.seal_repo_key(&repo_key, &hybrid_pk).unwrap_err();
         let msg = err.to_string();

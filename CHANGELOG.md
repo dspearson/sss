@@ -5,6 +5,25 @@ All notable changes to sss (Secret String Substitution) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v2.3 Code Quality and Security Depth (in progress)
+
+### Internal
+
+- **v2.3 Phase 22 (Miri on safe wrappers):** New miri smoke-test harness
+  on pure-Rust paths (`tests/miri_smoke.rs`, 5 tests) covering the 5
+  `ptr::read_volatile` zeroisation sites in `src/crypto/hybrid.rs` plus
+  the scanner regex compilation and the `marker_inference` pure-Rust
+  string-manipulation paths. The 22 production FFI sites across
+  `src/crypto/{classic,hybrid}.rs`, `src/kdf.rs`, and
+  `src/commands/{keys,process}.rs` are gated by `#[cfg(not(miri))]` —
+  miri does not attempt to execute libsodium / libc / trelis. Weekly
+  cron workflow at `.github/workflows/miri.yml` (Sunday 03:00 UTC) on
+  `ubuntu-24.04` pinned to `nightly-2026-04-15`. **Scope: pure-Rust
+  paths only; the FFI surface is covered by AddressSanitizer in Phase
+  23 (MEMSAFE-03), not by miri.** See `docs/security-depth.md` §
+  Miri Coverage for the full scope and the refresh-cadence policy
+  for the pinned nightly. (MEMSAFE-01, MEMSAFE-02)
+
 ## [2.2.0] - 2026-05-09
 
 ### Changed

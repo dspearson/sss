@@ -61,6 +61,8 @@ pub fn validate_user_markers(edited: &str) -> ValidatedEdit {
 }
 
 /// Process a detected marker (valid or invalid)
+// Why: internal helper (private to the validator module, not pub API); struct-arg refactor would require touching all call sites in this module with no lint-policy benefit — deferred as a v2.4 candidate per CONTEXT.md "fix-the-error vs silence-with-rationale" split.
+#[allow(clippy::too_many_arguments)]
 fn process_marker(
     edited: &str,
     format: MarkerFormat,

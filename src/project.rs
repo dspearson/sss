@@ -1,4 +1,3 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -525,7 +524,8 @@ impl ProjectConfig {
     /// config.set_ignore_patterns(vec!["*.log".to_string(), "build/".to_string()]);
     /// assert_eq!(config.ignore, Some("*.log build/".to_string()));
     /// ```
-    #[allow(clippy::needless_pass_by_value)] // Vec ownership consumed for API simplicity with many callers
+    // Why: Vec ownership consumed for API simplicity; callers typically build the vector at the call site and have no further use for it.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn set_ignore_patterns(&mut self, patterns: Vec<String>) {
         if patterns.is_empty() {
             self.ignore = None;

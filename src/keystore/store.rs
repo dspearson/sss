@@ -1,8 +1,5 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::needless_pass_by_value, // KdfParams is kept by value for API clarity
-)]
+// Why: KdfParams is kept by value for API clarity (audited Phase 21 Plan 21-02).
+#![allow(clippy::needless_pass_by_value)]
 
 use anyhow::{anyhow, Result};
 use base64::Engine;

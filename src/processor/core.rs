@@ -1,5 +1,3 @@
-#![allow(clippy::missing_errors_doc)] // Public API doc sections managed separately
-
 use anyhow::{anyhow, Result};
 use std::fs;
 use std::io::{BufReader, Read};
@@ -309,6 +307,7 @@ pub struct Processor {
 
 impl Processor {
     /// Helper to handle oversized marker content with consistent warning
+    // Why: method exists for API symmetry with sibling Processor helpers that DO use `&self`; refactoring to a free function would split the warning-emission helpers across two namespaces with no caller benefit.
     #[allow(clippy::unused_self)]
     fn check_marker_size(&self, content: &str, marker_type: &str) -> bool {
         if content.len() > MAX_MARKER_CONTENT_SIZE {
@@ -324,6 +323,7 @@ impl Processor {
     }
 
     /// Helper to handle encryption errors with consistent warning
+    // Why: method exists for API symmetry; sibling Processor helpers DO use `&self` and callers expect a consistent method call surface.
     #[allow(clippy::unused_self)]
     fn handle_encrypt_error(&self, error: &anyhow::Error, original: &str) -> String {
         eprintln!("Warning: Failed to encrypt plaintext: {error}");
@@ -331,6 +331,7 @@ impl Processor {
     }
 
     /// Helper to handle decryption errors with consistent warning
+    // Why: method exists for API symmetry; sibling Processor helpers DO use `&self` and callers expect a consistent method call surface.
     #[allow(clippy::unused_self)]
     fn handle_decrypt_error(&self, error: &anyhow::Error, original: &str, context: &str) -> String {
         let context_str = if context.is_empty() {
@@ -656,7 +657,8 @@ impl Processor {
         let file = fs::File::open(path_ref)
             .map_err(|e| anyhow!("Failed to open file {}: {}", path_ref.display(), e))?;
         let mut reader = BufReader::new(file);
-        #[allow(clippy::cast_possible_truncation)] // file size fits in usize on all supported platforms
+        // Why: file size already bounded by MAX_FILE_SIZE check above; fits in usize on all supported 32/64-bit platforms in the v2.3 CI matrix.
+        #[allow(clippy::cast_possible_truncation)]
         let mut content = String::with_capacity(metadata.len() as usize);
         reader
             .read_to_string(&mut content)

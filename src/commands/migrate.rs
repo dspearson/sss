@@ -1,4 +1,3 @@
-#![allow(clippy::missing_errors_doc)]
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 

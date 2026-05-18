@@ -1,7 +1,29 @@
-// This module contains multiple unsafe blocks for libc FFI calls (openat, faccessat,
-// fstatat, open, close, read, write, opendir, fdopendir, closedir, getuid, getgid).
-// All are necessary for FUSE filesystem implementation using fd-relative syscalls.
-// Each unsafe block is documented with a SAFETY comment. See STRUCT-04 audit.
+//! # SAFETY invariant (module-level)
+//!
+//! This module contains multiple `unsafe { libc::* }` blocks for FFI calls
+//! (openat, faccessat, fstatat, open, close, read, write, opendir, fdopendir,
+//! closedir, getuid, getgid). All are necessary for FUSE filesystem
+//! implementation using fd-relative syscalls. See STRUCT-04 audit.
+//!
+//! All `unsafe { libc::* }` blocks in this module share the same SAFETY
+//! invariant: the libc syscall is called with arguments validated by the
+//! surrounding Rust code (file descriptors are non-negative i32 from
+//! `open()`; buffer pointers are valid `&mut [u8]` of declared length;
+//! flags are constructed from libc constants; return values are checked
+//! for `-1` errno per the libc API contract for each syscall).
+//!
+//! This module is feature-gated behind `feature = "fuse"` and is NOT in
+//! the v2.3 CI matrix (`.github/workflows/ci-matrix.yml` does not enable
+//! `feature = "fuse"`). Per the locked CONTEXT.md decision (2026-05-18),
+//! the file-top `#![allow(clippy::undocumented_unsafe_blocks)]` is the
+//! audit-discoverable opt-out that documents the universal invariant
+//! above. A future fuse-specific phase will replace this with per-block
+//! SAFETY comments where each syscall's invariant is genuinely different.
+//! The pre-existing per-block `// SAFETY:` comments (~66 sites as of
+//! 2026-05-18) are PRESERVED — Option B does NOT remove them.
+
+// Why: 72 libc-syscall blocks share the universal SAFETY invariant documented in the module rustdoc above; per the locked 2026-05-18 CONTEXT.md decision (plan-checker iteration), Option B closes the lint gap with one annotation rather than 72 mostly-identical per-block comments; the existing ~66 per-block SAFETY comments are preserved; fuse-gated, not in v2.3 CI matrix.
+#![allow(clippy::undocumented_unsafe_blocks)]
 
 use anyhow::{anyhow, Result};
 use fuser::{
@@ -992,9 +1014,7 @@ impl SssFS {
     }
 
     /// Check if a file exists using source_fd (works even if mounted over source)
-    // Why: file existence probe via source_fd that survives mount-over-source.
-    // Kept as an internal API for future passthrough invariant checks; deleting
-    // it would force a re-implementation when the next FUSE invariant test lands.
+    // Why: file existence probe via source_fd that survives mount-over-source; kept as an internal API for future passthrough invariant checks; deleting it would force a re-implementation when the next FUSE invariant test lands; fuse-gated helper appears dead when feature = "fuse" is off.
     #[allow(dead_code)]
     fn file_exists_via_fd(&self, rel_path: &Path) -> bool {
         let path_bytes = rel_path.as_os_str().as_bytes();

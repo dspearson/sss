@@ -1,6 +1,7 @@
 // Why: panic-surface test suites use .unwrap()/.expect()/panic!() freely per CONTEXT.md Area 1; one carve-out at the bin crate-root mirrors src/lib.rs.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
-#![allow(clippy::too_many_lines)] // CLI app definition is a single large function by convention
+// Why: CLI app definition is a single large function by convention; refactoring to a builder pattern would obscure the clap argument structure without audit benefit.
+#![allow(clippy::too_many_lines)]
 use anyhow::{anyhow, Result};
 use clap::{Arg, Command};
 use std::env;
@@ -859,6 +860,7 @@ fn main() -> Result<()> {
 
     // Set non-interactive mode if flag is present
     if matches.get_flag("non-interactive") {
+        // SAFETY: env::set_var is unsafe since Rust 1.83 because env mutation races with other threads reading the environment; this call is in main() before any tokio task or async runtime spawns and is single-threaded by construction; the SSS_NONINTERACTIVE override is intentional for the CLI mode being established.
         unsafe {
             std::env::set_var("SSS_NONINTERACTIVE", "1");
         }

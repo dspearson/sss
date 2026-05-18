@@ -1,4 +1,7 @@
-#![allow(clippy::pedantic)] // Agent binary — excluded from pedantic enforcement per REQUIREMENTS.md
+// Why: askpass-gui has no FFI/syscall surface; structural unsafe ban prevents accidental introduction of unsafe code (QUAL-04 locked scope).
+#![forbid(unsafe_code)]
+// Why: askpass-gui is a thin CLI shim; pedantic noise has no audit benefit and would force trivial // Why: overhead for tiny shims (per REQUIREMENTS.md agent-binary carve-out).
+#![allow(clippy::pedantic)]
 
 use anyhow::{anyhow, Result};
 use clap::Parser;

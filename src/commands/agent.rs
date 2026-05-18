@@ -1,4 +1,8 @@
-#![allow(clippy::pedantic)] // Agent modules are excluded from pedantic enforcement per REQUIREMENTS.md
+// Agent modules are excluded from pedantic enforcement per REQUIREMENTS.md;
+// `pedantic` is NOT in the workspace pedantic-noise suppression set (it's `warn`
+// workspace-wide), so this file-top allow downgrades the entire file's pedantic level.
+// Why: REQUIREMENTS.md excludes agent modules from pedantic enforcement.
+#![allow(clippy::pedantic)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
@@ -283,6 +287,8 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
 
         // Remove HOME temporarily
+        // SAFETY: env var mutation is unsafe since Rust 1.83; this test is #[serial]
+        // and runs in single-threaded context — no concurrent env reads.
         unsafe { std::env::remove_var("HOME"); }
 
         let result = get_policy_path();
@@ -291,6 +297,7 @@ mod tests {
 
         // Restore HOME
         if let Some(home) = original_home {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { std::env::set_var("HOME", home); }
         }
     }

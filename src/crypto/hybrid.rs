@@ -13,8 +13,6 @@
 //! Wire format (base64-encoded in `.sss.toml`):
 //! `encap (1095B) || nonce24 (24B) || AEAD_ct+tag (48B)` — total 1167 bytes
 //! plaintext before base64.
-#![cfg(feature = "hybrid")]
-#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use zeroize::Zeroizing;
@@ -168,6 +166,9 @@ impl CryptoSuite for HybridCryptoSuite {
 
         // Step 3 — Random 24-byte nonce for XChaCha20-Poly1305.
         let mut nonce = [0u8; HYBRID_SEALED_KEY_NONCE_SIZE];
+        // SAFETY: `nonce` is a HYBRID_SEALED_KEY_NONCE_SIZE (24-byte) stack buffer;
+        // libsodium's `randombytes_buf` writes exactly that count. Init guaranteed by
+        // the suite-init contract enforced upstream of this fn.
         unsafe {
             sodium::randombytes_buf(
                 nonce.as_mut_ptr().cast::<std::ffi::c_void>(),
@@ -181,6 +182,10 @@ impl CryptoSuite for HybridCryptoSuite {
             Zeroizing::new(repo_key.to_bytes());
         let mut ciphertext =
             vec![0u8; HYBRID_REPO_KEY_PLAINTEXT_SIZE + HYBRID_SEALED_KEY_TAG_SIZE];
+        // `ciphertext` is sized to HYBRID_REPO_KEY_PLAINTEXT_SIZE + HYBRID_SEALED_KEY_TAG_SIZE
+        // — the exact byte count libsodium writes on success. `plaintext`/`nonce`/`aead_key`
+        // are valid Zeroizing/array pointers of expected sizes. Returns 0 on success.
+        // SAFETY: libsodium init guaranteed upstream; pointer/length invariants noted above.
         let ret = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_easy(
                 ciphertext.as_mut_ptr(),
@@ -264,6 +269,11 @@ impl CryptoSuite for HybridCryptoSuite {
         // Step 4 — AEAD-open. Plaintext buffer sits in Zeroizing<..>.
         let mut plaintext: Zeroizing<[u8; HYBRID_REPO_KEY_PLAINTEXT_SIZE]> =
             Zeroizing::new([0u8; HYBRID_REPO_KEY_PLAINTEXT_SIZE]);
+        // `plaintext` is exact size; libsodium writes that many bytes on success.
+        // `ciphertext`/`nonce_bytes`/`aead_key` are valid slice/array pointers of
+        // pre-validated lengths. Returns 0 on success; non-zero indicates MAC/decrypt
+        // failure with no writes.
+        // SAFETY: libsodium init guaranteed upstream; invariants noted above.
         let ret = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_open_easy(
                 plaintext.as_mut_ptr(),
@@ -675,10 +685,9 @@ mod tests {
         unsafe { ManuallyDrop::drop(&mut wrapped) };
 
         // Every byte of the derived key must be zero after Zeroizing's drop.
-        // SAFETY: raw_ptr still points into live stack storage owned by
-        // `wrapped` (ManuallyDrop leaves the storage intact); reading those
-        // bytes is well-defined.
         let all_zero_post_drop = (0..32).all(|i| {
+            // SAFETY: raw_ptr still points into live stack storage owned by `wrapped`
+            // (ManuallyDrop leaves the storage intact); reading those bytes is defined.
             let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
             byte == 0
         });

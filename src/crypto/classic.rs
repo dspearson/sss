@@ -1,4 +1,10 @@
-#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+// items_after_statements is NOT in the workspace pedantic suppression set per
+// 21-CONTEXT.md (the suppression set is module_name_repetitions, missing_errors_doc,
+// missing_panics_doc, unnecessary_wraps); it survives at file scope because the
+// deprecated-free-function block declares constants and inline match arms mid-fn for
+// wire-format anchor preservation.
+// Why: file-scope items_after_statements survives — see rationale above.
+#![allow(clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -22,14 +28,17 @@ const SEALED_BOX_OVERHEAD: usize = sodium::crypto_box_SEALBYTES as usize;
 // BLAKE2b constants (for deterministic nonce derivation)
 const BLAKE2B_PERSONALBYTES: usize = sodium::crypto_generichash_blake2b_PERSONALBYTES as usize;
 
-// Ensure libsodium is initialised
+// Ensure libsodium is initialised.
+//
+// `sodium_init()` is thread-safe per libsodium docs; `Once` ensures we call it
+// exactly once across the process. A negative return value means libsodium
+// itself failed to initialise — the binary cannot operate without libsodium,
+// so panicking is the correct response (no recovery is possible). HARDEN-01 /
+// 08-01.
 pub(crate) fn ensure_sodium_init() {
     static INIT: std::sync::Once = std::sync::Once::new();
-    // SAFETY: `sodium_init()` is thread-safe per libsodium docs; `Once` ensures we
-    // call it exactly once across the process. A negative return value means
-    // libsodium itself failed to initialise — the binary cannot operate without
-    // libsodium, so panicking is the correct response (no recovery is possible).
-    // HARDEN-01 / 08-01.
+    // SAFETY: see module-level comment above; `sodium_init()` is thread-safe and
+    // `Once` enforces single-call semantics across the process.
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });
@@ -88,6 +97,11 @@ impl RepositoryKey {
     pub fn new() -> Self {
         ensure_sodium_init();
         let mut key = [0u8; SYMMETRIC_KEY_SIZE];
+        // `key` is a valid SYMMETRIC_KEY_SIZE-byte stack buffer; libsodium's
+        // `randombytes_buf` writes exactly SYMMETRIC_KEY_SIZE bytes into it.
+        // Closes v2.1 Phase 8 HARDEN-03 documented gap at classic.rs:91.
+        // SAFETY: libsodium init via preceding `ensure_sodium_init()`; output buffer
+        // matches expected size.
         unsafe {
             sodium::randombytes_buf(
                 key.as_mut_ptr().cast::<std::ffi::c_void>(),
@@ -148,6 +162,11 @@ impl RepositoryKey {
 /// The `Classic` variant is always compiled and carries the legacy 32-byte
 /// X25519 payload. The `Hybrid` variant is gated behind the `hybrid` feature
 /// and carries the concatenated X448 + sntrup761 wire bytes.
+// Boxing the Zeroizing-bearing variant risks defeating ZeroizeOnDrop via heap-vs-stack
+// lifetime differences (Phase 23 MEMSAFE-05 territory). Phase 21 preserves the v2.2
+// zeroisation invariants verbatim by opting out of the lint.
+// Why: ZeroizeOnDrop preservation — see rationale above.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum PublicKey {
     Classic([u8; PUBLIC_KEY_SIZE]),
@@ -283,6 +302,9 @@ impl ClassicKeyPair {
         let mut public_key = [0u8; PUBLIC_KEY_SIZE];
         let mut secret_key = [0u8; SECRET_KEY_SIZE];
 
+        // SAFETY: `public_key` and `secret_key` are valid PUBLIC_KEY_SIZE / SECRET_KEY_SIZE
+        // stack buffers; libsodium's `crypto_box_keypair` writes exactly those byte counts
+        // and returns 0 on success. libsodium is initialised via `ensure_sodium_init()`.
         unsafe {
             let ret = sodium::crypto_box_keypair(public_key.as_mut_ptr(), secret_key.as_mut_ptr());
             if ret != 0 {
@@ -310,6 +332,11 @@ impl ClassicKeyPair {
         let mut public_key = [0u8; PUBLIC_KEY_SIZE];
         let mut secret_key = [0u8; SECRET_KEY_SIZE];
 
+        // `public_key`/`secret_key` are stack buffers of the libsodium-expected lengths;
+        // `seed.as_ptr()` is a valid pointer into a slice pre-checked to equal
+        // `crypto_box_SEEDBYTES`. Returns 0 on success.
+        // SAFETY: libsodium init via caller-side ensure_sodium_init(); buffers and lengths
+        // match the libsodium contract above.
         unsafe {
             let ret = sodium::crypto_box_seed_keypair(
                 public_key.as_mut_ptr(),
@@ -337,6 +364,11 @@ impl ClassicKeyPair {
 /// The `KeyPair::generate()` constructor remains API-compatible and always
 /// returns `KeyPair::Classic(..)`; hybrid keypair construction lands in
 /// Phase 3 as part of the keystore dual-suite work.
+// Boxing the Zeroizing-bearing variant risks defeating ZeroizeOnDrop via heap-vs-stack
+// lifetime differences (Phase 23 MEMSAFE-05 territory). Phase 21 preserves the v2.2
+// zeroisation invariants verbatim by opting out of the lint.
+// Why: ZeroizeOnDrop preservation — see rationale above.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum KeyPair {
     Classic(ClassicKeyPair),
@@ -429,6 +461,10 @@ pub fn seal_repository_key(
     let repo_key_bytes = repo_key.to_base64().into_bytes();
     let mut sealed = vec![0u8; repo_key_bytes.len() + SEALED_BOX_OVERHEAD];
 
+    // `sealed` is sized to fit `repo_key_bytes.len() + SEALED_BOX_OVERHEAD`, which is
+    // exactly what `crypto_box_seal` writes; `repo_key_bytes`/`pk_bytes` are valid
+    // pointers. libsodium returns 0 on success and no writes on failure.
+    // SAFETY: libsodium init via preceding ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_box_seal(
             sealed.as_mut_ptr(),
@@ -485,6 +521,10 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
 
     let mut opened = vec![0u8; sealed_bytes.len() - SEALED_BOX_OVERHEAD];
 
+    // `opened` is sized to `sealed_bytes.len() - SEALED_BOX_OVERHEAD`, the exact byte
+    // count `crypto_box_seal_open` writes on success. Input/key pointers refer to live
+    // data of validated lengths. Returns 0 on success, !=0 on MAC/decrypt failure.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_box_seal_open(
             opened.as_mut_ptr(),
@@ -544,6 +584,11 @@ fn derive_nonce(
 
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
 
+    // `nonce` is a SYMMETRIC_NONCE_SIZE (24-byte) stack buffer; output length passed to
+    // libsodium matches. `input`/`key.0`/`personal_padded` are valid pointers with
+    // consistent (ptr, len) pairs. `std::ptr::null()` is accepted by libsodium for the
+    // unused salt parameter. Returns 0 on success.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_generichash_blake2b_salt_personal(
             nonce.as_mut_ptr(),                      // output
@@ -571,6 +616,9 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
 
     // Generate cryptographically secure random nonce (192 bits)
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
+    // SAFETY: `nonce` is a valid SYMMETRIC_NONCE_SIZE (24-byte) stack buffer; libsodium's
+    // `randombytes_buf` writes exactly SYMMETRIC_NONCE_SIZE bytes. Init guaranteed by
+    // the preceding `ensure_sodium_init()` call.
     unsafe {
         sodium::randombytes_buf(
             nonce.as_mut_ptr().cast::<std::ffi::c_void>(),
@@ -584,6 +632,11 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     // Store nonce at beginning
     result[0..SYMMETRIC_NONCE_SIZE].copy_from_slice(&nonce);
 
+    // `result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE)` is in-bounds for the allocation
+    // (SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE bytes). `plaintext`
+    // has matching length; `nonce`/`key.0` are valid pointers of libsodium-expected size.
+    // Returns 0 on success.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -624,6 +677,11 @@ pub fn encrypt(
     // Store nonce at beginning
     result[0..SYMMETRIC_NONCE_SIZE].copy_from_slice(&nonce);
 
+    // Same invariants as `encrypt_internal` above; `result.as_mut_ptr().add(...)` is
+    // in-bounds for the SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE
+    // allocation; `plaintext`/`nonce`/`key.0` are valid pointers. This is the
+    // deterministic-nonce variant — nonce derived from project_timestamp/path/plaintext.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -655,6 +713,11 @@ pub fn decrypt(ciphertext_with_nonce: &[u8], key: &Key) -> Result<Vec<u8>> {
     // Allocate space for plaintext (ciphertext length minus MAC)
     let mut plaintext = vec![0u8; ciphertext.len() - SYMMETRIC_MAC_SIZE];
 
+    // `plaintext` is sized to `ciphertext.len() - SYMMETRIC_MAC_SIZE`, the exact byte
+    // count libsodium writes on success. Input/nonce/key pointers refer to validated
+    // slices with consistent (ptr, len) pairs. Returns 0 on success; non-zero indicates
+    // MAC/decrypt failure with no writes.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_open_easy(
             plaintext.as_mut_ptr(),  // plaintext output
@@ -769,7 +832,9 @@ impl CryptoSuite for ClassicSuite {
                 // Delegates to the existing free function so byte-for-byte
                 // output is guaranteed identical to pre-refactor. The free
                 // function stays exported for test compatibility
-                // (tests/multi_user_e2e.rs etc.).
+                // (tests/multi_user_e2e.rs etc.). Deprecated free function deliberately
+                // retained as wire-format anchor; trait dispatch is the new path.
+                // Why: deprecated free function retained as wire-format anchor.
                 #[allow(deprecated)]
                 seal_repository_key(repo_key, user_public_key)
             }
@@ -787,6 +852,10 @@ impl CryptoSuite for ClassicSuite {
     ) -> Result<RepositoryKey> {
         match user_keypair {
             KeyPair::Classic(_) => {
+                // Deprecated free function deliberately retained as wire-format anchor;
+                // the trait dispatch is the new code path, this delegates so open/seal
+                // stay byte-for-byte symmetric with the pre-refactor output.
+                // Why: deprecated free function retained as wire-format anchor.
                 #[allow(deprecated)]
                 open_repository_key(sealed_key, user_keypair)
             }
@@ -800,9 +869,10 @@ impl CryptoSuite for ClassicSuite {
 
 #[cfg(test)]
 mod tests {
-    #![allow(deprecated)] // Tests deliberately exercise the deprecated free
-                          // seal/open functions to lock in wire-format
-                          // compatibility — this is the byte-for-byte anchor.
+    // Tests deliberately exercise the deprecated free seal/open functions to lock in
+    // wire-format compatibility — this is the byte-for-byte anchor.
+    // Why: tests exercise deprecated free functions as wire-format anchor.
+    #![allow(deprecated)]
     use super::*;
 
     #[test]
@@ -1333,13 +1403,13 @@ mod tests {
 
 #[cfg(test)]
 mod classic_suite_tests {
-    #![allow(deprecated)] // test_classic_suite_seal_free_outputs_round_trip_equivalently
-                          // deliberately invokes the deprecated free function
-                          // to prove the trait impl round-trips to the same
-                          // repo key (byte-identity is impossible because
-                          // crypto_box_seal randomises the ephemeral keypair;
-                          // the wire-format anchor lives in
-                          // config.rs::test_load_via_classic_suite_reads_legacy_free_function_output).
+    // test_classic_suite_seal_free_outputs_round_trip_equivalently deliberately invokes
+    // the deprecated free function to prove the trait impl round-trips to the same repo
+    // key (byte-identity is impossible because crypto_box_seal randomises the ephemeral
+    // keypair; the wire-format anchor lives in
+    // config.rs::test_load_via_classic_suite_reads_legacy_free_function_output).
+    // Why: tests exercise deprecated free function as round-trip anchor.
+    #![allow(deprecated)]
     use super::*;
     use crate::crypto::suite::CryptoSuite;
 

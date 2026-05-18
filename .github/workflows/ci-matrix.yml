@@ -85,5 +85,11 @@ jobs:
           key: ${{ matrix.platform }}-${{ matrix.feature_arm }}
       - name: Build tests
         run: cargo build --tests ${{ matrix.cargo_features }}
+      - name: Clippy gate
+        # Enforces the [lints.clippy] block declared in Cargo.toml
+        # (the source of truth per Phase 21 / QUAL-01). No per-invocation
+        # `-A clippy::...` or `-W clippy::...` overrides — the block IS
+        # the policy. Rationale: docs/CLIPPY-POLICY.md.
+        run: cargo clippy --workspace --all-targets ${{ matrix.cargo_features }} -- -D warnings
       - name: Run tests
         run: cargo test ${{ matrix.cargo_features }}

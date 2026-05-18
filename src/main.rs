@@ -1,3 +1,5 @@
+// Why: panic-surface test suites use .unwrap()/.expect()/panic!() freely per CONTEXT.md Area 1; one carve-out at the bin crate-root mirrors src/lib.rs.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 #![allow(clippy::too_many_lines)] // CLI app definition is a single large function by convention
 use anyhow::{anyhow, Result};
 use clap::{Arg, Command};

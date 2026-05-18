@@ -120,7 +120,12 @@ pub fn verify_entry(
     Ok(())
 }
 
+// Why: crypto-idiomatic naming uses `_sk`/`_pk` suffixes to distinguish
+// secret-key from public-key bindings; renaming to satisfy similar_names would
+// degrade readability of the AND-composition signature-verification test
+// fixtures below. Test code; production-side allow is added per-fn in store.rs.
 #[cfg(test)]
+#[allow(clippy::similar_names)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

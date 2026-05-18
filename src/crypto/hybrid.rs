@@ -273,7 +273,7 @@ impl CryptoSuite for HybridCryptoSuite {
         // pre-validated lengths. Returns 0 on success; non-zero indicates MAC/decrypt
         // failure with no writes.
         // SAFETY: libsodium init guaranteed upstream; invariants noted above.
-        let ret = unsafe {
+        let open_rc = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_open_easy(
                 plaintext.as_mut_ptr(),
                 ciphertext.as_ptr(),
@@ -282,7 +282,7 @@ impl CryptoSuite for HybridCryptoSuite {
                 aead_key.as_ptr(),
             )
         };
-        if ret != 0 {
+        if open_rc != 0 {
             // Generic message — do not leak which layer failed (nonce vs
             // tag vs ciphertext) to keep the error surface minimal for
             // tamper-detection callers.

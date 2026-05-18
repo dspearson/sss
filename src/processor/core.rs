@@ -158,7 +158,7 @@ fn find_balanced_markers_with_prefix<'a>(
 
     while byte_pos < bytes.len() {
         // Try to match each prefix at current position
-        let mut matched: Option<(&str, usize, char, char)> = None;
+        let mut prefix_match: Option<(&str, usize, char, char)> = None;
 
         for &prefix in prefixes {
             let plen = prefix.len();
@@ -170,12 +170,12 @@ fn find_balanced_markers_with_prefix<'a>(
             let after_prefix = &content[byte_pos + plen..];
             let Some(open) = after_prefix.chars().next() else { continue };
             if let Some(close) = close_for_open(open) {
-                matched = Some((prefix, plen + open.len_utf8(), open, close));
+                prefix_match = Some((prefix, plen + open.len_utf8(), open, close));
                 break;
             }
         }
 
-        if let Some((prefix, header_len, open, close)) = matched {
+        if let Some((prefix, header_len, open, close)) = prefix_match {
             let marker_start = byte_pos;
             let content_start = byte_pos + header_len;
             let mut depth = 1u32;

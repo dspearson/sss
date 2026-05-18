@@ -1,5 +1,9 @@
 // Why: KdfParams is kept by value for API clarity (audited Phase 21 Plan 21-02).
-#![allow(clippy::needless_pass_by_value)]
+// Why: crypto-idiomatic naming uses _sk/_pk suffixes (e.g. ed448_sk vs ed448_pk,
+// mldsa_sk vs mldsa_pk) — renaming to satisfy similar_names would obscure the
+// public-key vs secret-key distinction in dual-suite signature flows. The 4
+// production-side sites + 6 test-side sites collectively trigger this lint.
+#![allow(clippy::needless_pass_by_value, clippy::similar_names)]
 
 use anyhow::{anyhow, Result};
 use base64::Engine;

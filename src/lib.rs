@@ -1,3 +1,5 @@
+// Why: panic-surface test suites use .unwrap()/.expect()/panic!() freely per CONTEXT.md Area 1; one crate-root carve-out is the audit-discoverable policy site.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 //! sss — Secret String Substitution.
 //!
 //! Transparent encryption of secrets within files using XChaCha20-Poly1305,

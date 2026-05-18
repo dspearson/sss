@@ -136,3 +136,37 @@ required-features = ["hybrid"]
 name = "envelope_signature_negative_paths"
 path = "tests/envelope_signature_negative_paths.rs"
 required-features = ["hybrid"]
+
+# ----------------------------------------------------------------------
+# Workspace clippy strictness contract (Phase 21 / QUAL-01).
+# Single source-of-truth lint policy per locked decision D-V23-02.
+# Rationale lives in docs/CLIPPY-POLICY.md (Plan 21-05).
+# ----------------------------------------------------------------------
+[lints.clippy]
+# Baseline strictness floor — pedantic group at warn, priority -1
+# so cherry-picked deny lints below win conflicts.
+pedantic = { level = "warn", priority = -1 }
+
+# Pedantic-noise suppressions (the only four universally rejected).
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+unnecessary_wraps = "allow"
+
+# Panic-surface gates (QUAL-03) — lock v2.1 Phase 8 HARDEN gains.
+# Test code carved out at crate-root via cfg_attr(test, allow(...)).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+# Unsafe-block discipline (QUAL-05) — closes v2.1 Phase 8 classic.rs:91 gap.
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
+# Zeroisation hygiene — complements MEMSAFE-05 (Phase 23).
+mem_forget = "deny"
+
+# Cast-surface auditor anchors (priority=-1 to avoid warn-on-warn
+# duplication; lints are already pedantic members at warn).
+cast_possible_truncation = { level = "warn", priority = -1 }
+cast_sign_loss = { level = "warn", priority = -1 }

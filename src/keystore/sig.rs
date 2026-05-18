@@ -62,7 +62,12 @@ pub fn build_signed_payload(
         created_at_rfc3339.as_bytes(),
     ];
     for field in &fields {
-        buf.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        // Why: KeystoreEntrySig payload fields are UUIDs, base64-encoded keys
+        // (< 4 KiB each), or RFC3339 timestamps. None exceed u32::MAX (4 GiB);
+        // truncation is impossible-by-construction. Wire format requires u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let field_len = field.len() as u32;
+        buf.extend_from_slice(&field_len.to_be_bytes());
         buf.extend_from_slice(field);
     }
     buf

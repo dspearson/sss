@@ -987,8 +987,10 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_single_pattern_matches() {
-        let mut cfg = ProjectConfig::default();
-        cfg.ignore = Some("*.log".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built");
         assert!(gs.is_match("server.log"));
         assert!(!gs.is_match("server.txt"));
@@ -996,8 +998,10 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_multiple_patterns_match() {
-        let mut cfg = ProjectConfig::default();
-        cfg.ignore = Some("*.log build/*".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log build/*".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built");
         assert!(gs.is_match("a.log"));
         assert!(gs.is_match("build/foo"));
@@ -1006,10 +1010,12 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_invalid_pattern_logs_and_continues() {
-        let mut cfg = ProjectConfig::default();
         // Mix one valid and one invalid pattern. The invalid one should be
         // skipped (warning emitted) without aborting the whole build.
-        cfg.ignore = Some("*.log [unterminated".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log [unterminated".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built despite invalid entry");
         assert!(gs.is_match("foo.log"));
     }

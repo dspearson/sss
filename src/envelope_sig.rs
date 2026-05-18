@@ -31,7 +31,12 @@ pub const ENVELOPE_SIG_CONTEXT: &[u8] = b"sss-toml-envelope-sig-v1";
 
 /// Length-prefix a single byte slice into the buffer. Layout: `(len_u32_be, bytes)`.
 fn push_lp(buf: &mut Vec<u8>, bytes: &[u8]) {
-    buf.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    // Why: envelope-sig wire format is u32 length-prefixed. Real envelope fields
+    // (users map, sealed_key strings, public_key strings) are bounded well below
+    // u32::MAX (4 GiB) by .sss.toml structure; truncation is impossible.
+    #[allow(clippy::cast_possible_truncation)]
+    let bytes_len = bytes.len() as u32;
+    buf.extend_from_slice(&bytes_len.to_be_bytes());
     buf.extend_from_slice(bytes);
 }
 

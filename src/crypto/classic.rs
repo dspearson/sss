@@ -1132,6 +1132,9 @@ mod tests {
         }
 
         // Test with binary data
+        // Why: range 0..256 produces i32 values in [0, 255] which are by-construction
+        // safe to cast to u8 (no truncation, no sign loss). Test scope.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let binary_data = (0..256).map(|i| i as u8).collect::<Vec<u8>>();
         let encrypted = encrypt(&binary_data, &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
         let decrypted = decrypt(&encrypted, &key).unwrap();

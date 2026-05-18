@@ -427,6 +427,8 @@ Cryptographic primitives:
 
 See [docs/security-model.md](docs/security-model.md) for the full security model including Argon2id parameter levels, threat model, and key hierarchy. See [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for detailed cryptographic implementation notes. See [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) for the enforced clippy strictness contract and the `// Why:` requirement for every `#[allow]` exception.
 
+**Miri coverage:** sss is miri-clean on pure-Rust paths only (5 zeroisation sites in `src/crypto/hybrid.rs` plus the scanner regex and marker_inference pure-Rust paths); the FFI surface to libsodium / libc / trelis is covered by AddressSanitizer in Phase 23 (MEMSAFE-03), not by miri. See [docs/security-depth.md](docs/security-depth.md#miri-coverage) § Miri Coverage for the full scope and the weekly cron workflow.
+
 > **v2.0 note:** The hybrid suite adds post-quantum key-wrapping (opt-in). trelis is
 > experimental and unaudited. See [docs/security-model.md](docs/security-model.md) and
 > [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for full details.
@@ -628,6 +630,7 @@ See [docs/TESTING.md](docs/TESTING.md) for the full four-tier testing guide (def
 | [docs/SECRETS_PARSING_GUIDE.md](docs/SECRETS_PARSING_GUIDE.md) | Secrets file parsing and integration guide |
 | [docs/IGNORE_PATTERNS.md](docs/IGNORE_PATTERNS.md) | Ignore pattern syntax and behaviour |
 | [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) | Clippy strictness contract: enabled lints, `// Why:` requirement, evolution workflow |
+| [docs/security-depth.md](docs/security-depth.md) | Defence-in-depth posture: miri coverage scope, sanitizer coverage, supply chain, reproducible builds, audit packet |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Protocol specification |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability disclosure |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |

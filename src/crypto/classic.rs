@@ -148,6 +148,10 @@ impl RepositoryKey {
 /// The `Classic` variant is always compiled and carries the legacy 32-byte
 /// X25519 payload. The `Hybrid` variant is gated behind the `hybrid` feature
 /// and carries the concatenated X448 + sntrup761 wire bytes.
+// Why: boxing the Zeroizing-bearing variant risks defeating ZeroizeOnDrop via
+// heap-vs-stack lifetime differences (Phase 23 MEMSAFE-05 territory). Phase 21
+// preserves the v2.2 zeroisation invariants verbatim by opting out of the lint.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum PublicKey {
     Classic([u8; PUBLIC_KEY_SIZE]),
@@ -337,6 +341,10 @@ impl ClassicKeyPair {
 /// The `KeyPair::generate()` constructor remains API-compatible and always
 /// returns `KeyPair::Classic(..)`; hybrid keypair construction lands in
 /// Phase 3 as part of the keystore dual-suite work.
+// Why: boxing the Zeroizing-bearing variant risks defeating ZeroizeOnDrop via
+// heap-vs-stack lifetime differences (Phase 23 MEMSAFE-05 territory). Phase 21
+// preserves the v2.2 zeroisation invariants verbatim by opting out of the lint.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum KeyPair {
     Classic(ClassicKeyPair),

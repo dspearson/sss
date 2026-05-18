@@ -1,5 +1,3 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
-
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 use std::fs;
@@ -96,7 +94,8 @@ fn is_multiplexed(hooks_dir: &Path) -> bool {
 }
 
 /// Install hooks to a directory with multiplex support
-#[allow(clippy::similar_names)] // hook_dir vs hooks_dir are intentionally distinct
+// Why: hook_dir = path to a single hook file; hooks_dir = parent directory containing all hooks; intentionally distinct names per the install/export API contract.
+#[allow(clippy::similar_names)]
 fn install_hooks_to_directory(
     hooks_dir: &PathBuf,
     use_multiplex: bool,
@@ -385,7 +384,6 @@ fn export_hooks_to_config() -> Result<()> {
 }
 
 /// Show information about available hooks without installing
-#[allow(clippy::unnecessary_wraps)]
 fn show_hooks_info() -> Result<()> {
     println!("sss Git Hooks Management");
     println!("========================");
@@ -406,7 +404,6 @@ fn show_hooks_info() -> Result<()> {
 }
 
 /// List all available hooks
-#[allow(clippy::unnecessary_wraps)]
 fn list_hooks() -> Result<()> {
     println!("Available sss Git Hooks:");
     println!("=======================");
@@ -436,7 +433,8 @@ fn show_hook(hook_name: &str) -> Result<()> {
 }
 
 /// Find the .git directory for the current repository
-#[allow(clippy::similar_names)] // git_dir, gitdir_line, gitdir are all distinct git path concepts
+// Why: git_dir, gitdir_line, gitdir are all distinct git path concepts (git_dir = .git directory path; gitdir_line = first line of .git file in a worktree; gitdir = repository root); intentionally distinct names.
+#[allow(clippy::similar_names)]
 fn find_git_dir() -> Result<PathBuf> {
     let current_dir = std::env::current_dir()?;
     let mut dir = current_dir.as_path();

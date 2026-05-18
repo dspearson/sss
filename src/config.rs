@@ -1,4 +1,5 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc, clippy::items_after_statements)]
+// Why: items_after_statements is NOT in the workspace pedantic suppression set per CONTEXT.md Area 1; survives at file scope because the legacy split-style project-config helpers interleave `let` bindings and helper-fn definitions and refactoring would obscure call ordering without audit benefit.
+#![allow(clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use std::env;
@@ -651,6 +652,7 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ="
         let keypair = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
 
+        // Why: crate::crypto::seal_repository_key is the v1.x free-function form retained for backward-compatibility with already-sealed .sss.toml files; this test deliberately exercises the deprecated entry point to lock the wire-format invariant that ClassicSuite::open_repo_key can read its output.
         #[allow(deprecated)]
         let sealed_via_free =
             crate::crypto::seal_repository_key(&repo_key, &keypair.public_key()).unwrap();

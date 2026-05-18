@@ -1,4 +1,5 @@
-#![allow(clippy::pedantic)] // Agent binary — excluded from pedantic enforcement per REQUIREMENTS.md
+// Why: sss-agent is deliberately excluded from the structural-unsafe-ban scope per locked CONTEXT.md decision because it has libc-FFI-adjacent code paths via re-export of sss::* modules that use libc/sodium FFI; future internal refactor may inline FFI. Pedantic noise has no audit benefit on the tiny CLI dispatch surface (per REQUIREMENTS.md agent-binary carve-out).
+#![allow(clippy::pedantic)]
 
 use anyhow::{anyhow, Result};
 use clap::Parser;

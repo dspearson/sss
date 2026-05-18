@@ -2,9 +2,10 @@
 //!
 //! This module provides common functionality used across multiple command handlers,
 //! eliminating code duplication and ensuring consistent behavior.
-// Why: items_after_statements is NOT in the workspace pedantic suppression set per
-// CONTEXT.md Area 1; survives at file scope. missing_errors_doc was removed as
-// redundant since Plan 21-01 added workspace-level suppression.
+// items_after_statements is NOT in the workspace pedantic suppression set per CONTEXT.md
+// Area 1; survives at file scope. missing_errors_doc was removed as redundant since
+// Plan 21-01 added workspace-level suppression.
+// Why: items_after_statements not in workspace suppression set — see above.
 #![allow(clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};

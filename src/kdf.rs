@@ -1,10 +1,11 @@
 // This module contains 3 unsafe blocks for libsodium FFI calls (random bytes, Argon2id KDF,
 // sodium_init). Each is documented with a SAFETY comment. See STRUCT-04 audit.
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    clippy::cast_possible_wrap, // sodium algorithm constants fit in i32 by libsodium guarantee
-)]
+//
+// cast_possible_wrap survives at file scope — sodium algorithm constants fit in i32 by
+// libsodium guarantee but Rust pedantic flags the cast; missing_errors_doc and
+// missing_panics_doc removed as redundant after Plan 21-01 workspace-level suppression.
+// Why: sodium algorithm constants fit in i32 per libsodium guarantee.
+#![allow(clippy::cast_possible_wrap)]
 
 use anyhow::{anyhow, Result};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -93,13 +94,13 @@ impl DerivedKey {
 
         let mut key = [0u8; KEY_SIZE];
 
-        // SAFETY: All pointer arguments are valid for the duration of the call:
+        // All pointer arguments are valid for the duration of the call:
         //   - `key` is a KEY_SIZE (32) byte stack buffer; output length matches.
         //   - `passphrase` is a valid UTF-8 str; pointer and length are consistent.
         //   - `salt.0` is a SALT_SIZE byte array matching libsodium's expected salt size.
-        //   - `params` values come from libsodium constants (ops_limit, mem_limit, algorithm).
-        // libsodium is initialised before this call via `ensure_sodium_init()`.
-        // On failure (ret != 0), an error is returned immediately — no UB.
+        //   - `params` values come from libsodium constants (ops/mem/algorithm).
+        // SAFETY: libsodium init via preceding ensure_sodium_init(); on failure (ret != 0)
+        // an error is returned immediately — no UB. Invariants summarised above.
         unsafe {
             let ret = sodium::crypto_pwhash(
                 key.as_mut_ptr(),                          // output key

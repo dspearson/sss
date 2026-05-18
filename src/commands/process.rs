@@ -1,5 +1,3 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
-
 use anyhow::{anyhow, Context, Result};
 use clap::ArgMatches;
 use std::fs;
@@ -31,6 +29,10 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
 
     let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
 
+    // `path_cstr` is a valid CString built from the file path; `stat` is a stack-allocated
+    // `libc::statfs` (zeroed in-place is valid per the C ABI).
+    // SAFETY: libc's `statfs` writes the struct on success (return 0) and leaves it
+    // untouched on failure (return -1 with errno set).
     unsafe {
         let mut stat: libc::statfs = mem::zeroed();
         let result = libc::statfs(path_cstr.as_ptr(), &raw mut stat);
@@ -56,6 +58,11 @@ fn is_fuse_mount(file_path: &Path) -> Result<bool> {
 
     let path_cstr = CString::new(file_path.as_os_str().as_bytes())?;
 
+    // `path_cstr` is a valid CString built from the file path; `stat` is a
+    // stack-allocated `libc::statfs`. macOS `statfs` writes the struct on success
+    // (return 0) and leaves it untouched on failure. `CStr::from_ptr` over
+    // `stat.f_fstypename` is safe because libc guarantees null-termination on success.
+    // SAFETY: invariants noted above.
     unsafe {
         let mut stat: libc::statfs = mem::zeroed();
         let result = libc::statfs(path_cstr.as_ptr(), &mut stat);
@@ -385,6 +392,7 @@ fn find_project_for_path<'a>(
 /// Detects nested project boundaries and uses each project's own key.
 /// Projects where the current user has no keys are silently skipped.
 /// IMPORTANT: Does not follow symlinks outside the project boundary.
+// Why: spans CLI subcommand dispatch — refactor candidate for v2.4, no current pain.
 #[allow(clippy::too_many_lines)]
 fn process_project_recursively(operation: &str) -> Result<()> {
     use std::fs;
@@ -688,7 +696,6 @@ fn handle_edit_fuse(file_path: &Path, processor: &Processor) -> Result<()> {
 
 /// Create secure temp file path in /dev/shm (Linux) or /tmp (macOS)
 #[cfg(target_os = "linux")]
-#[allow(clippy::unnecessary_wraps)]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();
@@ -703,7 +710,6 @@ fn create_secure_temp_path(file_path: &Path) -> Result<String> {
 
 /// Create secure temp file path in /tmp (macOS)
 #[cfg(target_os = "macos")]
-#[allow(clippy::unnecessary_wraps)]
 fn create_secure_temp_path(file_path: &Path) -> Result<String> {
     let file_name = file_path.file_name().unwrap_or_default().to_string_lossy();
     let pid = std::process::id();

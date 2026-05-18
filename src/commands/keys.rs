@@ -1,6 +1,9 @@
+// cast_possible_truncation/cast_sign_loss/cast_precision_loss/many_single_char_names/
+// unreadable_literal/items_after_statements survive at file scope per the specific
+// rationales below; missing_errors_doc + missing_panics_doc removed as redundant after
+// Plan 21-01 added workspace-level suppression.
+// Why: per-lint rationales inline below.
 #![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
     clippy::cast_possible_truncation, // intentional in color/art rendering code
     clippy::cast_sign_loss,           // intentional in color rendering (f64->u8 after clamping)
     clippy::cast_precision_loss,      // intentional: u64 hash bits to f64 for color math
@@ -414,6 +417,10 @@ fn handle_keys_pubkey(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Re
         let pubkey_bytes = full_key.as_bytes();
 
         let mut hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+        // `pubkey_bytes` is a valid &[u8] (len <= size_t::MAX on 64-bit Rust);
+        // `hash` is sized exactly crypto_hash_sha256_BYTES, the libsodium output count.
+        // SAFETY: libsodium's `crypto_hash_sha256` is constant-time and non-failing for
+        // this signature; pointer/length invariants noted above.
         unsafe {
             crypto_hash_sha256(
                 hash.as_mut_ptr(),
@@ -563,7 +570,8 @@ fn handle_keys_set_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMatche
     handle_keys_set_passphrase_with_prompt(main_matches, sub_matches, &RealPromptReader)
 }
 
-#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
+// Why: None arm returns a multi-line actionable error message; let-else would inline it.
+#[allow(clippy::manual_let_else)]
 fn handle_keys_set_passphrase_with_prompt(
     main_matches: &ArgMatches,
     sub_matches: &ArgMatches,
@@ -641,7 +649,8 @@ fn handle_keys_remove_passphrase(main_matches: &ArgMatches, sub_matches: &ArgMat
     handle_keys_remove_passphrase_with_prompt(main_matches, sub_matches, &RealPromptReader)
 }
 
-#[allow(clippy::manual_let_else)] // complex None arm returns multi-line error message
+// Why: None arm returns a multi-line actionable error message; let-else would inline it.
+#[allow(clippy::manual_let_else)]
 fn handle_keys_remove_passphrase_with_prompt(
     main_matches: &ArgMatches,
     sub_matches: &ArgMatches,
@@ -981,6 +990,9 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
     // --- Classic keypair block ---
     let classic_key_bytes = classic_pk_b64.as_bytes();
     let mut classic_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+    // SAFETY: `classic_key_bytes` is a valid &[u8] from a String; `classic_hash` is sized
+    // exactly crypto_hash_sha256_BYTES (libsodium's output count). The SHA256 FFI is
+    // constant-time and non-failing for this signature.
     unsafe {
         crypto_hash_sha256(
             classic_hash.as_mut_ptr(),
@@ -996,6 +1008,9 @@ fn handle_keys_show(main_matches: &ArgMatches) -> Result<()> {
         println!();
         let hybrid_key_bytes = hybrid_pk_b64.as_bytes();
         let mut hybrid_hash = vec![0u8; crypto_hash_sha256_BYTES as usize];
+        // SAFETY: same invariants as the classic block above — `hybrid_key_bytes` is a
+        // valid &[u8] from a String; `hybrid_hash` is sized exactly the libsodium output
+        // count. SHA256 FFI is constant-time and non-failing.
         unsafe {
             crypto_hash_sha256(
                 hybrid_hash.as_mut_ptr(),

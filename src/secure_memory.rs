@@ -1,4 +1,3 @@
-#![allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
 use std::fmt;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -430,10 +429,11 @@ pub trait SecureClear {
 
 impl SecureClear for String {
     fn secure_clear(&mut self) {
-        // SAFETY: `as_bytes_mut` is safe here because we own the String exclusively
-        // (exclusive &mut reference), and `zeroize` writes zeros in-place without
-        // changing the length or capacity. The String is then cleared so the zeroed
-        // bytes are never exposed as valid UTF-8 content.
+        // `as_bytes_mut` is safe here because we own the String exclusively (exclusive
+        // &mut reference), and `zeroize` writes zeros in-place without changing the
+        // length or capacity. The String is then cleared so the zeroed bytes are never
+        // exposed as valid UTF-8 content.
+        // SAFETY: invariants noted above.
         unsafe {
             let bytes = self.as_bytes_mut();
             bytes.zeroize();

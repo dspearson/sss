@@ -445,6 +445,12 @@ pub fn seal_repository_key(
     repo_key: &RepositoryKey,
     user_public_key: &PublicKey,
 ) -> Result<String> {
+    // Why: under #[cfg(not(feature = "hybrid"))] this match has a single
+    // infallible arm (clippy::infallible_destructuring_match), but with the
+    // hybrid feature enabled the Hybrid arm returns an actionable error rather
+    // than panicking — keeping `match` makes the dispatch symmetric with the
+    // hybrid build and avoids `if let ... else { unreachable!() }` noise.
+    #[allow(clippy::infallible_destructuring_match)]
     let pk_bytes = match user_public_key {
         PublicKey::Classic(b) => b,
         #[cfg(feature = "hybrid")]
@@ -489,6 +495,10 @@ pub fn seal_repository_key(
     note = "use `ClassicSuite.open_repo_key(...)` via the `CryptoSuite` trait. This free function is retained for existing integration tests that assert wire-format compatibility; new code must go through the trait so Phase 2's hybrid suite can plug in without source edits."
 )]
 pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<RepositoryKey> {
+    // Why: see seal_repository_key for rationale — match form is symmetric
+    // across feature arms; under no-hybrid clippy sees only one arm and warns
+    // infallible_destructuring_match, but the hybrid arm is real code.
+    #[allow(clippy::infallible_destructuring_match)]
     let classic = match user_keypair {
         KeyPair::Classic(cp) => cp,
         #[cfg(feature = "hybrid")]
@@ -498,6 +508,7 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
             ));
         }
     };
+    #[allow(clippy::infallible_destructuring_match)]
     let pk_bytes = match &classic.public_key {
         PublicKey::Classic(b) => b,
         #[cfg(feature = "hybrid")]

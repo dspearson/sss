@@ -1,7 +1,6 @@
 // Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
 // from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::format_push_string, clippy::similar_names, clippy::items_after_statements, clippy::undocumented_unsafe_blocks, clippy::too_many_lines)]
 //! Edge case tests from Section 9 of the design document
 
 use sss::marker_inference::infer_markers;

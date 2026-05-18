@@ -424,7 +424,6 @@ fn handle_users_add_hybrid_key(_sub_matches: &ArgMatches) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Command;
-    #[cfg(feature = "hybrid")]
     use serial_test::serial;
 
     #[test]

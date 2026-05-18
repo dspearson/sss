@@ -1,7 +1,7 @@
 // Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
 // exempt from the panic-surface lint policy (criterion measures benchmarks
 // that aren't on the production caller path).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::items_after_statements)]
 
 //! FUSE read-path latency benchmarks
 //!

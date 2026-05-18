@@ -862,9 +862,8 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
             #[cfg(not(feature = "hybrid"))]
             {
                 return Err(anyhow!(
-                    "keystore: entry {} is signed (format_version=2) but the current build does \
-                     not include the `hybrid` feature; rebuild with --features hybrid",
-                    full_id
+                    "keystore: entry {full_id} is signed (format_version=2) but the current build does \
+                     not include the `hybrid` feature; rebuild with --features hybrid"
                 ));
             }
         }

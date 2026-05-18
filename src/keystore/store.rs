@@ -371,8 +371,7 @@ impl Keystore {
                 #[cfg(not(feature = "hybrid"))]
                 {
                     return Err(anyhow!(
-                        "keystore: entry {} is signed (format_version=2) but the current build does not include the `hybrid` feature; rebuild with --features hybrid",
-                        key_id
+                        "keystore: entry {key_id} is signed (format_version=2) but the current build does not include the `hybrid` feature; rebuild with --features hybrid"
                     ));
                 }
             }

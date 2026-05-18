@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::{anyhow, Result};
+#[cfg(feature = "hybrid")]
 use base64::Engine as _;
 use clap::ArgMatches;
 

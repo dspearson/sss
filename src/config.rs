@@ -157,6 +157,11 @@ pub enum ConfigFormat {
 ///
 /// Called by every sign-on-write site in this crate (init, user add/remove,
 /// migrate). Implemented once here to avoid divergence (Pitfall 8 / 19-02).
+// Why: all callers (commands::envelope, commands::users sign-on-write, the
+// init-time sign block here) are #[cfg(feature = "hybrid")] gated. Under the
+// default no-hybrid build this function has no callers — dead_code is correct
+// in that arm but the function is load-bearing for the hybrid feature.
+#[cfg_attr(not(feature = "hybrid"), allow(dead_code))]
 pub(crate) fn write_atomic(cfg: &ProjectConfig, target: &Path) -> Result<()> {
     use std::io::Write as _;
     let parent = target
@@ -184,6 +189,10 @@ pub(crate) fn write_atomic(cfg: &ProjectConfig, target: &Path) -> Result<()> {
 /// When `crypto = Suite::Hybrid` and `keystore` is `Some`, signs the freshly-
 /// created envelope with the writer's sig keypair before writing to disk
 /// (D-14 sign-on-write, PQSIG-05). Classic projects are never signed here.
+// Why: the `keystore` parameter is only consumed inside the
+// #[cfg(feature = "hybrid")] sign-on-write block below; under the no-hybrid
+// build it is intentionally unused.
+#[cfg_attr(not(feature = "hybrid"), allow(unused_variables))]
 pub fn init_project_config<P: AsRef<Path>>(
     config_path: P,
     username: &str,

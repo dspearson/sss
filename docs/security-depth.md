@@ -101,9 +101,9 @@ let ret = unsafe {
 ```
 
 The cfg-stub strategy is the milestone-locked decision **D-V23-05**
-([`CONTEXT.md`](.planning/phases/22-miri-on-safe-wrappers/22-CONTEXT.md)).
-The `-Zmiri-native-lib` alternative was rejected for v2.3 — too new in
-2026-05 to bet on; revisit in v2.4.
+(v2.3 milestone-research lock, 2026-05-17). The `-Zmiri-native-lib`
+alternative was rejected for v2.3 — too new in 2026-05 to bet on;
+revisit in v2.4.
 
 Additionally, the following surfaces are out of scope for miri in v2.3:
 

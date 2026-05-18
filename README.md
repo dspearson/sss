@@ -425,7 +425,7 @@ Cryptographic primitives:
 
 **Rate limiting:** authentication attempts are rate-limited to mitigate brute-force attacks.
 
-See [docs/security-model.md](docs/security-model.md) for the full security model including Argon2id parameter levels, threat model, and key hierarchy. See [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for detailed cryptographic implementation notes.
+See [docs/security-model.md](docs/security-model.md) for the full security model including Argon2id parameter levels, threat model, and key hierarchy. See [docs/CRYPTOGRAPHY.md](docs/CRYPTOGRAPHY.md) for detailed cryptographic implementation notes. See [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) for the enforced clippy strictness contract and the `// Why:` requirement for every `#[allow]` exception.
 
 > **v2.0 note:** The hybrid suite adds post-quantum key-wrapping (opt-in). trelis is
 > experimental and unaudited. See [docs/security-model.md](docs/security-model.md) and
@@ -627,6 +627,7 @@ See [docs/TESTING.md](docs/TESTING.md) for the full four-tier testing guide (def
 | [docs/SECRETS_FILE_FORMAT.md](docs/SECRETS_FILE_FORMAT.md) | Secrets file specification |
 | [docs/SECRETS_PARSING_GUIDE.md](docs/SECRETS_PARSING_GUIDE.md) | Secrets file parsing and integration guide |
 | [docs/IGNORE_PATTERNS.md](docs/IGNORE_PATTERNS.md) | Ignore pattern syntax and behaviour |
+| [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) | Clippy strictness contract: enabled lints, `// Why:` requirement, evolution workflow |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Protocol specification |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability disclosure |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guidelines |

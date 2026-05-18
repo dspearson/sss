@@ -15,6 +15,7 @@
 //! plaintext before base64.
 
 use anyhow::{anyhow, Result};
+use base64::prelude::*;
 use zeroize::Zeroizing;
 
 use libsodium_sys as sodium;
@@ -212,7 +213,6 @@ impl CryptoSuite for HybridCryptoSuite {
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ciphertext);
 
-        use base64::prelude::*;
         Ok(BASE64_STANDARD.encode(&out))
     }
 
@@ -233,7 +233,6 @@ impl CryptoSuite for HybridCryptoSuite {
         };
 
         // Step 1 — Base64-decode and split the wire format.
-        use base64::prelude::*;
         let decoded = BASE64_STANDARD
             .decode(sealed_key)
             .map_err(|e| anyhow!("base64 decode of hybrid sealed key failed: {e}"))?;
@@ -397,7 +396,6 @@ mod tests {
         let repo_key = RepositoryKey::new();
         let public = PublicKey::Hybrid(kp.public_key());
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         assert_eq!(
             decoded.len(),
@@ -415,7 +413,6 @@ mod tests {
         let public = PublicKey::Hybrid(kp.public_key());
         let keypair = KeyPair::Hybrid(kp);
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let mut decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         // Flip a byte inside the AEAD ciphertext region (past encap + nonce).
         let ct_start = HYBRID_ENCAPSULATION_SIZE + HYBRID_SEALED_KEY_NONCE_SIZE;
@@ -431,7 +428,6 @@ mod tests {
         let public = PublicKey::Hybrid(kp.public_key());
         let keypair = KeyPair::Hybrid(kp);
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let mut decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         // Flip a byte in the nonce region.
         decoded[HYBRID_ENCAPSULATION_SIZE] ^= 0x01;

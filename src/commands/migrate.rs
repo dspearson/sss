@@ -5,6 +5,7 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::{anyhow, Result};
+use base64::Engine as _;
 use clap::ArgMatches;
 
 #[cfg(feature = "hybrid")]
@@ -31,7 +32,6 @@ pub fn migrate_project_config(
     repository_key: &crate::crypto::RepositoryKey,
     dry_run: bool,
 ) -> Result<Vec<(String, String)>> {
-    use base64::Engine as _;
     use crate::crypto::{HybridCryptoSuite, HybridPublicKey, PublicKey};
 
     // 1. Early validation: all users must have hybrid_public set
@@ -168,7 +168,6 @@ pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
         // sign with both legs, write atomically. The caller's sig keypair is
         // loaded from the keystore under the username resolved above.
         let (ed_sk, pq_sk) = keystore.load_sig_keypair(&caller, password_str.as_deref())?;
-        use base64::Engine as _;
         if let Some(u) = config.users.get_mut(&caller) {
             if u.sig_ed448_public.is_none() {
                 u.sig_ed448_public = Some(
@@ -205,7 +204,6 @@ mod tests {
                  RepositoryKey},
         project::{ProjectConfig, UserConfig},
     };
-    use base64::Engine as _;
 
     // Helper: build a minimal ProjectConfig with hybrid_public set for all users.
     // Accepts the RepositoryKey so tests can pass the SAME K to migrate_project_config

@@ -170,11 +170,17 @@ impl CryptoSuite for HybridCryptoSuite {
         // SAFETY: `nonce` is a HYBRID_SEALED_KEY_NONCE_SIZE (24-byte) stack buffer;
         // libsodium's `randombytes_buf` writes exactly that count. Init guaranteed by
         // the suite-init contract enforced upstream of this fn.
+        #[cfg(not(miri))]
         unsafe {
             sodium::randombytes_buf(
                 nonce.as_mut_ptr().cast::<std::ffi::c_void>(),
                 HYBRID_SEALED_KEY_NONCE_SIZE,
             );
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: randombytes_buf is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `nonce` stays zero-initialised.
         }
 
         // Step 4 — AEAD-seal the 32-byte repository key. Plaintext sits in
@@ -187,6 +193,7 @@ impl CryptoSuite for HybridCryptoSuite {
         // — the exact byte count libsodium writes on success. `plaintext`/`nonce`/`aead_key`
         // are valid Zeroizing/array pointers of expected sizes. Returns 0 on success.
         // SAFETY: libsodium init guaranteed upstream; pointer/length invariants noted above.
+        #[cfg(not(miri))]
         let ret = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_easy(
                 ciphertext.as_mut_ptr(),
@@ -196,6 +203,12 @@ impl CryptoSuite for HybridCryptoSuite {
                 aead_key.as_ptr(),
             )
         };
+        // Miri stub: crypto_secretbox_xchacha20poly1305_easy is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `ciphertext`
+        // keeps its zero-initialised state; bind `ret = 0i32` so downstream control
+        // flow type-checks identically across cfg arms.
+        #[cfg(miri)]
+        let ret: i32 = 0;
         if ret != 0 {
             return Err(anyhow!(
                 "hybrid AEAD seal failed (libsodium returned {ret})"
@@ -272,6 +285,7 @@ impl CryptoSuite for HybridCryptoSuite {
         // pre-validated lengths. Returns 0 on success; non-zero indicates MAC/decrypt
         // failure with no writes.
         // SAFETY: libsodium init guaranteed upstream; invariants noted above.
+        #[cfg(not(miri))]
         let open_rc = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_open_easy(
                 plaintext.as_mut_ptr(),
@@ -281,6 +295,12 @@ impl CryptoSuite for HybridCryptoSuite {
                 aead_key.as_ptr(),
             )
         };
+        // Miri stub: crypto_secretbox_xchacha20poly1305_open_easy is FFI; AddressSanitizer
+        // (Phase 23 MEMSAFE-03) covers this path under non-miri builds. `plaintext` keeps
+        // its zero-initialised state; bind `open_rc = 0i32` so downstream branching
+        // type-checks identically.
+        #[cfg(miri)]
+        let open_rc: i32 = 0;
         if open_rc != 0 {
             // Generic message — do not leak which layer failed (nonce vs
             // tag vs ciphertext) to keep the error surface minimal for

@@ -29,8 +29,14 @@ impl Salt {
         // SAFETY: `salt` is a valid SALT_SIZE-byte stack buffer. `randombytes_buf` writes
         // exactly `SALT_SIZE` bytes of cryptographically secure random data into it.
         // libsodium is initialised before this call via `ensure_sodium_init()`.
+        #[cfg(not(miri))]
         unsafe {
             sodium::randombytes_buf(salt.as_mut_ptr().cast::<std::ffi::c_void>(), SALT_SIZE);
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: randombytes_buf is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `salt` stays zero-initialised.
         }
         Self(salt)
     }
@@ -101,6 +107,7 @@ impl DerivedKey {
         //   - `params` values come from libsodium constants (ops/mem/algorithm).
         // SAFETY: libsodium init via preceding ensure_sodium_init(); on failure (ret != 0)
         // an error is returned immediately — no UB. Invariants summarised above.
+        #[cfg(not(miri))]
         unsafe {
             let ret = sodium::crypto_pwhash(
                 key.as_mut_ptr(),                          // output key
@@ -116,6 +123,12 @@ impl DerivedKey {
             if ret != 0 {
                 return Err(anyhow!("Key derivation failed"));
             }
+        }
+        #[cfg(miri)]
+        {
+            // Miri stub: crypto_pwhash is FFI; AddressSanitizer (Phase 23 MEMSAFE-03)
+            // covers this path under non-miri builds. `key` stays zero-initialised.
+            let _ret: i32 = 0;
         }
 
         Ok(Self(key))
@@ -145,9 +158,14 @@ fn ensure_sodium_init() {
     // SAFETY: `sodium_init()` is safe to call from multiple threads — libsodium guarantees
     // thread safety for initialisation. `Once` ensures we call it exactly once. Calling
     // `sodium_init()` multiple times is safe per libsodium docs, but we avoid it anyway.
+    #[cfg(not(miri))]
     INIT.call_once(|| unsafe {
         assert!(sodium::sodium_init() >= 0, "Failed to initialise libsodium");
     });
+    // Miri stub: sodium_init() is FFI; AddressSanitizer (Phase 23 MEMSAFE-03) covers
+    // this path under non-miri builds. Under miri we no-op the Once.
+    #[cfg(miri)]
+    INIT.call_once(|| ());
 }
 
 /// Parameters for key derivation

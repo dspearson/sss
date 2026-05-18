@@ -39,16 +39,18 @@ impl FileSystemOps for StdFileSystemOps {
 }
 
 /// Regex for secret interpolation - matches ⊲{`secret_name`} or <{`secret_name`}
-// INVARIANT: literal regex pattern is compile-time-correct; .expect is unreachable
+// Why: literal regex pattern is compile-time-correct; .expect is unreachable
 // on any successful build. Same applies to the other two LazyLock regexes below.
 // HARDEN-01 / 08-01.
+#[allow(clippy::expect_used)]
 pub static SECRETS_INTERPOLATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
 
 /// Regex for parsing secrets file format - single-line values
 /// Supports: name: value, "name": value, name: "value", "name": "value"
 /// Also supports: name: 'value', 'name': 'value'
-// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
+// Why: literal regex pattern is compile-time-correct; .expect unreachable.
+#[allow(clippy::expect_used)]
 static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|(.*))\s*$"#)
         .expect("Failed to compile secrets line regex")
@@ -56,7 +58,8 @@ static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new
 
 /// Regex for parsing YAML-style multi-line value indicator
 /// Matches: key: | or "key": | or 'key': |
-// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
+// Why: literal regex pattern is compile-time-correct; .expect unreachable.
+#[allow(clippy::expect_used)]
 static MULTILINE_INDICATOR_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*\|\s*$"#)
         .expect("Failed to compile multiline indicator regex")
@@ -451,17 +454,19 @@ fn collect_multiline_value(lines: &[&str], _start_line: usize) -> Result<(String
         }
 
         // Check if line is still indented at least to base level
-        // INVARIANT: base_indent is Some(_) at both unwraps below — the
-        // is_none() branch above either initialises it on this iteration or
-        // breaks out of the loop. Subsequent iterations cannot reach here with
-        // base_indent == None. HARDEN-01 / 08-01.
+        // Why: base_indent is Some(_) at both unwraps below — the is_none() branch
+        // above either initialises it on this iteration or breaks out of the loop.
+        // Subsequent iterations cannot reach here with base_indent == None.
+        // HARDEN-01 / 08-01.
+        #[allow(clippy::unwrap_used)]
         if indent < base_indent.unwrap() {
             // Dedented line means end of multi-line value
             break;
         }
 
         // Add the line with relative indentation preserved
-        // INVARIANT: same as the unwrap above — base_indent is Some(_) here.
+        // Why: same as the unwrap above — base_indent is Some(_) here.
+        #[allow(clippy::unwrap_used)]
         let relative_indent = indent - base_indent.unwrap();
         let dedented = format!("{}{}", " ".repeat(relative_indent), line.trim_start());
         value_lines.push(dedented);

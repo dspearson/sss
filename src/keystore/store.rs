@@ -1450,7 +1450,12 @@ impl Keystore {
         // Case A/B for D-07 consistency.
         let (sig_ed448_sk_field, sig_mldsa_sk_field) = if stored.is_password_protected {
             // Re-derive KEK (we already validated the passphrase above).
+            // Why: password and salt are validated as Some(_) in the preceding
+            // is_password_protected branch (see passphrase validation earlier in
+            // this fn body). HARDEN-01 / 08-01.
+            #[allow(clippy::expect_used)]
             let pw = password.expect("checked above");
+            #[allow(clippy::expect_used)]
             let salt_str = stored.salt.as_ref().expect("checked above");
             let salt = crate::kdf::Salt::from_base64(salt_str)
                 .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={key_id}: {e}"))?;

@@ -241,8 +241,9 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 
 /// Process a file or stdin with a specific operation
 fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()> {
-    // INVARIANT: clap declares `file` as required_unless_present="project"; the
+    // Why: clap declares `file` as required_unless_present="project"; the
     // dispatcher only routes here when `file` is supplied. HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
     let in_place = sub_matches.get_flag("in-place");
 
@@ -376,12 +377,11 @@ fn find_project_for_path<'a>(
             return None;
         }
         if let Some((proc, gs)) = projects.get(dir) {
-            return Some((
-                // SAFETY: the key exists, we can get a reference to it from the map
-                projects.keys().find(|k| *k == dir).unwrap(),
-                proc,
-                gs,
-            ));
+            // Why: dir was just confirmed to be a key in projects via .get() above;
+            // .keys().find() therefore yields Some(_). Infallible-by-construction.
+            #[allow(clippy::unwrap_used)]
+            let key_ref = projects.keys().find(|k| *k == dir).unwrap();
+            return Some((key_ref, proc, gs));
         }
         current = dir.parent();
     }
@@ -786,8 +786,9 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
 
 /// Main edit handler - dispatches to FUSE or regular file handler
 pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    // INVARIANT: clap declares `file` as required for the edit subcommand.
+    // Why: clap declares `file` as required for the edit subcommand.
     // HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
 
     if file_path_str == "-" {

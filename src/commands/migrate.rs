@@ -1,3 +1,9 @@
+// Why: every .unwrap() in this file is on a HashMap::get(k) where k was just
+// sourced from .keys() in the surrounding loop, or on an Option<T> where the
+// preceding validation pass guaranteed Some(_). All sites carry per-site
+// INVARIANT comments. HARDEN-01 / 08-01.
+#![allow(clippy::unwrap_used)]
+
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
 

@@ -1,4 +1,12 @@
-#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+// Why: clippy::unwrap_used is allowed file-wide because every .unwrap() in this
+// file is on a clap-required arg (clap framework declares required(true) and
+// returns Some on every match), or on a length-validated try_into (e.g. raw is
+// already checked to be exactly 32 bytes in the match arm). All sites carry
+// individual INVARIANT comments. HARDEN-01 / 08-01.
+// items_after_statements is allowed because the v2.x command dispatchers nest
+// helper fns inside main handler fns for readability; refactoring out would
+// require module restructuring outside the v2.3 scope.
+#![allow(clippy::unwrap_used, clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;

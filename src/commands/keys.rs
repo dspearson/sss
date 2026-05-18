@@ -446,8 +446,9 @@ fn handle_keys_delete_with_prompt(
     prompt: &dyn PromptReader,
 ) -> Result<()> {
     let keystore = create_keystore(main_matches)?;
-    // INVARIANT: clap declares `name` as required(true) for the delete
-    // subcommand. HARDEN-01 / 08-01.
+    // Why: clap declares `name` as required(true) for the delete subcommand.
+    // HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let key_name = sub_matches.get_one::<String>("name").unwrap();
 
     let input = prompt.read_line(&format!(

@@ -113,9 +113,10 @@ fn unescape_default_delimiter(raw: &str) -> String {
         if ch == '\\' {
             if let Some('{' | '}' | '\\') = chars.clone().next() {
                 // Escaped brace or backslash — emit the literal.
-                // INVARIANT: chars.clone().next() returned Some(_) at the match
-                // arm above, so the un-cloned chars iterator yields the same
-                // value. .unwrap is unreachable. HARDEN-01 / 08-01.
+                // Why: chars.clone().next() returned Some(_) at the match arm above,
+                // so the un-cloned chars iterator yields the same value. .unwrap is
+                // unreachable. HARDEN-01 / 08-01.
+                #[allow(clippy::unwrap_used)]
                 out.push(chars.next().unwrap());
                 continue;
             }

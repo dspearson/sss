@@ -38,8 +38,9 @@ impl Default for FileScanner {
 impl FileScanner {
     #[must_use] 
     pub fn new() -> Self {
-        // INVARIANT: literal regex pattern is compile-time-correct; .expect is
-        // unreachable on any successful build. HARDEN-01 / 08-01.
+        // Why: literal regex pattern is compile-time-correct; .expect is unreachable
+        // on any successful build. HARDEN-01 / 08-01.
+        #[allow(clippy::expect_used)]
         let pattern_regex =
             Regex::new(r"(?:⊕|o\+|⊠)\{[^}]*\}").expect("Failed to compile SSS pattern regex");
 

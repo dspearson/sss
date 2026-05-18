@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 // Integration tests for audit logging and rate limiting
 //
 // These tests cover scenarios not covered by inline unit tests:
@@ -85,7 +89,7 @@ fn test_audit_logger_concurrent_writes() -> Result<()> {
         let handle = thread::spawn(move || {
             for i in 0..10 {
                 logger_clone
-                    .log(AuditEvent::Request, &format!("Thread {} entry {}", thread_id, i))
+                    .log(AuditEvent::Request, &format!("Thread {thread_id} entry {i}"))
                     .unwrap();
             }
         });
@@ -154,7 +158,7 @@ fn test_audit_logger_large_volume() -> Result<()> {
 
     // Write 1000 log entries
     for i in 0..1000 {
-        logger.log(AuditEvent::Request, &format!("Entry {}", i))?;
+        logger.log(AuditEvent::Request, &format!("Entry {i}"))?;
     }
 
     let content = fs::read_to_string(temp_file.path())?;
@@ -316,7 +320,7 @@ fn test_rate_limiter_concurrent_access() {
         let limiter_clone = Arc::clone(&limiter);
         let handle = thread::spawn(move || {
             let mut context = RequestContext::new("alice".to_string());
-            context.hostname = Some(format!("host{}.example.com", thread_id));
+            context.hostname = Some(format!("host{thread_id}.example.com"));
 
             let mut allowed = 0;
             for _ in 0..20 {
@@ -415,7 +419,7 @@ fn test_rate_limiter_stress_test() {
     // With concurrent access, might be slightly over limit due to race conditions
     // but should be in reasonable range
     assert!((50..=70).contains(&total_allowed),
-        "Expected 50-70 allowed requests, got {}", total_allowed);
+        "Expected 50-70 allowed requests, got {total_allowed}");
 }
 
 #[test]
@@ -433,7 +437,7 @@ fn test_audit_and_rate_limit_integration() -> Result<()> {
         if allowed {
             logger.log_request(&context)?;
         } else {
-            logger.log(AuditEvent::Denied, &format!("Rate limit exceeded for request {}", i))?;
+            logger.log(AuditEvent::Denied, &format!("Rate limit exceeded for request {i}"))?;
         }
     }
 

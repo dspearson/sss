@@ -80,9 +80,10 @@ pub fn parse_markers(source: &str) -> Result<(String, Vec<Marker>)> {
             }
         } else {
             // Regular character - copy it
-            // INVARIANT: this branch is only reached inside the parse loop
-            // when source_pos < source.len(), so remaining = &source[source_pos..]
-            // is non-empty and has at least one char. HARDEN-01 / 08-01.
+            // Why: this branch is only reached inside the parse loop when
+            // source_pos < source.len(), so remaining = &source[source_pos..] is
+            // non-empty and has at least one char. HARDEN-01 / 08-01.
+            #[allow(clippy::unwrap_used)]
             let ch = remaining.chars().next().unwrap();
             rendered.push(ch);
             let ch_len = ch.len_utf8();

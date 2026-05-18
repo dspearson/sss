@@ -272,6 +272,12 @@ pub fn init_project_config<P: AsRef<Path>>(
 
 /// Internal unified implementation for loading project configuration
 /// This eliminates code duplication between the public API functions
+// Why: 102 lines is the natural shape of the config-load dispatcher —
+// project-root discovery + keystore loading + agent-vs-direct keypair
+// selection + sealed-key opening + signed-envelope verification. Already
+// factored to eliminate duplication between public API entry points; splitting
+// further would re-introduce the duplication this function exists to prevent.
+#[allow(clippy::too_many_lines)]
 fn load_project_config_internal<P: AsRef<Path>>(
     config_path: P,
     search_for_root: bool,

@@ -36,11 +36,11 @@ pub struct UserConfig {
     pub sig_mldsa65_public: Option<String>,
 }
 
-/// Top-level envelope signature container; present iff format_version=2 (D-07).
+/// Top-level envelope signature container; present iff `format_version=2` (D-07).
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct EnvelopeMeta {
     /// Hybrid AND-composition signature over the canonical envelope payload (D-07).
-    /// `None` is rendered as no `[envelope.sig]` table at all (skip_if_none).
+    /// `None` is rendered as no `[envelope.sig]` table at all (`skip_if_none`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(not(feature = "hybrid"), serde(skip))]
     pub sig: Option<EnvelopeSig>,
@@ -73,7 +73,7 @@ pub struct ProjectConfig {
     #[serde(default = "default_envelope_format_version", skip_serializing_if = "is_default_format_version")]
     pub format_version: u32,
 
-    /// Top-level envelope signature container; present iff format_version=2 (D-07).
+    /// Top-level envelope signature container; present iff `format_version=2` (D-07).
     /// Gated on `hybrid` feature — non-hybrid builds never read or write this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(not(feature = "hybrid"), serde(skip))]
@@ -116,6 +116,10 @@ fn default_envelope_format_version() -> u32 {
     1
 }
 
+// Why: serde's skip_serializing_if predicate requires `fn(&T) -> bool`
+// signature, so &u32 is mandatory here — passing by value would not match
+// the trait. See line 73's #[serde(skip_serializing_if = ...)] attribute.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_default_format_version(v: &u32) -> bool {
     *v == 1
 }
@@ -141,8 +145,7 @@ fn resolve_suite_from_version(version: &str) -> Result<Suite> {
         "1.0" => Ok(Suite::Classic),
         "2.0" => Ok(Suite::Hybrid),
         other => Err(anyhow!(
-            "unknown .sss.toml version {:?}: expected \"1.0\" or \"2.0\"",
-            other
+            "unknown .sss.toml version {other:?}: expected \"1.0\" or \"2.0\""
         )),
     }
 }
@@ -304,7 +307,7 @@ impl ProjectConfig {
     }
 
     /// Helper for PQSIG-06-mandated verbs: returns the D-10 byte-exact actionable
-    /// error if the envelope is un-signed (format_version=1).
+    /// error if the envelope is un-signed (`format_version=1`).
     ///
     /// CRITICAL: the error string is the D-10 verbatim text. NEG-04 in plan 19-05
     /// asserts this byte-for-byte via `assert_eq!`. Any whitespace or punctuation
@@ -849,7 +852,7 @@ mod tests {
             .unwrap();
 
         let toml_output = toml::to_string_pretty(&config).unwrap();
-        println!("Generated TOML:\n{}", toml_output);
+        println!("Generated TOML:\n{toml_output}");
 
         // Should have user sections with key and public fields
         assert!(toml_output.contains("[alice]"));

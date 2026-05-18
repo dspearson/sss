@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Integration tests for `sss init --crypto` (SUITE-03).
 //!
 //! These tests drive the real `sss` binary via `std::process::Command`
@@ -120,12 +124,10 @@ fn init_no_flags_defaults_to_hybrid() {
     let toml = std::fs::read_to_string(&toml_path).expect("read .sss.toml");
     assert!(
         toml.contains("version = \"2.0\""),
-        "expected version = \"2.0\" in .sss.toml, got:\n{}",
-        toml
+        "expected version = \"2.0\" in .sss.toml, got:\n{toml}"
     );
     assert!(
         toml.contains("[envelope.sig]"),
-        "expected [envelope.sig] table in .sss.toml, got:\n{}",
-        toml
+        "expected [envelope.sig] table in .sss.toml, got:\n{toml}"
     );
 }

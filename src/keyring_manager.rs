@@ -217,7 +217,7 @@ mod tests {
     impl KeyringTestHelper {
         fn new(test_name: &str) -> Self {
             let manager = KeyringManager::new();
-            let test_user = format!("test_{}", test_name);
+            let test_user = format!("test_{test_name}");
 
             // Clean up any existing key
             let _ = manager.delete_key_for_user(&test_user);
@@ -227,20 +227,17 @@ mod tests {
 
         /// Attempt to store a key, returning None if keyring is unavailable
         fn try_store_key(&self, key: &Key) -> Option<()> {
-            match self.manager.store_key_for_user(&self.test_user, key) {
-                Ok(()) => {
-                    // Verify we can actually retrieve it
-                    if self.manager.get_key_for_user(&self.test_user).is_ok() {
-                        Some(())
-                    } else {
-                        eprintln!("Skipping keyring test: keyring store/retrieve not working in this environment");
-                        None
-                    }
-                }
-                Err(_) => {
-                    eprintln!("Skipping keyring test: keyring not available in this environment");
+            if let Ok(()) = self.manager.store_key_for_user(&self.test_user, key) {
+                // Verify we can actually retrieve it
+                if self.manager.get_key_for_user(&self.test_user).is_ok() {
+                    Some(())
+                } else {
+                    eprintln!("Skipping keyring test: keyring store/retrieve not working in this environment");
                     None
                 }
+            } else {
+                eprintln!("Skipping keyring test: keyring not available in this environment");
+                None
             }
         }
 
@@ -331,14 +328,11 @@ key = "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
         }
 
         // Verify the key was migrated
-        let retrieved_key = match helper.get_key() {
-            Ok(key) => key,
-            Err(_) => {
-                eprintln!(
-                    "Skipping keyring test: keyring store/retrieve not working in this environment"
-                );
-                return;
-            }
+        let Ok(retrieved_key) = helper.get_key() else {
+            eprintln!(
+                "Skipping keyring test: keyring store/retrieve not working in this environment"
+            );
+            return;
         };
         assert_eq!(
             "dGVzdGtleWRhdGExMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ=",

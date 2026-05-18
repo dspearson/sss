@@ -1,3 +1,13 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: timing tests measure u128 nanoseconds and compute variance as f64;
+// precision loss is acceptable for "variance < 50%" assertions. Test scope.
+#![allow(clippy::cast_precision_loss)]
+// Why: timing-test fixtures use start_time/start_iter type names which are
+// flagged by similar_names; renaming would obscure the timing instrumentation.
+#![allow(clippy::similar_names)]
+
 #![allow(deprecated)]
 //! Cryptography security and timing tests
 //!
@@ -348,8 +358,7 @@ fn test_invalid_base64_ciphertext() -> Result<()> {
         let result = decrypt_from_base64(invalid, &key);
         assert!(
             result.is_err(),
-            "Invalid base64 '{}' should be rejected",
-            invalid
+            "Invalid base64 '{invalid}' should be rejected"
         );
     }
 
@@ -378,8 +387,7 @@ fn test_truncated_ciphertext_handling() -> Result<()> {
             let result = decrypt(truncated, &key);
             assert!(
                 result.is_err(),
-                "Truncated ciphertext (len {}) should be rejected",
-                truncate_len
+                "Truncated ciphertext (len {truncate_len}) should be rejected"
             );
         }
     }
@@ -432,16 +440,15 @@ fn test_timing_attack_resistance_baseline() -> Result<()> {
         wrong_median.as_nanos() as f64 / correct_median.as_nanos() as f64
     };
 
-    println!("Correct key median: {:?}", correct_median);
-    println!("Wrong key median: {:?}", wrong_median);
-    println!("Ratio: {:.2}", ratio);
+    println!("Correct key median: {correct_median:?}");
+    println!("Wrong key median: {wrong_median:?}");
+    println!("Ratio: {ratio:.2}");
 
     // Very loose check - just ensure not wildly different
     // Real timing attacks require statistical analysis
     assert!(
         ratio < 5.0,
-        "Timing ratio too large: {:.2} (may indicate timing leak)",
-        ratio
+        "Timing ratio too large: {ratio:.2} (may indicate timing leak)"
     );
 
     Ok(())
@@ -465,7 +472,7 @@ fn test_concurrent_crypto_operations() -> Result<()> {
     for i in 0..10 {
         let key_clone = Arc::clone(&key);
         let handle = thread::spawn(move || {
-            let plaintext = format!("concurrent test data {}", i);
+            let plaintext = format!("concurrent test data {i}");
 
             // Encrypt
             let ciphertext = encrypt_to_base64(&plaintext, &key_clone).unwrap();

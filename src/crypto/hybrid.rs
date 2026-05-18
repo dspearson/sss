@@ -15,6 +15,7 @@
 //! plaintext before base64.
 
 use anyhow::{anyhow, Result};
+use base64::prelude::*;
 use zeroize::Zeroizing;
 
 use libsodium_sys as sodium;
@@ -66,7 +67,7 @@ impl HybridPublicKey {
     /// length-checked path.
     #[cfg(test)]
     #[must_use]
-    pub fn from_bytes_unchecked(bytes: Vec<u8>) -> Self {
+    pub fn from_bytes_unchecked(bytes: &[u8]) -> Self {
         let mut arr = [0u8; HYBRID_PUBLIC_KEY_SIZE];
         let n = bytes.len().min(HYBRID_PUBLIC_KEY_SIZE);
         arr[..n].copy_from_slice(&bytes[..n]);
@@ -197,8 +198,7 @@ impl CryptoSuite for HybridCryptoSuite {
         };
         if ret != 0 {
             return Err(anyhow!(
-                "hybrid AEAD seal failed (libsodium returned {})",
-                ret
+                "hybrid AEAD seal failed (libsodium returned {ret})"
             ));
         }
 
@@ -213,7 +213,6 @@ impl CryptoSuite for HybridCryptoSuite {
         out.extend_from_slice(&nonce);
         out.extend_from_slice(&ciphertext);
 
-        use base64::prelude::*;
         Ok(BASE64_STANDARD.encode(&out))
     }
 
@@ -234,7 +233,6 @@ impl CryptoSuite for HybridCryptoSuite {
         };
 
         // Step 1 — Base64-decode and split the wire format.
-        use base64::prelude::*;
         let decoded = BASE64_STANDARD
             .decode(sealed_key)
             .map_err(|e| anyhow!("base64 decode of hybrid sealed key failed: {e}"))?;
@@ -274,7 +272,7 @@ impl CryptoSuite for HybridCryptoSuite {
         // pre-validated lengths. Returns 0 on success; non-zero indicates MAC/decrypt
         // failure with no writes.
         // SAFETY: libsodium init guaranteed upstream; invariants noted above.
-        let ret = unsafe {
+        let open_rc = unsafe {
             sodium::crypto_secretbox_xchacha20poly1305_open_easy(
                 plaintext.as_mut_ptr(),
                 ciphertext.as_ptr(),
@@ -283,7 +281,7 @@ impl CryptoSuite for HybridCryptoSuite {
                 aead_key.as_ptr(),
             )
         };
-        if ret != 0 {
+        if open_rc != 0 {
             // Generic message — do not leak which layer failed (nonce vs
             // tag vs ciphertext) to keep the error surface minimal for
             // tamper-detection callers.
@@ -302,9 +300,9 @@ mod tests {
 
     #[test]
     fn test_hybrid_public_key_is_clone_and_send_sync() {
-        fn _assert_send_sync<T: Send + Sync + 'static>() {}
-        _assert_send_sync::<HybridPublicKey>();
-        _assert_send_sync::<HybridKeyPair>();
+        fn assert_send_sync<T: Send + Sync + 'static>() {}
+        assert_send_sync::<HybridPublicKey>();
+        assert_send_sync::<HybridKeyPair>();
     }
 
     #[test]
@@ -398,7 +396,6 @@ mod tests {
         let repo_key = RepositoryKey::new();
         let public = PublicKey::Hybrid(kp.public_key());
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         assert_eq!(
             decoded.len(),
@@ -416,7 +413,6 @@ mod tests {
         let public = PublicKey::Hybrid(kp.public_key());
         let keypair = KeyPair::Hybrid(kp);
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let mut decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         // Flip a byte inside the AEAD ciphertext region (past encap + nonce).
         let ct_start = HYBRID_ENCAPSULATION_SIZE + HYBRID_SEALED_KEY_NONCE_SIZE;
@@ -432,7 +428,6 @@ mod tests {
         let public = PublicKey::Hybrid(kp.public_key());
         let keypair = KeyPair::Hybrid(kp);
         let sealed = HybridCryptoSuite.seal_repo_key(&repo_key, &public).unwrap();
-        use base64::prelude::*;
         let mut decoded = BASE64_STANDARD.decode(&sealed).unwrap();
         // Flip a byte in the nonce region.
         decoded[HYBRID_ENCAPSULATION_SIZE] ^= 0x01;
@@ -668,9 +663,11 @@ mod tests {
 
         // The pre-drop value is some BLAKE3 output (not our choice), but it
         // is NOT zero — confirm that before dropping.
-        // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
-        // allocation is live and we are only reading bytes we own.
         let pre_drop_nonzero = (0..32).any(|i| {
+            // SAFETY: raw_ptr points into the stack-held ManuallyDrop<..>; the
+            // allocation is live and we are only reading bytes we own. The
+            // raw_ptr.add(i) offset is bounded by the (0..32) iterator against
+            // the 32-byte Zeroizing<[u8; 32]> allocation.
             let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
             byte != 0
         });

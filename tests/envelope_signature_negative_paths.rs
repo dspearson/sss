@@ -1,16 +1,20 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Sign-on-write integration tests (Phase 19-02, PQSIG-05).
 //!
 //! Drives the real sss binary through each mutating CLI verb and asserts the
 //! resulting `.sss.toml` carries a valid `[envelope.sig]` table. All four call
 //! sites must produce a freshly-signed v2 envelope on disk (D-14, D-17):
-//!   1. `sss init --crypto hybrid`      (sign_on_write_init)
-//!   2. `sss user add <bob>`            (sign_on_write_user_add)
-//!   3. `sss user remove <bob>`         (sign_on_write_user_remove)
-//!   4. `sss migrate --to hybrid`       (sign_on_write_migrate)
+//!   1. `sss init --crypto hybrid`      (`sign_on_write_init`)
+//!   2. `sss user add <bob>`            (`sign_on_write_user_add`)
+//!   3. `sss user remove <bob>`         (`sign_on_write_user_remove`)
+//!   4. `sss migrate --to hybrid`       (`sign_on_write_migrate`)
 //!
 //! Each test runs in an isolated temp directory with its own HOME (so no test
 //! bleeds keystore state into another). Uses the subprocess pattern from
-//! tests/migrate_e2e.rs — NOT sss::cli::run (that symbol does not exist in
+//! `tests/migrate_e2e.rs` — NOT `sss::cli::run` (that symbol does not exist in
 //! the library API).
 
 #![cfg(feature = "hybrid")]
@@ -295,7 +299,7 @@ fn sign_on_write_user_remove() {
 // ---------------------------------------------------------------------------
 
 /// Drives `sss init --crypto hybrid` then reloads via `ProjectConfig::load_from_file`
-/// (the production path with format_version dispatch + signature verification).
+/// (the production path with `format_version` dispatch + signature verification).
 /// Verifies that a freshly-signed v2 envelope verifies cleanly on read-back (T-19-05).
 #[test]
 fn verify_passes_round_trip() {
@@ -338,11 +342,11 @@ fn verify_passes_round_trip() {
 // Task 19-04-01 — upgrade_sig_round_trip: v1 classic envelope → signed v2 (PQSIG-06)
 // ---------------------------------------------------------------------------
 
-/// Drives `sss init --crypto classic` (produces format_version=1, no sig) then
+/// Drives `sss init --crypto classic` (produces `format_version=1`, no sig) then
 /// runs `sss envelope upgrade-sig` and asserts:
-/// 1. format_version promoted to 2.
+/// 1. `format_version` promoted to 2.
 /// 2. [envelope.sig] table populated with non-empty Ed448 + ML-DSA-65 legs.
-/// 3. alice's sig_ed448_public is set.
+/// 3. alice's `sig_ed448_public` is set.
 /// 4. The upgraded envelope verifies via the production loader (T-19-04).
 #[test]
 fn upgrade_sig_round_trip() {
@@ -412,13 +416,15 @@ fn upgrade_sig_round_trip() {
 // Task 19-04-02 — upgrade_sig_idempotent: re-running on a v2 envelope is a no-op
 // ---------------------------------------------------------------------------
 
-/// Init with --crypto hybrid (format_version=2, signed). Snapshot bytes. Re-run
+/// Init with --crypto hybrid (`format_version=2`, signed). Snapshot bytes. Re-run
 /// upgrade-sig. Assert:
+///
 /// 1. Exit code 0 (clean).
 /// 2. On-disk .sss.toml bytes unchanged (no re-sign, no whitespace shuffle).
+///
 /// This validates the "no-op skip" idempotency semantic chosen in envelope.rs:
-/// format_version >= 2 → print "already signed" and return Ok without file touch.
-/// mtime is preserved because we never call write_atomic on already-signed envelopes.
+/// `format_version` >= 2 → print "already signed" and return Ok without file touch.
+/// mtime is preserved because we never call `write_atomic` on already-signed envelopes.
 #[test]
 fn upgrade_sig_idempotent() {
     let project_dir = TempDir::new().expect("project tempdir");
@@ -549,7 +555,7 @@ fn neg_01_ed448_tamper() {
     // load_from_file must now fail with the Ed448 leg named in the error (D-20).
     let err = sss::project::ProjectConfig::load_from_file(&toml_path)
         .expect_err("tampered Ed448 leg must fail verification");
-    let s = format!("{:#}", err);
+    let s = format!("{err:#}");
     assert!(
         s.contains("Ed448"),
         "error must name the failing Ed448 leg; got: {s}"
@@ -608,7 +614,7 @@ fn neg_02_mldsa65_tamper() {
 
     let err = sss::project::ProjectConfig::load_from_file(&toml_path)
         .expect_err("tampered ML-DSA-65 leg must fail verification");
-    let s = format!("{:#}", err);
+    let s = format!("{err:#}");
     assert!(
         s.contains("ML-DSA-65") || s.contains("ML-DSA"),
         "error must name the failing ML-DSA-65 leg; got: {s}"
@@ -668,7 +674,7 @@ fn neg_03_payload_tamper() {
 
     let err = sss::project::ProjectConfig::load_from_file(&toml_path)
         .expect_err("payload tamper must fail verification even with sig table intact");
-    let s = format!("{:#}", err);
+    let s = format!("{err:#}");
     // The verifier must detect the payload mismatch; error should mention verification.
     assert!(
         s.contains("verification") || s.contains("verify") || s.contains("envelope"),
@@ -681,7 +687,7 @@ fn neg_03_payload_tamper() {
 // ---------------------------------------------------------------------------
 
 /// Build a classic (v1) unsigned envelope then attempt `sss users add bob <key>`.
-/// `require_signed` fires because format_version=1; error propagates to stderr.
+/// `require_signed` fires because `format_version=1`; error propagates to stderr.
 /// Assert stderr contains the byte-exact D-10 string (PQSIG-06).
 ///
 /// The D-10 expected text uses the ABSOLUTE path to `.sss.toml` because
@@ -796,7 +802,7 @@ fn sign_on_write_migrate() {
     let alice_hybrid_pk = keygen_stdout
         .lines()
         .find(|l| l.contains("Hybrid public key:"))
-        .and_then(|l| l.splitn(2, ':').nth(1))
+        .and_then(|l| l.split_once(':').map(|x| x.1))
         .map(str::trim)
         .expect("keygen --suite both must print 'Hybrid public key: ...'")
         .to_string();

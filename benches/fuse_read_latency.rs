@@ -1,13 +1,18 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! FUSE read-path latency benchmarks
 //!
 //! These benchmarks exercise the same code path that the FUSE `read()` handler invokes
 //! for every file access, without requiring an actual FUSE mount.
 //!
-//! FUSE read() call chain (from fuse_fs.rs):
+//! FUSE `read()` call chain (from `fuse_fs.rs)`:
 //!   1. Kernel hands control to `SssFs::read()`
 //!   2. If handle has `cached_content` → slice and reply (fast path)
 //!   3. If no handle → `read_and_render()` → `read_and_process()`
-//!      a. `read_file_via_fd()`  — disk I/O via openat() + BufReader
+//!      a. `read_file_via_fd()`  — disk I/O via `openat()` + `BufReader`
 //!      b. `has_any_markers_bytes()` — fast byte scan (early exit for plain files)
 //!      c. `String::from_utf8()` — validate UTF-8
 //!      d. `has_balanced_markers()` — check for `⊠{}` balanced pairs
@@ -57,7 +62,8 @@ fn make_sealed_content(processor: &Processor, filler_kb: usize, n_markers: usize
             content.push_str(line);
             let _ = j; // suppress warning
         }
-        content.push_str(&format!("secret_{i} = o+{{plaintext-secret-value-{i:04}}}\n"));
+        use std::fmt::Write as _;
+        writeln!(content, "secret_{i} = o+{{plaintext-secret-value-{i:04}}}").unwrap();
     }
 
     // Remaining filler after last marker

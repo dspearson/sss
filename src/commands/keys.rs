@@ -73,6 +73,11 @@ fn handle_keys_generate_command(main_matches: &ArgMatches, matches: &ArgMatches)
     handle_keys_generate_command_with_prompt(main_matches, matches, &RealPromptReader)
 }
 
+// Why: 118 lines is the natural shape of the command dispatcher — clap parsing
+// + feature gating + KDF param resolution + dual-suite branching + interactive
+// passphrase prompting. Breaking into smaller fns would obscure the linear
+// command-flow narrative that maps to docs/USAGE.md.
+#[allow(clippy::too_many_lines)]
 fn handle_keys_generate_command_with_prompt(
     main_matches: &ArgMatches,
     matches: &ArgMatches,
@@ -84,10 +89,7 @@ fn handle_keys_generate_command_with_prompt(
 
     // Feature-absent guard: hybrid and both require the hybrid feature flag.
     // clap still parses the value; this runtime gate fires immediately.
-    match suite {
-        Some("hybrid") | Some("both") => {}
-        _ => {}
-    }
+    if let Some("hybrid" | "both") = suite {}
 
     let keystore = create_keystore(main_matches)?;
 
@@ -292,7 +294,8 @@ pub fn handle_keys(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
 ///
 /// Returns the rendered line without a trailing newline. Used by both
 /// `handle_keys_list` (production) and `tests/keys_command_tests.rs` (D-18
-/// tag tests keys_14..16).
+/// tag tests `keys_14..16`).
+#[must_use] 
 pub fn format_list_entry(
     key_id: &str,
     stored: &crate::keystore::StoredKeyPair,
@@ -448,8 +451,9 @@ fn handle_keys_delete_with_prompt(
     prompt: &dyn PromptReader,
 ) -> Result<()> {
     let keystore = create_keystore(main_matches)?;
-    // INVARIANT: clap declares `name` as required(true) for the delete
-    // subcommand. HARDEN-01 / 08-01.
+    // Why: clap declares `name` as required(true) for the delete subcommand.
+    // HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let key_name = sub_matches.get_one::<String>("name").unwrap();
 
     let input = prompt.read_line(&format!(
@@ -824,7 +828,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     let (full_id, _) = keys
         .iter()
         .find(|(id, _)| id.starts_with(uuid))
-        .ok_or_else(|| anyhow!("export: no keystore entry matching uuid prefix '{}'", uuid))?;
+        .ok_or_else(|| anyhow!("export: no keystore entry matching uuid prefix '{uuid}'"))?;
 
     let src = keystore.keys_dir.join(format!("{full_id}.toml"));
     if !src.exists() {
@@ -844,9 +848,8 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
         1 => {
             if !allow_unsigned {
                 return Err(anyhow!(
-                    "keystore: entry {} is unsigned legacy format (format_version=1); \
-                     pass --allow-unsigned to export or re-sign first",
-                    full_id
+                    "keystore: entry {full_id} is unsigned legacy format (format_version=1); \
+                     pass --allow-unsigned to export or re-sign first"
                 ));
             }
             // Proceed without verify.
@@ -867,8 +870,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
         }
         v => {
             return Err(anyhow!(
-                "keystore: unsupported format_version {} for {}; upgrade sss",
-                v, full_id
+                "keystore: unsupported format_version {v} for {full_id}; upgrade sss"
             ));
         }
     }
@@ -917,7 +919,7 @@ pub fn handle_keys_upgrade(main_matches: &ArgMatches, sub_matches: &ArgMatches) 
     let (full_id, stored) = keys
         .iter()
         .find(|(id, _)| id.starts_with(uuid))
-        .ok_or_else(|| anyhow!("upgrade: no keystore entry matching uuid prefix '{}'", uuid))?;
+        .ok_or_else(|| anyhow!("upgrade: no keystore entry matching uuid prefix '{uuid}'"))?;
 
     // Prompt for the existing passphrase only if the entry is protected.
     // The keystore layer probes the KEK before any write, so a wrong
@@ -1455,7 +1457,12 @@ mod tests {
     fn test_relative_luminance_black() {
         // Black should have zero luminance
         let lum = relative_luminance(0, 0, 0);
-        assert_eq!(lum, 0.0);
+        // Why: black (0,0,0) maps to exactly 0.0 by the relative_luminance
+        // formula (no floating-point rounding intermediates); exact equality
+        // is the correct assertion here. Test-only.
+        #[allow(clippy::float_cmp)]
+        let is_zero = lum == 0.0;
+        assert!(is_zero, "expected exact 0.0 for black; got {lum}");
     }
 
     #[test]
@@ -1756,7 +1763,7 @@ mod tests {
     fn test_real_prompt_reader_is_unit_struct() {
         // RealPromptReader is the production seam target; ensure we can
         // instantiate it without arguments.  Trivial but pins the type shape.
-        let _r = RealPromptReader;
+        let _ = RealPromptReader;
     }
 
     #[test]

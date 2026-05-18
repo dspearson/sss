@@ -607,7 +607,7 @@ mod tests {
 
     // --- CORR-10: Config loading precedence tests ---
 
-    /// Build a ConfigManager backed by a fresh temp dir (no real user config)
+    /// Build a `ConfigManager` backed by a fresh temp dir (no real user config)
     fn make_config_manager_with_user_editor(editor: Option<&str>) -> (ConfigManager, TempDir) {
         let temp_dir = TempDir::new().unwrap();
         let config_dir = temp_dir.path().to_path_buf();

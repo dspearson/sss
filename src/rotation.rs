@@ -512,7 +512,7 @@ mod tests {
         }
     }
 
-    /// Test: rotating a RepositoryKey produces a genuinely different new key.
+    /// Test: rotating a `RepositoryKey` produces a genuinely different new key.
     #[test]
     fn test_rotation_produces_different_key() {
         let old_key = RepositoryKey::new();
@@ -525,7 +525,7 @@ mod tests {
         assert_ne!(new_key.to_base64(), old_key.to_base64(), "rotated key must differ from original");
     }
 
-    /// Test: re-encrypting with reencrypt_content produces content that opens
+    /// Test: re-encrypting with `reencrypt_content` produces content that opens
     /// to the same plaintext under the new key.
     #[test]
     fn test_rotation_reencrypt_content_roundtrip() {

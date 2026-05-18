@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Comprehensive command error handling tests
 //!
 //! This test suite covers error scenarios in command execution:
@@ -140,7 +144,7 @@ fn test_parse_ignore_patterns_with_only_negation() -> Result<()> {
 #[test]
 fn test_parse_ignore_patterns_with_empty_string() -> Result<()> {
     let config = ProjectConfig {
-        ignore: Some("".to_string()),
+        ignore: Some(String::new()),
         ..Default::default()
     };
     let result = config.parse_ignore_patterns()?;
@@ -238,7 +242,7 @@ fn test_concurrent_config_save_load() -> Result<()> {
 
     // Concurrently save config from main thread
     for i in 0..10 {
-        config.ignore = Some(format!("*.log *.tmp{}", i));
+        config.ignore = Some(format!("*.log *.tmp{i}"));
         config.save_to_file(&*config_path)?;
         thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -365,7 +369,7 @@ fn test_config_version_handling() -> Result<()> {
     for version in versions {
         fs::write(
             &config_path,
-            format!(r#"version = "{}"\ncreated = "2025-01-01T00:00:00Z""#, version),
+            format!(r#"version = "{version}"\ncreated = "2025-01-01T00:00:00Z""#),
         )?;
 
         let result = ProjectConfig::load_from_file(&config_path);

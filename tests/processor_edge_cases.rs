@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Comprehensive edge case tests for pattern detection
 //!
 //! This test suite covers edge cases in SSS pattern detection:
@@ -162,7 +166,7 @@ fn test_detect_very_long_lines() -> Result<()> {
     let long_line = "x".repeat(10000);
     fs::write(
         root.join("long.txt"),
-        format!("{}password=⊕{{secret}}{}", long_line, long_line),
+        format!("{long_line}password=⊕{{secret}}{long_line}"),
     )?;
 
     let scanner = FileScanner::new();
@@ -181,7 +185,8 @@ fn test_detect_many_patterns() -> Result<()> {
     // 100 patterns
     let mut content = String::new();
     for i in 0..100 {
-        content.push_str(&format!("secret{}=⊕{{value{}}}\n", i, i));
+        use std::fmt::Write as _;
+        writeln!(content, "secret{i}=⊕{{value{i}}}").unwrap();
     }
 
     fs::write(root.join("many.txt"), content)?;
@@ -344,7 +349,8 @@ fn test_performance_with_large_file() -> Result<()> {
     // Large file with 1000 patterns
     let mut content = String::new();
     for i in 0..1000 {
-        content.push_str(&format!("secret{}=⊕{{value{}}}\n", i, i));
+        use std::fmt::Write as _;
+        writeln!(content, "secret{i}=⊕{{value{i}}}").unwrap();
     }
 
     fs::write(root.join("large.txt"), content)?;
@@ -355,7 +361,7 @@ fn test_performance_with_large_file() -> Result<()> {
     let duration = start.elapsed();
 
     assert_eq!(results.len(), 1);
-    assert!(duration.as_secs() < 5, "Took too long: {:?}", duration);
+    assert!(duration.as_secs() < 5, "Took too long: {duration:?}");
 
     Ok(())
 }

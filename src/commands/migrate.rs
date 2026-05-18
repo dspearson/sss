@@ -1,4 +1,11 @@
+// Why: every .unwrap() in this file is on a HashMap::get(k) where k was just
+// sourced from .keys() in the surrounding loop, or on an Option<T> where the
+// preceding validation pass guaranteed Some(_). All sites carry per-site
+// INVARIANT comments. HARDEN-01 / 08-01.
+#![allow(clippy::unwrap_used)]
+
 use anyhow::{anyhow, Result};
+use base64::Engine as _;
 use clap::ArgMatches;
 
 #[cfg(feature = "hybrid")]
@@ -13,8 +20,8 @@ use crate::{
 
 /// Core migration: re-seals K for every user under the hybrid suite.
 ///
-/// Returns the list of (username, new_sealed_key_b64) computed, or an error.
-/// When dry_run=false, also mutates config in memory (version + sealed_keys).
+/// Returns the list of (username, `new_sealed_key_b64`) computed, or an error.
+/// When `dry_run=false`, also mutates config in memory (version + `sealed_keys`).
 /// Does NOT touch disk — caller decides whether to save.
 ///
 /// MIGRATE-02 invariant: only .sss.toml changes. In-file AEAD ciphertexts
@@ -25,7 +32,6 @@ pub fn migrate_project_config(
     repository_key: &crate::crypto::RepositoryKey,
     dry_run: bool,
 ) -> Result<Vec<(String, String)>> {
-    use base64::Engine as _;
     use crate::crypto::{HybridCryptoSuite, HybridPublicKey, PublicKey};
 
     // 1. Early validation: all users must have hybrid_public set
@@ -84,7 +90,7 @@ pub fn migrate_project_config(
         // INVARIANT: every username in new_sealed originates from
         // config.users.keys() (see the loop at line ~55), so
         // config.users.get_mut(username) is always Some. HARDEN-01 / 08-01.
-        config.users.get_mut(username).unwrap().sealed_key = sealed.clone();
+        config.users.get_mut(username).unwrap().sealed_key.clone_from(sealed);
     }
     config.version = "2.0".to_string();
 
@@ -162,7 +168,6 @@ pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
         // sign with both legs, write atomically. The caller's sig keypair is
         // loaded from the keystore under the username resolved above.
         let (ed_sk, pq_sk) = keystore.load_sig_keypair(&caller, password_str.as_deref())?;
-        use base64::Engine as _;
         if let Some(u) = config.users.get_mut(&caller) {
             if u.sig_ed448_public.is_none() {
                 u.sig_ed448_public = Some(
@@ -199,7 +204,6 @@ mod tests {
                  RepositoryKey},
         project::{ProjectConfig, UserConfig},
     };
-    use base64::Engine as _;
 
     // Helper: build a minimal ProjectConfig with hybrid_public set for all users.
     // Accepts the RepositoryKey so tests can pass the SAME K to migrate_project_config
@@ -432,7 +436,7 @@ mod tests {
     // `use super::*` which brings them in scope without widening any public API.
     // -------------------------------------------------------------------------
 
-    /// Deep-copy a ProjectConfig via TOML round-trip. ProjectConfig does not
+    /// Deep-copy a `ProjectConfig` via TOML round-trip. `ProjectConfig` does not
     /// derive Clone (it has no need to outside of tests), so we serialise and
     /// deserialise to get an independent copy. Panics on serialisation failure.
     fn clone_project_config(cfg: &ProjectConfig) -> ProjectConfig {
@@ -442,8 +446,8 @@ mod tests {
             .expect("parse ProjectConfig clone")
     }
 
-    /// Strategy: a v1 ProjectConfig with N (1..=4) users. Each user has a fresh
-    /// classic public key and a fresh hybrid public key, so migrate_project_config
+    /// Strategy: a v1 `ProjectConfig` with N (1..=4) users. Each user has a fresh
+    /// classic public key and a fresh hybrid public key, so `migrate_project_config`
     /// has all the material it needs to seal new hybrid entries.
     ///
     /// Placed outside the proptest! blocks so the Strategy trait import is
@@ -561,7 +565,7 @@ mod tests {
         #[test]
         fn prop_migrate_dry_run_deterministic(cfg in v1_project_config_strategy()) {
             let repo_key = RepositoryKey::new();
-            let original_version = cfg.version.to_string();
+            let original_version = cfg.version.clone();
             let original_user_count = cfg.users.len();
             let mut cfg_mut = clone_project_config(&cfg);
 

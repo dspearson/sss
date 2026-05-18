@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::env;
 use std::path::Path;
 use tempfile::TempDir;
@@ -119,7 +123,7 @@ fn test_multiple_secrets_in_content() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
 
-    let input = r#"
+    let input = r"
 database:
   host: localhost
   user: ⊕{dbuser}
@@ -128,7 +132,7 @@ database:
 api:
   key: o+{apikey456}
   secret: ⊕{apisecret789}
-"#;
+";
 
     // Seal all secrets
     let sealed = processor.encrypt_content(input).expect("Failed to seal");
@@ -227,7 +231,7 @@ fn test_special_characters_in_secrets() {
     let (_temp_dir, _username, repository_key) = setup_test_project();
     let processor = Processor::new(repository_key).expect("Failed to create processor");
 
-    let input = r#"password=⊕{p@$$w0rd!#%&*()}"#;
+    let input = r"password=⊕{p@$$w0rd!#%&*()}";
 
     let sealed = processor.encrypt_content(input).expect("Failed to seal");
     let opened = processor.decrypt_content(&sealed).expect("Failed to open");
@@ -319,13 +323,13 @@ fn test_large_secret() {
     // MAX_MARKER_CONTENT_SIZE is now 100MB, so 1MB is well within limits
     // This tests that large secrets are handled correctly
     let large_secret = "A".repeat(1024 * 1024);
-    let input = format!("data=⊕{{{}}}", large_secret);
+    let input = format!("data=⊕{{{large_secret}}}");
 
     let sealed = processor.process_content(&input).expect("Failed to seal");
     let opened = processor.decrypt_content(&sealed).expect("Failed to open");
     let rendered = processor.decrypt_to_raw(&opened).expect("Failed to render");
 
-    assert_eq!(rendered, format!("data={}", large_secret));
+    assert_eq!(rendered, format!("data={large_secret}"));
 }
 
 #[test]
@@ -376,7 +380,7 @@ fn test_seal_and_open_are_independent() {
         .expect("Failed to seal");
 
     // Create mixed content (this would be the result of partial encryption)
-    let mixed = format!("{}\nmore=⊕{{secret2}}", sealed_part);
+    let mixed = format!("{sealed_part}\nmore=⊕{{secret2}}");
 
     // Seal should only encrypt the plaintext marker
     let sealed_mixed = processor

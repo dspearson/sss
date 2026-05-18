@@ -40,9 +40,9 @@ impl MarkerFormat {
     }
 
     /// Length of the escaped form in bytes.
-    /// Paired companion to MarkerFormat::escaped — byte-budget helper for
+    /// Paired companion to `MarkerFormat::escaped` — byte-budget helper for
     /// inference passes that compute output buffer size before running the
-    /// escape. External invariant: escaped_len(f) >= escaped(f).len().
+    /// escape. External invariant: `escaped_len(f)` >= `escaped(f).len()`.
     // Why: currently exercised only via downstream property tests, so the lib-only compilation flags it as dead code.
     #[allow(dead_code)]
     pub fn escaped_len(self) -> usize {
@@ -181,8 +181,9 @@ pub fn find_unescaped_close(text: &str, close: char) -> Option<usize> {
             pos += 2;
             continue;
         }
-        // INVARIANT: loop guard `pos < text.len()` guarantees text[pos..] is
-        // non-empty, so chars().next() always yields Some. HARDEN-01 / 08-01.
+        // Why: loop guard `pos < text.len()` guarantees text[pos..] is non-empty,
+        // so chars().next() always yields Some. HARDEN-01 / 08-01.
+        #[allow(clippy::unwrap_used)]
         let ch = text[pos..].chars().next().unwrap();
         if ch == close {
             return Some(pos);
@@ -211,8 +212,9 @@ pub fn contains_nested_markers(content: &str) -> bool {
             return true;
         }
         // Advance one char
-        // INVARIANT: loop guard `byte_pos < bytes.len()` guarantees rest is
-        // non-empty, so chars().next() always yields Some. HARDEN-01 / 08-01.
+        // Why: loop guard `byte_pos < bytes.len()` guarantees rest is non-empty,
+        // so chars().next() always yields Some. HARDEN-01 / 08-01.
+        #[allow(clippy::unwrap_used)]
         let ch = rest.chars().next().unwrap();
         byte_pos += ch.len_utf8();
     }

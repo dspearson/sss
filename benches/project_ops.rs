@@ -1,3 +1,8 @@
+// Why: benchmark code uses .unwrap()/.expect()/panic! freely; bench setup is
+// exempt from the panic-surface lint policy (criterion measures benchmarks
+// that aren't on the production caller path).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Performance benchmarks for project-wide seal/open operations on 1000+ files.
 //!
 //! This benchmark exercises the per-file processing path that is the hot path
@@ -131,7 +136,7 @@ fn bench_classic_keygen(c: &mut Criterion) {
     group.sample_size(20);
 
     group.bench_function("classic_keygen", |b| {
-        b.iter(|| ClassicKeyPair::generate().expect("classic keygen failed"))
+        b.iter(|| ClassicKeyPair::generate().expect("classic keygen failed"));
     });
 
     group.finish();
@@ -155,7 +160,7 @@ fn bench_classic_wrap_unwrap(c: &mut Criterion) {
             classic
                 .seal_repo_key(&repo_key, &public)
                 .expect("classic seal failed")
-        })
+        });
     });
 
     group.bench_function("classic_unwrap", |b| {
@@ -163,7 +168,7 @@ fn bench_classic_wrap_unwrap(c: &mut Criterion) {
             classic
                 .open_repo_key(&sealed, &keypair)
                 .expect("classic open failed")
-        })
+        });
     });
 
     group.finish();
@@ -179,7 +184,7 @@ fn bench_hybrid_keygen(c: &mut Criterion) {
     group.sample_size(10); // Hybrid keygen is slower; fewer samples
 
     group.bench_function("hybrid_keygen", |b| {
-        b.iter(|| HybridKeyPair::generate().expect("hybrid keygen failed"))
+        b.iter(|| HybridKeyPair::generate().expect("hybrid keygen failed"));
     });
 
     group.finish();
@@ -204,7 +209,7 @@ fn bench_hybrid_wrap_unwrap(c: &mut Criterion) {
             suite
                 .seal_repo_key(&repo_key, &public)
                 .expect("hybrid seal failed")
-        })
+        });
     });
 
     group.bench_function("hybrid_unwrap", |b| {
@@ -212,7 +217,7 @@ fn bench_hybrid_wrap_unwrap(c: &mut Criterion) {
             suite
                 .open_repo_key(&sealed, &keypair)
                 .expect("hybrid open failed")
-        })
+        });
     });
 
     group.finish();
@@ -237,8 +242,7 @@ fn bench_sealed_key_size_delta(c: &mut Criterion) {
     let classic_b64_chars = classic_sealed_b64.len();
 
     eprintln!(
-        "\n[size delta] classic sealed key: {} bytes raw, {} chars base64",
-        classic_raw, classic_b64_chars
+        "\n[size delta] classic sealed key: {classic_raw} bytes raw, {classic_b64_chars} chars base64"
     );
 
     #[cfg(feature = "hybrid")]
@@ -253,8 +257,7 @@ fn bench_sealed_key_size_delta(c: &mut Criterion) {
         let hybrid_b64_chars = hybrid_sealed_b64.len();
 
         eprintln!(
-            "[size delta]  hybrid sealed key: {} bytes raw, {} chars base64",
-            hybrid_raw, hybrid_b64_chars
+            "[size delta]  hybrid sealed key: {hybrid_raw} bytes raw, {hybrid_b64_chars} chars base64"
         );
         eprintln!(
             "[size delta]  delta per user .sss.toml entry: +{} bytes raw, +{} chars base64",
@@ -267,7 +270,7 @@ fn bench_sealed_key_size_delta(c: &mut Criterion) {
     let mut group = c.benchmark_group("sealed_key_size");
     group.sample_size(10);
     group.bench_function("size_delta_report", |b| {
-        b.iter(|| classic_raw + classic_b64_chars)
+        b.iter(|| classic_raw + classic_b64_chars);
     });
     group.finish();
 }

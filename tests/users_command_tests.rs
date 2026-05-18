@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Phase 16b — USERS-NN integration tests for `src/commands/users.rs`.
 //!
 //! Tier 2 placement per phase 16b D-18 (sibling integration tests). These
@@ -42,11 +46,11 @@ impl Drop for CwdGuard {
     }
 }
 
-/// Build a TempDir with a seeded `.sss.toml` containing a single classic user.
-/// Returns the TempDir (which owns the temp directory's lifetime) and the
-/// generated KeyPair (kept so callers can use the public key in tests).
+/// Build a `TempDir` with a seeded `.sss.toml` containing a single classic user.
+/// Returns the `TempDir` (which owns the temp directory's lifetime) and the
+/// generated `KeyPair` (kept so callers can use the public key in tests).
 ///
-/// Produces a format_version=1 (unsigned) envelope.  Use `setup_signed_project`
+/// Produces a `format_version=1` (unsigned) envelope.  Use `setup_signed_project`
 /// instead for tests that exercise mutating handlers gated by PQSIG-06
 /// `require_signed` — `users add`, `users remove`, …
 ///
@@ -61,13 +65,13 @@ fn setup_users_project(seed_user: &str) -> (TempDir, KeyPair) {
     (tmp, kp)
 }
 
-/// Build a TempDir with a seeded `.sss.toml` promoted to format_version=2
+/// Build a `TempDir` with a seeded `.sss.toml` promoted to `format_version=2`
 /// using an ephemeral Ed448 + ML-DSA-65 sig keypair pair, mirroring the
 /// production `sss envelope upgrade-sig` flow entirely in memory.
 ///
 /// Required for tests that exercise the mutating handlers gated by PQSIG-06
 /// `require_signed` — those handlers refuse v1 envelopes with the D-10
-/// "unsigned envelope (format_version=1)" error before reaching the
+/// "unsigned envelope (`format_version=1`)" error before reaching the
 /// behaviour-under-test (e.g. last-user / unknown-user guards).
 ///
 /// Hybrid-only: the v2 envelope cannot exist without the AND-composition
@@ -117,7 +121,7 @@ fn build_main_matches() -> ArgMatches {
         .get_matches_from(["sss"])
 }
 
-/// Build a `sss users <subcommand>` ArgMatches mirroring the real clap tree
+/// Build a `sss users <subcommand>` `ArgMatches` mirroring the real clap tree
 /// from `src/main.rs`. Includes only the subcommands the tests below exercise.
 fn build_users_matches(args: &[&str]) -> ArgMatches {
     let app = Command::new("users")
@@ -152,7 +156,7 @@ fn with_cwd<F: FnOnce() -> Result<()>>(path: &Path, f: F) -> Result<()> {
 // users_NN — sibling integration tests
 // ----------------------------------------------------------------------------
 
-/// users_01 — `users list` against a seeded project routes through the
+/// `users_01` — `users list` against a seeded project routes through the
 /// dispatcher and returns Ok.
 #[test]
 #[serial]
@@ -166,7 +170,7 @@ fn users_01_list_seeded_project_returns_ok() -> Result<()> {
     })
 }
 
-/// users_02 — `users info <known-user>` succeeds for a seeded user.
+/// `users_02` — `users info <known-user>` succeeds for a seeded user.
 #[test]
 #[serial]
 fn users_02_info_known_user_returns_ok() -> Result<()> {
@@ -179,7 +183,7 @@ fn users_02_info_known_user_returns_ok() -> Result<()> {
     })
 }
 
-/// users_03 — `users info <unknown-user>` returns an Err whose message names
+/// `users_03` — `users info <unknown-user>` returns an Err whose message names
 /// the missing user.  Error-message regression test.
 #[test]
 #[serial]
@@ -199,8 +203,8 @@ fn users_03_info_unknown_user_errors_with_not_found() -> Result<()> {
     })
 }
 
-/// users_04 — `users add <user> <bad-base64>` errors before touching disk.
-/// Drives the base64 validation branch in handle_users_add.
+/// `users_04` — `users add <user> <bad-base64>` errors before touching disk.
+/// Drives the base64 validation branch in `handle_users_add`.
 #[test]
 #[serial]
 fn users_04_add_invalid_base64_errors() -> Result<()> {
@@ -220,8 +224,8 @@ fn users_04_add_invalid_base64_errors() -> Result<()> {
     })
 }
 
-/// users_05 — `users remove <unknown-user>` errors with "not found".  Drives
-/// the membership-check branch in handle_users_remove.
+/// `users_05` — `users remove <unknown-user>` errors with "not found".  Drives
+/// the membership-check branch in `handle_users_remove`.
 ///
 /// Hybrid-only: PQSIG-06 `require_signed` (unconditional in production) fires
 /// before the membership check on a v1 envelope, masking the "not found"
@@ -245,10 +249,10 @@ fn users_05_remove_unknown_user_errors() -> Result<()> {
     })
 }
 
-/// users_06 — `users remove <last-user>` errors with the last-user guard.
-/// Drives the `users.len() == 1` branch in handle_users_remove.
+/// `users_06` — `users remove <last-user>` errors with the last-user guard.
+/// Drives the `users.len() == 1` branch in `handle_users_remove`.
 ///
-/// Hybrid-only for the same reason as users_05.
+/// Hybrid-only for the same reason as `users_05`.
 #[test]
 #[serial]
 #[cfg(feature = "hybrid")]
@@ -268,7 +272,7 @@ fn users_06_remove_last_user_errors() -> Result<()> {
     })
 }
 
-/// users_07 — Bare `sss users` (no subcommand) returns the dispatcher's
+/// `users_07` — Bare `sss users` (no subcommand) returns the dispatcher's
 /// guidance error listing every available subcommand. Error-message
 /// regression: must mention `add-hybrid-key` so the v2 hybrid path remains
 /// discoverable.
@@ -298,7 +302,7 @@ fn users_07_no_subcommand_errors_with_guidance() -> Result<()> {
     Ok(())
 }
 
-/// users_08 — `users add-hybrid-key` with a wrong-length key errors with
+/// `users_08` — `users add-hybrid-key` with a wrong-length key errors with
 /// "1214" (the canonical hybrid pub-key byte count). Hybrid-only.
 #[test]
 #[serial]
@@ -327,7 +331,7 @@ fn users_08_add_hybrid_key_wrong_length_errors() -> Result<()> {
     })
 }
 
-/// users_09 — `users add-hybrid-key` with a correct 1214-byte key persists
+/// `users_09` — `users add-hybrid-key` with a correct 1214-byte key persists
 /// `hybrid_public` in the user's record. Hybrid-only.
 #[test]
 #[serial]
@@ -359,7 +363,7 @@ fn users_09_add_hybrid_key_correct_length_persists_pubkey() -> Result<()> {
     })
 }
 
-/// users_10 — `users add-hybrid-key <unknown-user> <valid-key>` errors with
+/// `users_10` — `users add-hybrid-key <unknown-user> <valid-key>` errors with
 /// "not found". Drives the user-lookup branch inside the hybrid arm.
 #[test]
 #[serial]

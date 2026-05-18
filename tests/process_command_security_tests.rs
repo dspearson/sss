@@ -1,3 +1,16 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: this test file exercises env::set_var (unsafe since Rust 1.83) to set
+// EDITOR and HOME variables before invoking the editor module. All unsafe blocks
+// share the same SAFETY invariant: single-threaded test process, no concurrent
+// readers of these env vars between the set_var call and the test assertion.
+// File-top blanket allow is the audit-discoverable opt-out per Option B convention.
+#![allow(clippy::undocumented_unsafe_blocks)]
+// Why: tests/crypto_security_tests.rs style — verbose bit mask check is more
+// readable as an idiomatic Unix mode test than .trailing_zeros() rewrite.
+#![allow(clippy::verbose_bit_mask)]
+
 //! Process and command execution security tests
 //!
 //! This test module validates security-critical command execution
@@ -187,7 +200,7 @@ fn test_file_paths_with_special_characters() -> anyhow::Result<()> {
         std::fs::write(&file_path, "test content")?;
 
         // Verify file exists
-        assert!(file_path.exists(), "File should exist: {:?}", name);
+        assert!(file_path.exists(), "File should exist: {name:?}");
 
         // File paths with special chars should be handleable
         // without shell injection
@@ -425,7 +438,7 @@ fn test_git_config_directory_safety() -> anyhow::Result<()> {
 // Argument Parsing Security Tests
 // ============================================================================
 
-/// Test: Long argument handling (DoS prevention)
+/// Test: Long argument handling (`DoS` prevention)
 ///
 /// Verifies that:
 /// - Very long arguments don't cause buffer overflows
@@ -578,7 +591,7 @@ fn test_shell_metacharacter_neutralization() {
         // These should be treated as literal characters
         // when using Command::new() + .arg(), not as shell operators
         let mut cmd = Command::new("echo");
-        cmd.arg(format!("test{}arg", meta));
+        cmd.arg(format!("test{meta}arg"));
 
         let _ = cmd;
     }

@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Integration tests for ignore patterns with process commands
 //!
 //! Tests how ignore patterns interact with:
@@ -155,10 +159,10 @@ fn test_large_directory_scan_with_patterns() -> Result<()> {
 
     // Create 100 files
     for i in 0..50 {
-        fs::write(root.join(format!("file{}.txt", i)), "password=⊕{secret}")?;
+        fs::write(root.join(format!("file{i}.txt")), "password=⊕{secret}")?;
     }
     for i in 0..50 {
-        fs::write(root.join(format!("file{}.log", i)), "password=⊕{secret}")?;
+        fs::write(root.join(format!("file{i}.log")), "password=⊕{secret}")?;
     }
 
     // Ignore all .log files
@@ -187,13 +191,13 @@ fn test_pattern_matching_performance() -> Result<()> {
 
     // Create files
     for i in 0..10 {
-        fs::write(root.join(format!("file{}.txt", i)), "password=⊕{secret}")?;
+        fs::write(root.join(format!("file{i}.txt")), "password=⊕{secret}")?;
     }
 
     // Create config with many patterns
     let mut patterns = Vec::new();
     for i in 0..100 {
-        patterns.push(format!("*.ext{}", i));
+        patterns.push(format!("*.ext{i}"));
     }
     patterns.push("*.log".to_string());
 
@@ -355,7 +359,7 @@ fn test_deeply_nested_structures() -> Result<()> {
 
     // Create structure with directories at root level
     for i in 0..10 {
-        let dir_path = root.join(format!("level{}", i));
+        let dir_path = root.join(format!("level{i}"));
         fs::create_dir_all(&dir_path)?;
         fs::write(dir_path.join("secret.txt"), "password=⊕{secret}")?;
 

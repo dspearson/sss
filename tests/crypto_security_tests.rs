@@ -1,3 +1,11 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: timing-attack tests compute variance from u128 nanosecond durations cast
+// to f64. Precision loss is acceptable here — the test asserts variance < 50%
+// which doesn't require f64-mantissa-level precision. Test scope only.
+#![allow(clippy::cast_precision_loss)]
+
 //! Cryptographic security tests
 //!
 //! This test suite validates the security properties of the cryptographic implementation:
@@ -88,12 +96,12 @@ fn test_no_nonce_reuse_across_large_dataset() {
     let mut nonces = HashSet::new();
 
     for i in 0..1000 {
-        let plaintext = format!("secret_{}", i);
+        let plaintext = format!("secret_{i}");
         let encrypted = crypto::encrypt(plaintext.as_bytes(), &key, timestamp, "test.txt").unwrap();
         let nonce = encrypted[0..24].to_vec();
 
         // Each nonce should be unique
-        assert!(nonces.insert(nonce), "Nonce reuse detected at iteration {}", i);
+        assert!(nonces.insert(nonce), "Nonce reuse detected at iteration {i}");
     }
 
     // Verify we got 1000 unique nonces

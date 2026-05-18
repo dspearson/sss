@@ -1,10 +1,14 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Integration tests for file scanner
 //!
 //! These tests cover edge cases and security scenarios not covered by inline unit tests:
 //! - Symbolic links handling
 //! - Permission errors
 //! - Very deep directory structures
-//! - Large files (respecting MAX_FILE_SIZE limit)
+//! - Large files (respecting `MAX_FILE_SIZE` limit)
 //! - Concurrent scanning
 //! - Special file types (pipes, sockets, etc.)
 //! - Pattern detection edge cases
@@ -196,7 +200,7 @@ fn test_scanner_very_deep_directory_structure() -> Result<()> {
 
     // Create a very deep directory structure (100 levels)
     for i in 0..100 {
-        current_path = current_path.join(format!("level{}", i));
+        current_path = current_path.join(format!("level{i}"));
         fs::create_dir(&current_path)?;
     }
 
@@ -304,7 +308,7 @@ fn test_scanner_allowed_extensions() -> Result<()> {
 fn test_scanner_multiple_patterns_in_file() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
-    let content = r#"
+    let content = r"
 database:
   host: localhost
   user: admin
@@ -316,7 +320,7 @@ api:
 
 redis:
   password: o+{redis_secret}
-"#;
+";
 
     fs::write(temp_dir.path().join("config.yaml"), content)?;
 
@@ -388,11 +392,11 @@ fn test_scanner_mixed_content() -> Result<()> {
 
     // Create mix of files with and without patterns
     for i in 0..10 {
-        let filename = format!("file{}.txt", i);
+        let filename = format!("file{i}.txt");
         if i % 2 == 0 {
-            fs::write(temp_dir.path().join(&filename), format!("password=⊕{{secret{}}}", i))?;
+            fs::write(temp_dir.path().join(&filename), format!("password=⊕{{secret{i}}}"))?;
         } else {
-            fs::write(temp_dir.path().join(&filename), format!("normal content {}", i))?;
+            fs::write(temp_dir.path().join(&filename), format!("normal content {i}"))?;
         }
     }
 

@@ -1,16 +1,25 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// Why: crypto-idiomatic naming uses _sk/_vk/_pk suffixes; renaming would obscure
+// the AND-composition signature-verification negative-path fixtures.
+#![allow(clippy::similar_names)]
+
 //! Negative-path tests for keystore entry signature verification (Phase 18 / PQSIG-01..03).
 //!
 //! Each test:
 //! 1. Generates a v2 signed keystore entry in a tempdir-isolated keystore via
 //!    the production `Keystore::store_dual_keypair` Case-A path (sign-on-write).
 //! 2. Surgically mutates ONE field on disk (TOML string-replace, not regenerate).
-//! 3. Reloads via `Keystore::load_keypair` (allow_unsigned=false → v2 hard-verify).
+//! 3. Reloads via `Keystore::load_keypair` (`allow_unsigned=false` → v2 hard-verify).
 //! 4. Asserts `Err(_)` whose message contains the canonical D-20 substring
 //!    `signature verification failed`.
 //!
 //! Belt-and-braces feature gating (Phase 15 D-13 + D-11 precedent):
-//!   - source-level `#![cfg(feature = "hybrid")]` (this file) AND
-//!   - `Cargo.toml` `[[test]] required-features = ["hybrid"]`
+//!
+//! - source-level `#![cfg(feature = "hybrid")]` (this file) AND
+//! - `Cargo.toml` `[[test]] required-features = ["hybrid"]`
+//!
 //! → default `cargo test` cleanly skips this binary.
 //!
 //! NEG-02 vs NEG-03 are SEPARATE test functions to prove AND-composition
@@ -376,8 +385,8 @@ fn neg_07_mutated_uuid_fails_verify() -> Result<()> {
     // old path so load by new_uuid hits the mutated entry.
     let original = fs::read_to_string(&orig_path)?;
     let mutated = original.replacen(
-        &format!("uuid = \"{}\"", orig_uuid),
-        &format!("uuid = \"{}\"", new_uuid),
+        &format!("uuid = \"{orig_uuid}\""),
+        &format!("uuid = \"{new_uuid}\""),
         1,
     );
     assert_ne!(

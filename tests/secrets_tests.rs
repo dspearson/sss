@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Phase 16 Plan 04 — D-07.3 candidate-pool branch coverage for `src/secrets.rs`.
 //!
 //! Targets two reachable error arms in `SecretsCache::lookup_secret_with_ops` that
@@ -16,7 +20,7 @@ use sss::secrets::SecretsCache;
 /// SECRETS-01: src/secrets.rs:248 — encrypted secrets file but no repository key in cache.
 ///
 /// Trigger: write a `secrets` file whose content is wrapped in the `⊠{...}` encrypted
-/// marker, then look up against a default `SecretsCache::new()` (no repository_key).
+/// marker, then look up against a default `SecretsCache::new()` (no `repository_key`).
 /// The encrypted-prefix branch at line 244 fires; `self.repository_key.is_none()`, so
 /// the `else` arm at line 248 returns `anyhow!("Secrets file is encrypted but no
 /// repository key provided")`.

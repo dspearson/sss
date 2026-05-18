@@ -1,4 +1,7 @@
-#![allow(clippy::missing_errors_doc, clippy::unnecessary_wraps)]
+// Why: every .unwrap() in this file is on a clap-required arg (required(true) +
+// in some cases value_parser-restricted) so the get_one call always yields
+// Some(_). All sites carry per-site INVARIANT comments. HARDEN-01 / 08-01.
+#![allow(clippy::unwrap_used)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;

@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Sibling integration tests for `src/commands/process.rs` handlers.
 //!
 //! Phase 16b-03 / TEST-11 — direct in-process exercise of the verb-level
@@ -61,7 +65,7 @@ impl EnvGuard {
     fn unset(key: &'static str) -> Self {
         let prev = env::var(key).ok();
         unsafe { env::remove_var(key); }
-        Self { key, prev: prev }
+        Self { key, prev }
     }
 }
 
@@ -178,7 +182,7 @@ impl ProjectFixture {
 // process_NN_<scenario> tests
 // ---------------------------------------------------------------------------
 
-/// 01: handle_process with no file argument surfaces the documented
+/// 01: `handle_process` with no file argument surfaces the documented
 /// "No file specified" guidance for the user.
 #[test]
 #[serial]
@@ -215,7 +219,7 @@ fn process_03_handle_process_stdin_edit_rejected() {
     );
 }
 
-/// 04: handle_edit with file = "-" surfaces the dedicated stdin-edit error
+/// 04: `handle_edit` with file = "-" surfaces the dedicated stdin-edit error
 /// before any filesystem access.
 #[test]
 #[serial]
@@ -229,7 +233,7 @@ fn process_04_handle_edit_stdin_rejected() {
     );
 }
 
-/// 05: handle_edit on a nonexistent file produces a "does not exist"
+/// 05: `handle_edit` on a nonexistent file produces a "does not exist"
 /// hint without panicking. Uses an absolute path so cwd is irrelevant.
 #[test]
 #[serial]
@@ -247,7 +251,7 @@ fn process_05_handle_edit_nonexistent_file_errors() -> Result<()> {
     Ok(())
 }
 
-/// 06: handle_seal called outside any sss project surfaces the
+/// 06: `handle_seal` called outside any sss project surfaces the
 /// "No project configuration found" error from the config loader.
 /// Confirms that `process_file_or_stdin` propagates the loader error
 /// faithfully (covers the early-return arm).
@@ -270,7 +274,7 @@ fn process_06_handle_seal_outside_project_errors() -> Result<()> {
     Ok(())
 }
 
-/// 07: handle_render --project surfaces the disabled-by-default permission
+/// 07: `handle_render` --project surfaces the disabled-by-default permission
 /// gate when `sss project enable render` has never been run. Exercises the
 /// `process_project_recursively("render")` permission arm.
 #[test]
@@ -292,7 +296,7 @@ fn process_07_handle_render_project_flag_blocked_by_default() -> Result<()> {
     Ok(())
 }
 
-/// 08: handle_open --project equally requires `sss project enable open`.
+/// 08: `handle_open` --project equally requires `sss project enable open`.
 #[test]
 #[serial]
 fn process_08_handle_open_project_flag_blocked_by_default() -> Result<()> {
@@ -311,8 +315,8 @@ fn process_08_handle_open_project_flag_blocked_by_default() -> Result<()> {
     Ok(())
 }
 
-/// 09: handle_seal --project is unconditionally allowed (no permission gate
-/// required, per process_project_recursively's arm match). With an empty
+/// 09: `handle_seal` --project is unconditionally allowed (no permission gate
+/// required, per `process_project_recursively`'s arm match). With an empty
 /// project tree this completes successfully — exercising the recursive
 /// walker's no-op path.
 #[test]
@@ -327,7 +331,7 @@ fn process_09_handle_seal_project_flag_walks_empty_tree() -> Result<()> {
     Ok(())
 }
 
-/// 10: handle_seal on a real file with plaintext markers, in-place, in a
+/// 10: `handle_seal` on a real file with plaintext markers, in-place, in a
 /// configured project — exercises the success branch of `process_file_or_stdin`
 /// for `--in-place`. Uses the cwd-confined fixture; the absolute path keeps
 /// `validate_file_path` deterministic.
@@ -357,8 +361,8 @@ fn process_10_handle_seal_in_place_seals_plaintext_markers() -> Result<()> {
     Ok(())
 }
 
-/// 11: handle_open round-trips the previously sealed file back to plaintext
-/// markers (to-stdout default). Verifies that handle_open + the project
+/// 11: `handle_open` round-trips the previously sealed file back to plaintext
+/// markers (to-stdout default). Verifies that `handle_open` + the project
 /// keystore plumbing is exercised end-to-end.
 #[test]
 #[serial]
@@ -393,7 +397,7 @@ fn process_11_handle_open_in_place_decrypts_to_plaintext_markers() -> Result<()>
     Ok(())
 }
 
-/// 12: handle_render in-place strips markers from a sealed file, leaving
+/// 12: `handle_render` in-place strips markers from a sealed file, leaving
 /// only the raw secret value behind. Covers the render arm of
 /// `process_file_or_stdin`.
 #[test]
@@ -422,7 +426,7 @@ fn process_12_handle_render_in_place_strips_markers() -> Result<()> {
     Ok(())
 }
 
-/// 13: handle_edit on a sealed file with `EDITOR=/bin/true` exits cleanly and
+/// 13: `handle_edit` on a sealed file with `EDITOR=/bin/true` exits cleanly and
 /// re-seals the unchanged plaintext. The ciphertext envelope rotates (fresh
 /// AEAD nonce on every seal) but the round-tripped plaintext must be
 /// byte-identical to what we wrote in.

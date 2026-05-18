@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! KDF (Key Derivation Function) security tests
 //!
 //! This test suite validates the security of password-based key derivation:
@@ -152,7 +156,7 @@ fn test_kdf_with_unicode_password() {
 
     for password in passwords {
         let key = DerivedKey::derive_with_params(password, &salt, &params);
-        assert!(key.is_ok(), "KDF should handle Unicode password: {}", password);
+        assert!(key.is_ok(), "KDF should handle Unicode password: {password}");
         assert_eq!(key.unwrap().as_bytes().len(), 32);
     }
 }

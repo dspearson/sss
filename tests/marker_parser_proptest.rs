@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Property-based tests for the marker parser (TEST-06).
 //!
 //! Uses the `proptest` crate to generate adversarial inputs — arbitrary UTF-8
@@ -44,7 +48,7 @@ fn arb_brace_heavy() -> impl Strategy<Value = String> {
     .prop_map(|chars| chars.into_iter().collect())
 }
 
-/// Generate well-formed marker strings: prefix + `{` + content_without_unbalanced_braces + `}`.
+/// Generate well-formed marker strings: prefix + `{` + `content_without_unbalanced_braces` + `}`.
 /// Content is printable ASCII without `{` or `}`.
 fn arb_well_formed_marker() -> impl Strategy<Value = (String, String)> {
     let prefix_strategy = prop_oneof![

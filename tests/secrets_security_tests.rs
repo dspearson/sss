@@ -1,16 +1,20 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Security-critical integration tests for secrets handling functionality
 //!
 //! This test module provides comprehensive security testing for the secrets module,
 //! focusing on attack prevention and robustness. The secrets module handles sensitive
 //! data and must be hardened against:
 //! - Path traversal attacks
-//! - Denial of Service (DoS) attacks
+//! - Denial of Service (`DoS`) attacks
 //! - Malicious input injection
 //! - Resource exhaustion
 //!
 //! **Test Coverage:**
 //! - Path traversal prevention in file finding
-//! - DoS prevention (large files, circular references)
+//! - `DoS` prevention (large files, circular references)
 //! - Malicious secrets file content handling
 //! - Edge cases with invalid input
 //! - UTF-8 validation
@@ -67,7 +71,7 @@ fn test_path_traversal_prevention() -> Result<()> {
     Ok(())
 }
 
-/// Test: DoS prevention with extremely large secrets file
+/// Test: `DoS` prevention with extremely large secrets file
 ///
 /// Verifies that:
 /// - Large secrets files don't cause memory exhaustion
@@ -79,9 +83,10 @@ fn test_dos_prevention_large_file() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create a large secrets file (1MB of data)
+    use std::fmt::Write as _;
     let mut large_content = String::with_capacity(1_000_000);
-    for i in 0..10000 {
-        large_content.push_str(&format!("key_{}: value_{}\n", i, "x".repeat(90)));
+    for i in 0..10_000 {
+        writeln!(large_content, "key_{}: value_{}", i, "x".repeat(90)).unwrap();
     }
 
     let secrets_file = project_root.join("secrets");
@@ -103,7 +108,7 @@ fn test_dos_prevention_large_file() -> Result<()> {
     Ok(())
 }
 
-/// Test: DoS prevention with deeply nested multi-line secrets
+/// Test: `DoS` prevention with deeply nested multi-line secrets
 ///
 /// Verifies that:
 /// - Deeply nested values are parsed correctly
@@ -115,9 +120,10 @@ fn test_dos_prevention_deep_nesting() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create a secrets file with deeply nested multi-line content
+    use std::fmt::Write as _;
     let mut nested_content = String::from("deep_secret: |\n");
     for depth in 0..100 {
-        nested_content.push_str(&format!("  level_{}\n", depth));
+        writeln!(nested_content, "  level_{depth}").unwrap();
     }
 
     let secrets_file = project_root.join("secrets");
@@ -285,20 +291,17 @@ fn test_parse_malformed_content() {
         let result = parse_secrets_content(content, &path);
 
         // Some cases might succeed (empty values are valid), others should fail
-        match &result {
-            Ok(secrets) => {
-                // Verify it didn't crash and returned valid HashMap
-                assert!(secrets.is_empty() || !secrets.is_empty());
-            }
-            Err(_) => {
-                // Error is also acceptable for malformed content
-            }
+        if let Ok(secrets) = &result {
+            // Verify it didn't crash and returned valid HashMap
+            assert!(secrets.is_empty() || !secrets.is_empty());
+        } else {
+            // Error is also acceptable for malformed content
         }
-        println!("{}: {:?}", description, result);
+        println!("{description}: {result:?}");
     }
 }
 
-/// Test: Excessive interpolation markers (potential DoS)
+/// Test: Excessive interpolation markers (potential `DoS`)
 ///
 /// Verifies that:
 /// - Many interpolation markers are handled
@@ -310,16 +313,17 @@ fn test_excessive_interpolation_markers() -> Result<()> {
     let project_root = temp_dir.path();
 
     // Create secrets file
+    use std::fmt::Write as _;
     let mut secrets_content = String::new();
     for i in 0..1000 {
-        secrets_content.push_str(&format!("key_{}: value_{}\n", i, i));
+        writeln!(secrets_content, "key_{i}: value_{i}").unwrap();
     }
     fs::write(project_root.join("secrets"), &secrets_content)?;
 
     // Create content with many interpolation markers
     let mut content_with_markers = String::new();
     for i in 0..1000 {
-        content_with_markers.push_str(&format!("⊲{{key_{}}}\n", i));
+        writeln!(content_with_markers, "⊲{{key_{i}}}").unwrap();
     }
 
     let test_file = project_root.join("test.txt");
@@ -338,7 +342,7 @@ fn test_excessive_interpolation_markers() -> Result<()> {
 
     // Verify all markers were interpolated
     for i in 0..1000 {
-        assert!(result.contains(&format!("value_{}", i)));
+        assert!(result.contains(&format!("value_{i}")));
     }
 
     Ok(())
@@ -357,7 +361,7 @@ fn test_very_long_secret_values() -> Result<()> {
 
     // Create a secret with a very long value (10KB)
     let long_value = "x".repeat(10_000);
-    let secrets_content = format!("long_key: {}\n", long_value);
+    let secrets_content = format!("long_key: {long_value}\n");
 
     fs::write(project_root.join("secrets"), &secrets_content)?;
 
@@ -384,7 +388,7 @@ fn test_multiline_edge_cases() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
 
-    let multiline_content = r#"
+    let multiline_content = r"
 empty_multiline: |
 
 whitespace_only: |
@@ -394,7 +398,7 @@ normal_multiline: |
   line 1
   line 2
   line 3
-"#;
+";
 
     fs::write(project_root.join("secrets"), multiline_content)?;
 
@@ -409,7 +413,7 @@ normal_multiline: |
 
     // Whitespace-only should preserve it
     let whitespace_result = cache.lookup_secret("whitespace_only", &test_file, project_root)?;
-    assert!(whitespace_result.chars().all(|c| c.is_whitespace()));
+    assert!(whitespace_result.chars().all(char::is_whitespace));
 
     // Normal multiline should work
     let normal_result = cache.lookup_secret("normal_multiline", &test_file, project_root)?;

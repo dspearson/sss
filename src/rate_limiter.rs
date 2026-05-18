@@ -19,11 +19,12 @@ struct AttemptRecord {
     locked_until: Option<Instant>,
 }
 
-// INVARIANT: every `self.attempts.lock().unwrap()` in this impl block is sound
-// because the inner Mutex is never poisoned in this single-process scope. A
-// poisoned mutex would mean a previous holder panicked while holding the lock,
-// which is a fatal program bug — propagating it here would silently swallow
-// unrecoverable corruption. HARDEN-01 / 08-01.
+// Why: every `self.attempts.lock().unwrap()` in this impl block is sound because
+// the inner Mutex is never poisoned in this single-process scope. A poisoned mutex
+// would mean a previous holder panicked while holding the lock, which is a fatal
+// program bug — propagating it here would silently swallow unrecoverable
+// corruption. HARDEN-01 / 08-01.
+#[allow(clippy::unwrap_used)]
 impl RateLimiter {
     /// Create a new rate limiter
     #[must_use]

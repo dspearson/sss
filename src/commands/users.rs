@@ -1,4 +1,12 @@
-#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+// Why: clippy::unwrap_used is allowed file-wide because every .unwrap() in this
+// file is on a clap-required arg (clap framework declares required(true) and
+// returns Some on every match), or on a length-validated try_into (e.g. raw is
+// already checked to be exactly 32 bytes in the match arm). All sites carry
+// individual INVARIANT comments. HARDEN-01 / 08-01.
+// items_after_statements is allowed because the v2.x command dispatchers nest
+// helper fns inside main handler fns for readability; refactoring out would
+// require module restructuring outside the v2.3 scope.
+#![allow(clippy::unwrap_used, clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
@@ -68,6 +76,10 @@ fn handle_users_list() -> Result<()> {
     Ok(())
 }
 
+// Why: 107 lines is the natural shape of users-add — clap parsing + dual-suite
+// public-key length dispatch (32 vs 1214 bytes) + project-config mutation +
+// re-seal-for-existing-users. The linear flow maps directly to docs/USAGE.md.
+#[allow(clippy::too_many_lines)]
 fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     use base64::Engine as _;
 
@@ -393,7 +405,7 @@ fn handle_users_add_hybrid_key(sub_matches: &ArgMatches) -> Result<()> {
     let mut config = ProjectConfig::load_from_file(&config_path)?;
 
     let user = config.users.get_mut(username.as_str()).ok_or_else(|| {
-        anyhow!("User '{}' not found in project", username)
+        anyhow!("User '{username}' not found in project")
     })?;
     user.hybrid_public = Some(hybrid_b64.clone());
 
@@ -440,7 +452,7 @@ mod tests {
 
     // --- Plan 04-01: handle_users_add_hybrid_key unit tests ---
 
-    /// Build a minimal ArgMatches for the add-hybrid-key subcommand.
+    /// Build a minimal `ArgMatches` for the add-hybrid-key subcommand.
     #[cfg(feature = "hybrid")]
     fn make_add_hybrid_key_matches(username: &str, hybrid_b64: &str) -> ArgMatches {
         use clap::{Arg, Command};
@@ -496,7 +508,7 @@ mod tests {
         sign_fixture_envelope(&config_path, "alice");
 
         // Override cwd so get_project_config_path() finds the temp dir.
-        let _orig = std::env::current_dir().unwrap();
+        let orig_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(temp_dir.path()).unwrap();
 
         let valid_b64 = base64::prelude::BASE64_STANDARD.encode(vec![0x42u8; HYBRID_PUBLIC_KEY_SIZE]);
@@ -504,7 +516,7 @@ mod tests {
         let result = handle_users_add_hybrid_key(&matches);
 
         // Restore cwd regardless
-        std::env::set_current_dir(_orig).unwrap();
+        std::env::set_current_dir(orig_cwd).unwrap();
 
         result.expect("correct 1214-byte key must succeed");
 
@@ -551,9 +563,9 @@ mod tests {
     }
 
     /// Build a TempDir-rooted .sss.toml seeded with one classic user.
-    /// Returns (TempDir, KeyPair) — the TempDir must outlive the test body.
+    /// Returns (`TempDir`, `KeyPair`) — the `TempDir` must outlive the test body.
     ///
-    /// Under the `hybrid` feature the fixture is promoted to format_version=2
+    /// Under the `hybrid` feature the fixture is promoted to `format_version=2`
     /// (a valid signed envelope) so that PQSIG-06 `require_signed` checks pass
     /// in the mutating handlers.  Without the feature the file stays at v1,
     /// which is accepted by the non-hybrid handlers.
@@ -568,8 +580,8 @@ mod tests {
         (tmp, kp)
     }
 
-    /// Promote an existing format_version=1 `.sss.toml` to a signed
-    /// format_version=2 envelope using ephemeral sig keypairs.
+    /// Promote an existing `format_version=1` `.sss.toml` to a signed
+    /// `format_version=2` envelope using ephemeral sig keypairs.
     ///
     /// This is the test-only analogue of `sss envelope upgrade-sig`.
     /// It generates fresh Ed448 + ML-DSA-65 sig keypairs, stores the public

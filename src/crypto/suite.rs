@@ -53,8 +53,7 @@ impl Suite {
             "1.0" => Ok(Suite::Classic),
             "2.0" => Ok(Suite::Hybrid),
             other => Err(anyhow!(
-                "unknown .sss.toml version {:?}: expected \"1.0\" or \"2.0\"",
-                other
+                "unknown .sss.toml version {other:?}: expected \"1.0\" or \"2.0\""
             )),
         }
     }

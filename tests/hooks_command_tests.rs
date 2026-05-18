@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Phase 16b — HOOKS-NN integration tests for `src/commands/hooks.rs`.
 //!
 //! Tier 2 placement per phase 16b D-18 (sibling integration tests). These
@@ -41,7 +45,7 @@ impl Drop for CwdGuard {
 
 /// Set up a TempDir-rooted git worktree so `find_git_dir` succeeds.  Creates
 /// `.git/` as a directory plus a stub `.git/HEAD` so it looks like a real
-/// repository to find_git_dir's `is_dir()` branch.
+/// repository to `find_git_dir`'s `is_dir()` branch.
 fn setup_git_worktree(tmp: &TempDir) -> Result<()> {
     let git = tmp.path().join(".git");
     std::fs::create_dir(&git)?;
@@ -50,14 +54,14 @@ fn setup_git_worktree(tmp: &TempDir) -> Result<()> {
     Ok(())
 }
 
-/// Build a top-level ArgMatches that mirrors the bare `sss` invocation. The
+/// Build a top-level `ArgMatches` that mirrors the bare `sss` invocation. The
 /// hooks dispatcher only inspects the inner subcommand matches, so this can
 /// be empty.
 fn empty_main_matches() -> ArgMatches {
     Command::new("sss").get_matches_from(["sss"])
 }
 
-/// Build a `sss hooks <subcommand>` ArgMatches that mirrors the real clap
+/// Build a `sss hooks <subcommand>` `ArgMatches` that mirrors the real clap
 /// tree from `src/main.rs`.  The shape is intentionally identical (required
 /// args + flag bools) so the dispatcher routing logic is exercised faithfully.
 fn build_hooks_matches(args: &[&str]) -> ArgMatches {
@@ -94,7 +98,7 @@ fn with_cwd<F: FnOnce() -> Result<()>>(path: &Path, f: F) -> Result<()> {
 // hooks_NN — sibling integration tests
 // ----------------------------------------------------------------------------
 
-/// hooks_01 — install writes the canonical hook set into a TempDir-rooted
+/// `hooks_01` — install writes the canonical hook set into a TempDir-rooted
 /// git worktree's `.git/hooks/` directory.
 #[test]
 #[serial]
@@ -114,7 +118,7 @@ fn hooks_01_install_writes_hooks_to_git_dir() -> Result<()> {
     })
 }
 
-/// hooks_02 — install with `--multiplex` writes the `.d/` layout instead of
+/// `hooks_02` — install with `--multiplex` writes the `.d/` layout instead of
 /// flat hook files.  We assert both the wrapper and the `50-sss` script.
 #[test]
 #[serial]
@@ -137,7 +141,7 @@ fn hooks_02_install_multiplex_writes_dotd_layout() -> Result<()> {
     })
 }
 
-/// hooks_03 — list subcommand prints without error.  We don't capture stdout
+/// `hooks_03` — list subcommand prints without error.  We don't capture stdout
 /// here (the embedded hook contents are already covered by the in-source test
 /// for the `HOOKS` table); we only assert dispatcher routing returns `Ok`.
 #[test]
@@ -148,7 +152,7 @@ fn hooks_03_list_returns_ok() -> Result<()> {
     Ok(())
 }
 
-/// hooks_04 — `show <known-hook>` returns Ok.  Use a real hook name from the
+/// `hooks_04` — `show <known-hook>` returns Ok.  Use a real hook name from the
 /// embedded HOOKS list.
 #[test]
 fn hooks_04_show_known_hook_returns_ok() -> Result<()> {
@@ -158,7 +162,7 @@ fn hooks_04_show_known_hook_returns_ok() -> Result<()> {
     Ok(())
 }
 
-/// hooks_05 — `show <unknown-hook>` returns Err with a "not found" message.
+/// `hooks_05` — `show <unknown-hook>` returns Err with a "not found" message.
 /// Error-message regression: guards against silent renames of the error text.
 #[test]
 fn hooks_05_show_unknown_hook_errors_with_not_found() -> Result<()> {
@@ -174,7 +178,7 @@ fn hooks_05_show_unknown_hook_errors_with_not_found() -> Result<()> {
     Ok(())
 }
 
-/// hooks_06 — install errors when cwd is not inside a git repository.
+/// `hooks_06` — install errors when cwd is not inside a git repository.
 /// Drives `find_git_dir`'s ancestor-walk error branch.
 #[test]
 #[serial]
@@ -195,8 +199,8 @@ fn hooks_06_install_errors_outside_git_repo() -> Result<()> {
     })
 }
 
-/// hooks_07 — re-running `install` against an already-populated hooks dir
-/// skips colliding files (check_existing == true on the per-repo path).
+/// `hooks_07` — re-running `install` against an already-populated hooks dir
+/// skips colliding files (`check_existing` == true on the per-repo path).
 /// The pre-existing content must survive untouched.
 #[test]
 #[serial]
@@ -221,7 +225,7 @@ fn hooks_07_install_skips_existing_hooks_on_collision() -> Result<()> {
     })
 }
 
-/// hooks_08 — install auto-detects existing multiplex layout and respects it
+/// `hooks_08` — install auto-detects existing multiplex layout and respects it
 /// even without `--multiplex`.  This drives the `is_multiplexed` short-circuit
 /// inside `install_hooks_to_repo`.
 #[test]

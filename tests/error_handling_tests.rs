@@ -1,4 +1,8 @@
-//! Comprehensive error handling tests for SssError types
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+//! Comprehensive error handling tests for `SssError` types
 //!
 //! This test suite covers error type behavior:
 //! - Display formatting
@@ -112,7 +116,7 @@ fn test_io_error_conversion() {
 #[test]
 fn test_error_debug_output() {
     let error = SssError::Crypto("test".to_string());
-    let debug_str = format!("{:?}", error);
+    let debug_str = format!("{error:?}");
     assert!(debug_str.contains("Crypto"));
     assert!(debug_str.contains("test"));
 }
@@ -148,7 +152,7 @@ fn test_error_messages_with_unicode() {
 
 #[test]
 fn test_empty_error_messages() {
-    let error = SssError::Crypto("".to_string());
+    let error = SssError::Crypto(String::new());
     assert_eq!(error.to_string(), "Cryptographic error: ");
 }
 

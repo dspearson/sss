@@ -1128,10 +1128,13 @@ mod tests {
             let plaintext = "A".repeat(size);
             let encrypted = encrypt(plaintext.as_bytes(), &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
             let decrypted = decrypt(&encrypted, &key).unwrap();
-            assert_eq!(decrypted, plaintext.as_bytes(), "Failed at size {}", size);
+            assert_eq!(decrypted, plaintext.as_bytes(), "Failed at size {size}");
         }
 
         // Test with binary data
+        // Why: range 0..256 produces i32 values in [0, 255] which are by-construction
+        // safe to cast to u8 (no truncation, no sign loss). Test scope.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let binary_data = (0..256).map(|i| i as u8).collect::<Vec<u8>>();
         let encrypted = encrypt(&binary_data, &key, "2025-01-01T00:00:00Z", "./test.yml").unwrap();
         let decrypted = decrypt(&encrypted, &key).unwrap();
@@ -1207,13 +1210,11 @@ mod tests {
             // Critical: Base64 output must never contain { or }
             assert!(
                 !encrypted.contains('{'),
-                "Base64 output contains '{{': {}",
-                encrypted
+                "Base64 output contains '{{': {encrypted}"
             );
             assert!(
                 !encrypted.contains('}'),
-                "Base64 output contains '}}': {}",
-                encrypted
+                "Base64 output contains '}}': {encrypted}"
             );
 
             // Verify it still decrypts correctly
@@ -1231,8 +1232,7 @@ mod tests {
         for ch in encrypted.chars() {
             assert!(
                 ch.is_ascii_alphanumeric() || ch == '+' || ch == '/' || ch == '=',
-                "Base64 output contains unsafe character: '{}'",
-                ch
+                "Base64 output contains unsafe character: '{ch}'"
             );
         }
     }
@@ -1505,7 +1505,7 @@ mod classic_suite_tests {
         use crate::crypto::hybrid::HybridPublicKey;
         let repo_key = RepositoryKey::new();
         let hybrid_pk = PublicKey::Hybrid(
-            HybridPublicKey::from_bytes_unchecked(vec![0u8; HYBRID_PUBLIC_KEY_SIZE]),
+            HybridPublicKey::from_bytes_unchecked(&vec![0u8; HYBRID_PUBLIC_KEY_SIZE]),
         );
         let err = ClassicSuite.seal_repo_key(&repo_key, &hybrid_pk).unwrap_err();
         let msg = err.to_string();

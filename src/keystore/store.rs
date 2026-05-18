@@ -1,5 +1,9 @@
 // Why: KdfParams is kept by value for API clarity (audited Phase 21 Plan 21-02).
-#![allow(clippy::needless_pass_by_value)]
+// Why: crypto-idiomatic naming uses _sk/_pk suffixes (e.g. ed448_sk vs ed448_pk,
+// mldsa_sk vs mldsa_pk) — renaming to satisfy similar_names would obscure the
+// public-key vs secret-key distinction in dual-suite signature flows. The 4
+// production-side sites + 6 test-side sites collectively trigger this lint.
+#![allow(clippy::needless_pass_by_value, clippy::similar_names)]
 
 use anyhow::{anyhow, Result};
 use base64::Engine;
@@ -130,18 +134,18 @@ impl Keystore {
     fn create_with_directory(keys_dir: PathBuf, kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         // Ensure directory exists
         fs::create_dir_all(&keys_dir)
-            .map_err(|e| anyhow!("keystore: dir-create {:?}: {}", keys_dir, e))?;
+            .map_err(|e| anyhow!("keystore: dir-create {}: {e}", keys_dir.display()))?;
 
         // Set secure permissions on the directory
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&keys_dir)
-                .map_err(|e| anyhow!("keystore: stat keys-dir {:?}: {}", keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: stat keys-dir {}: {e}", keys_dir.display()))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o700); // Owner read/write/execute only
             fs::set_permissions(&keys_dir, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on keys-dir {:?}: {}", keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on keys-dir {}: {e}", keys_dir.display()))?;
         }
 
         // Validate keyring availability if requested
@@ -185,12 +189,12 @@ impl Keystore {
             // Encrypt secret key with password-derived key
             let salt = Salt::new();
             let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)
-                .map_err(|e| anyhow!("keystore: kdf-derive (store_keypair): {}", e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive (store_keypair): {e}"))?;
 
             let secret_key_str = keypair.secret_key()?.to_base64();
             let encrypted_secret_key =
                 crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
-                    .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_keypair): {}", e))?;
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_keypair): {e}"))?;
             (encrypted_secret_key, Some(salt.to_base64()), true)
         } else {
             // ⚠️  SECURITY WARNING: Storing secret key without password protection!
@@ -220,7 +224,7 @@ impl Keystore {
             // Store in system keyring instead of file
             let secret_key_b64 = keypair.secret_key()?.to_base64();
             keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)
-                .map_err(|e| anyhow!("keystore: keyring-store for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: keyring-store for key_id={key_id}: {e}"))?;
             eprintln!("✓ Private key stored in system keyring");
             // Store placeholder in file
             ("STORED_IN_KEYRING".to_string(), true)
@@ -253,20 +257,20 @@ impl Keystore {
         // Write keypair to file
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = toml::to_string_pretty(&stored_keypair)
-            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={key_id}: {e}"))?;
         fs::write(&key_file, content)
-            .map_err(|e| anyhow!("keystore: write key file {:?} for key_id={}: {}", key_file, key_id, e))?;
+            .map_err(|e| anyhow!("keystore: write key file {} for key_id={key_id}: {e}", key_file.display()))?;
 
         // Set secure permissions on the key file
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&key_file)
-                .map_err(|e| anyhow!("keystore: stat key file {:?} for key_id={}: {}", key_file, key_id, e))?;
+                .map_err(|e| anyhow!("keystore: stat key file {} for key_id={key_id}: {e}", key_file.display()))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600); // Owner read/write only
             fs::set_permissions(&key_file, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on key file {:?} for key_id={}: {}", key_file, key_id, e))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on key file {} for key_id={key_id}: {e}", key_file.display()))?;
         }
 
         // Update "current" symlink to point to this key
@@ -290,9 +294,9 @@ impl Keystore {
             // so no explicit remove or existence check is needed.
             let tmp_link = self.keys_dir.join(format!("current.tmp.{}", Uuid::new_v4()));
             std::os::unix::fs::symlink(&target, &tmp_link)
-                .map_err(|e| anyhow!("keystore: symlink current.tmp -> {}: {}", target, e))?;
+                .map_err(|e| anyhow!("keystore: symlink current.tmp -> {target}: {e}"))?;
             fs::rename(&tmp_link, &current_link)
-                .map_err(|e| anyhow!("keystore: rename current.tmp -> current: {}", e))?;
+                .map_err(|e| anyhow!("keystore: rename current.tmp -> current: {e}"))?;
         }
 
         #[cfg(windows)]
@@ -328,7 +332,7 @@ impl Keystore {
     /// Load a specific keypair by ID.
     ///
     /// Phase 18-03 (PQSIG-02 / D-10): adds `allow_unsigned` parameter and
-    /// format_version dispatch.
+    /// `format_version` dispatch.
     /// - `format_version == 1` + `allow_unsigned == false` → hard error.
     /// - `format_version == 1` + `allow_unsigned == true`  → proceed (legacy read).
     /// - `format_version == 2` → invoke `verify_stored_signature` (hybrid only).
@@ -345,17 +349,16 @@ impl Keystore {
         }
 
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file for key_id={key_id}: {e}"))?;
         let stored_keypair: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={key_id}: {e}"))?;
 
         // Phase 18 / D-10 format_version dispatch.
         match stored_keypair.format_version {
             1 => {
                 if !allow_unsigned {
                     return Err(anyhow!(
-                        "keystore: entry {} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {}` to re-sign",
-                        key_id, key_id
+                        "keystore: entry {key_id} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {key_id}` to re-sign"
                     ));
                 }
                 // Proceed without verify.
@@ -375,8 +378,7 @@ impl Keystore {
             }
             v => {
                 return Err(anyhow!(
-                    "keystore: unsupported format_version {} for {}; upgrade sss",
-                    v, key_id
+                    "keystore: unsupported format_version {v} for {key_id}; upgrade sss"
                 ));
             }
         }
@@ -389,10 +391,10 @@ impl Keystore {
         let mut keypairs = Vec::new();
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -401,7 +403,7 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)
-                .map_err(|e| anyhow!("keystore: read key file {:?}: {}", path, e))?;
+                .map_err(|e| anyhow!("keystore: read key file {}: {e}", path.display()))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content)
                 && let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
                     keypairs.push(keypair);
@@ -419,10 +421,10 @@ impl Keystore {
         let mut count = 0;
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             if path.extension().is_some_and(|ext| ext == "toml") {
@@ -442,7 +444,7 @@ impl Keystore {
         }
 
         fs::remove_file(&key_file)
-            .map_err(|e| anyhow!("keystore: remove key file for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: remove key file for key_id={key_id}: {e}"))?;
 
         // If this was the current key, remove the current link.
         // WR-01 fix: bind read_current_key_id once via if-let to avoid TOCTOU double-call.
@@ -451,7 +453,7 @@ impl Keystore {
                 let current_link = self.keys_dir.join("current");
                 if current_link.exists() {
                     fs::remove_file(&current_link)
-                        .map_err(|e| anyhow!("keystore: remove current symlink for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: remove current symlink for key_id={key_id}: {e}"))?;
                 }
             }
 
@@ -484,18 +486,18 @@ impl Keystore {
         // Load the stored keypair metadata to preserve other fields
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file for key_id={} (set_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file for key_id={key_id} (set_passphrase): {e}"))?;
         let mut stored: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={} (set_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={key_id} (set_passphrase): {e}"))?;
 
         // Encrypt with new password
         let salt = Salt::new();
         let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)
-            .map_err(|e| anyhow!("keystore: kdf-derive (new passphrase) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: kdf-derive (new passphrase) for key_id={key_id}: {e}"))?;
         let secret_key_str = keypair.secret_key()?.to_base64();
         let encrypted_secret_key =
             crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
-                .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (set_passphrase) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (set_passphrase) for key_id={key_id}: {e}"))?;
 
         // Re-encrypt hybrid material before stored.salt is overwritten (WR-01).
         // Reads the original salt from `stored` to re-derive the old decryption key.
@@ -509,33 +511,33 @@ impl Keystore {
                     .as_ref()
                     .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
                 let old_salt = Salt::from_base64(old_salt_str)
-                    .map_err(|e| anyhow!("keystore: salt-decode (set_passphrase, old) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: salt-decode (set_passphrase, old) for key_id={key_id}: {e}"))?;
                 let old_dk =
                     DerivedKey::derive_with_params(old_pw, &old_salt, &self.kdf_params)
-                        .map_err(|e| anyhow!("keystore: kdf-derive (old passphrase) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: kdf-derive (old passphrase) for key_id={key_id}: {e}"))?;
                 let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)
-                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, old) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, old) for key_id={key_id}: {e}"))?;
                 let dec = Zeroizing::new(crate::crypto::decrypt(
                     &enc_bytes,
                     &old_dk.to_encryption_key(),
                 )
-                    .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (set_passphrase, old) for key_id={}: {}", key_id, e))?);
+                    .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (set_passphrase, old) for key_id={key_id}: {e}"))?);
                 Zeroizing::new(BASE64_STANDARD.decode(
                     std::str::from_utf8(&dec)
-                        .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (set_passphrase) for key_id={}: {}", key_id, e))?
+                        .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (set_passphrase) for key_id={key_id}: {e}"))?
                 )
-                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (set_passphrase) for key_id={}: {}", key_id, e))?)
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (set_passphrase) for key_id={key_id}: {e}"))?)
             } else {
                 // Was passwordless — stored as raw base64
                 Zeroizing::new(BASE64_STANDARD.decode(enc_hybrid_b64)
-                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, passwordless) for key_id={}: {}", key_id, e))?)
+                    .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, passwordless) for key_id={key_id}: {e}"))?)
             };
             let hybrid_sk_b64 = BASE64_STANDARD.encode(&raw_hybrid[..]);
             let new_enc = crate::crypto::encrypt_to_base64(
                 &hybrid_sk_b64,
                 &derived_key.to_encryption_key(),
             )
-                .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (set_passphrase) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (set_passphrase) for key_id={key_id}: {e}"))?;
             stored.hybrid_encrypted_secret_key = Some(new_enc);
         }
 
@@ -546,20 +548,20 @@ impl Keystore {
 
         // Write back to file
         let content = toml::to_string_pretty(&stored)
-            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={} (set_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={key_id} (set_passphrase): {e}"))?;
         fs::write(&key_file, content)
-            .map_err(|e| anyhow!("keystore: write key file for key_id={} (set_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: write key file for key_id={key_id} (set_passphrase): {e}"))?;
 
         // Set secure permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&key_file)
-                .map_err(|e| anyhow!("keystore: stat key file for key_id={} (set_passphrase): {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: stat key file for key_id={key_id} (set_passphrase): {e}"))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
             fs::set_permissions(&key_file, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={} (set_passphrase): {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={key_id} (set_passphrase): {e}"))?;
         }
 
         Ok(())
@@ -584,9 +586,9 @@ impl Keystore {
         // Load the stored keypair metadata
         let key_file = self.keys_dir.join(format!("{key_id}.toml"));
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file for key_id={} (remove_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file for key_id={key_id} (remove_passphrase): {e}"))?;
         let mut stored: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={} (remove_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={key_id} (remove_passphrase): {e}"))?;
 
         // Decrypt hybrid material before clearing the salt (WR-02).
         // After this block, hybrid_encrypted_secret_key holds the raw sk base64 (passwordless form).
@@ -599,21 +601,21 @@ impl Keystore {
                 .as_ref()
                 .ok_or_else(|| anyhow!("Salt missing for password-protected hybrid key"))?;
             let salt_obj = Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode (remove_passphrase) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: salt-decode (remove_passphrase) for key_id={key_id}: {e}"))?;
             let dk = DerivedKey::derive_with_params(
                 current_password,
                 &salt_obj,
                 &self.kdf_params,
             )
-                .map_err(|e| anyhow!("keystore: kdf-derive (remove_passphrase) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive (remove_passphrase) for key_id={key_id}: {e}"))?;
             let enc_bytes = BASE64_STANDARD.decode(enc_hybrid_b64)
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (remove_passphrase) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (remove_passphrase) for key_id={key_id}: {e}"))?;
             let dec = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
-                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (remove_passphrase) for key_id={}: {}", key_id, e))?);
+                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (remove_passphrase) for key_id={key_id}: {e}"))?);
             // dec is the base64 of the raw sk bytes — store it directly as passwordless form
             stored.hybrid_encrypted_secret_key =
                 Some(String::from_utf8(dec.to_vec())
-                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (remove_passphrase) for key_id={}: {}", key_id, e))?);
+                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (remove_passphrase) for key_id={key_id}: {e}"))?);
         }
 
         // Store secret key as plaintext (base64 encoded)
@@ -623,20 +625,20 @@ impl Keystore {
 
         // Write back to file
         let content = toml::to_string_pretty(&stored)
-            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={} (remove_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={key_id} (remove_passphrase): {e}"))?;
         fs::write(&key_file, content)
-            .map_err(|e| anyhow!("keystore: write key file for key_id={} (remove_passphrase): {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: write key file for key_id={key_id} (remove_passphrase): {e}"))?;
 
         // Set secure permissions
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&key_file)
-                .map_err(|e| anyhow!("keystore: stat key file for key_id={} (remove_passphrase): {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: stat key file for key_id={key_id} (remove_passphrase): {e}"))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
             fs::set_permissions(&key_file, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={} (remove_passphrase): {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on key file for key_id={key_id} (remove_passphrase): {e}"))?;
         }
 
         Ok(())
@@ -657,9 +659,9 @@ impl Keystore {
         }
 
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file (is_current_key_password_protected) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file (is_current_key_password_protected) for key_id={key_id}: {e}"))?;
         let stored_keypair: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (is_current_key_password_protected) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (is_current_key_password_protected) for key_id={key_id}: {e}"))?;
 
         Ok(stored_keypair.is_password_protected)
     }
@@ -669,10 +671,10 @@ impl Keystore {
         let mut keys = Vec::new();
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -681,7 +683,7 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)
-                .map_err(|e| anyhow!("keystore: read key file {:?}: {}", path, e))?;
+                .map_err(|e| anyhow!("keystore: read key file {}: {e}", path.display()))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content) {
                 keys.push((stored_keypair.uuid.clone(), stored_keypair));
             }
@@ -701,7 +703,7 @@ impl Keystore {
         {
             // On Unix, read the symlink target
             let target = fs::read_link(&current_path)
-                .map_err(|e| anyhow!("keystore: read current symlink {:?}: {}", current_path, e))?;
+                .map_err(|e| anyhow!("keystore: read current symlink {}: {e}", current_path.display()))?;
             let filename = target
                 .file_name()
                 .ok_or_else(|| anyhow!("Invalid current symlink target"))?
@@ -741,9 +743,9 @@ impl Keystore {
             return Err(anyhow!("Key file not found: {key_id}"));
         }
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file (get_current_stored_raw) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file (get_current_stored_raw) for key_id={key_id}: {e}"))?;
         toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (get_current_stored_raw) for key_id={}: {}", key_id, e))
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (get_current_stored_raw) for key_id={key_id}: {e}"))
     }
 
     /// Store a dual-suite keypair with optional password protection.
@@ -761,6 +763,13 @@ impl Keystore {
     ///
     /// - **Case C** (`classic_keypair = Some`, `hybrid_keypair = None`): delegates to
     ///   the existing `store_keypair` by wrapping the classic keypair in `KeyPair::Classic`.
+    // Why: 267 lines is the natural shape of store_dual_keypair — the function
+    // covers Cases A (both classic+hybrid), B (hybrid-only), and C (classic-only)
+    // with KDF derivation, AEAD encryption, dual-suite signature generation, and
+    // atomic disk write. Each case has its own logical block that maps to the
+    // doc-comment cases above. Splitting into sub-fns would duplicate the
+    // KDF/encrypt/sign/write sequence three times.
+    #[allow(clippy::too_many_lines)]
     #[cfg(feature = "hybrid")]
     pub fn store_dual_keypair(
         &self,
@@ -788,7 +797,7 @@ impl Keystore {
 
                 // PQSIG-02 — generate per-entry sig keypairs (D-06)
                 let ed448_sk = Ed448Standard::generate()
-                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                 let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
                 let ed448_pk_b64 = BASE64_STANDARD
                     .encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
@@ -797,7 +806,7 @@ impl Keystore {
                 );
 
                 let mldsa_sk = MlDsa65Fips204::generate()
-                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                 let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
                 let mldsa_pk_b64 = BASE64_STANDARD
                     .encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
@@ -817,7 +826,7 @@ impl Keystore {
                     let dk = crate::kdf::DerivedKey::derive_with_params(
                         pw, &salt, &self.kdf_params,
                     )
-                        .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                     let enc_key = dk.to_encryption_key();
 
                     // Classic secret — standard path (32-byte key, base64 string)
@@ -825,7 +834,7 @@ impl Keystore {
                         KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
                     let enc_classic =
                         crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)
-                            .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
                     // avoid copying into a non-Zeroizing buffer (T-03-02).
@@ -833,7 +842,7 @@ impl Keystore {
                         BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
                     let enc_hybrid =
                         crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)
-                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     // Sig secrets — encrypted under the same KEK (D-07)
                     let sig_ed448_sk_b64 =
@@ -842,7 +851,7 @@ impl Keystore {
                         &sig_ed448_sk_b64,
                         &enc_key,
                     )
-                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     let sig_mldsa_sk_b64 =
                         BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
@@ -850,7 +859,7 @@ impl Keystore {
                         &sig_mldsa_sk_b64,
                         &enc_key,
                     )
-                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     (
                         enc_classic,
@@ -901,7 +910,7 @@ impl Keystore {
                     &created_at.to_rfc3339(),
                 );
                 let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
-                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                 let stored = StoredKeyPair {
                     uuid: key_id.clone(),
@@ -924,19 +933,19 @@ impl Keystore {
 
                 let key_file = self.keys_dir.join(format!("{key_id}.toml"));
                 let content = toml::to_string_pretty(&stored)
-                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                 fs::write(&key_file, content)
-                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let metadata = fs::metadata(&key_file)
-                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                     let mut perms = metadata.permissions();
                     perms.set_mode(0o600);
                     fs::set_permissions(&key_file, perms)
-                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case A) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
                 }
 
                 self.set_current_key(&key_id)?;
@@ -958,9 +967,9 @@ impl Keystore {
                 }
 
                 let content = fs::read_to_string(&key_file)
-                    .map_err(|e| anyhow!("keystore: read key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: read key file (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 let mut stored: StoredKeyPair = toml::from_str(&content)
-                    .map_err(|e| anyhow!("keystore: parse-stored-toml (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: parse-stored-toml (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
                 // Guard: refuse to overwrite existing hybrid material (T-03-03)
                 if stored.hybrid_public_key.is_some() {
@@ -972,7 +981,7 @@ impl Keystore {
 
                 // PQSIG-02 — generate per-entry sig keypairs (D-06)
                 let ed448_sk = Ed448Standard::generate()
-                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: Ed448 sig keygen (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
                 let ed448_pk_b64 = BASE64_STANDARD
                     .encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
@@ -981,7 +990,7 @@ impl Keystore {
                 );
 
                 let mldsa_sk = MlDsa65Fips204::generate()
-                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
                 let mldsa_pk_b64 = BASE64_STANDARD
                     .encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
@@ -1001,11 +1010,11 @@ impl Keystore {
                             anyhow!("Salt missing for password-protected key")
                         })?;
                         let salt = crate::kdf::Salt::from_base64(salt_str)
-                            .map_err(|e| anyhow!("keystore: salt-decode (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: salt-decode (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                         let dk = crate::kdf::DerivedKey::derive_with_params(
                             pw, &salt, &self.kdf_params,
                         )
-                            .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                         let enc_key = dk.to_encryption_key();
 
                         let hybrid_sk_b64 =
@@ -1014,7 +1023,7 @@ impl Keystore {
                             &hybrid_sk_b64,
                             &enc_key,
                         )
-                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
                         let sig_ed448_sk_b64 =
                             BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
@@ -1022,7 +1031,7 @@ impl Keystore {
                             &sig_ed448_sk_b64,
                             &enc_key,
                         )
-                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
                         let sig_mldsa_sk_b64 =
                             BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
@@ -1030,7 +1039,7 @@ impl Keystore {
                             &sig_mldsa_sk_b64,
                             &enc_key,
                         )
-                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                            .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
                         (enc_h, enc_e, enc_m)
                     } else {
@@ -1067,23 +1076,23 @@ impl Keystore {
                     &stored.created_at.to_rfc3339(),
                 );
                 let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
-                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 stored.signature = Some(sig);
 
                 let updated_content = toml::to_string_pretty(&stored)
-                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 fs::write(&key_file, updated_content)
-                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: write key file (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
                     let metadata = fs::metadata(&key_file)
-                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: stat key file (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                     let mut perms = metadata.permissions();
                     perms.set_mode(0o600);
                     fs::set_permissions(&key_file, perms)
-                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case B) for key_id={}: {}", key_id, e))?;
+                        .map_err(|e| anyhow!("keystore: set-permissions on key file (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                 }
 
                 Ok(key_id)
@@ -1099,7 +1108,7 @@ impl Keystore {
     /// Load and decrypt a hybrid keypair from a stored identity file.
     ///
     /// Phase 18-03 (PQSIG-02 / D-10 / D-11): adds `allow_unsigned` parameter and
-    /// format_version dispatch. Same ladder as `load_keypair`:
+    /// `format_version` dispatch. Same ladder as `load_keypair`:
     /// - `format_version == 1` + `allow_unsigned == false` → hard error.
     /// - `format_version == 1` + `allow_unsigned == true`  → proceed (legacy read).
     /// - `format_version == 2` → invoke `verify_stored_signature` (D-11).
@@ -1124,17 +1133,16 @@ impl Keystore {
         }
 
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
         let stored: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
 
         // Phase 18 / D-10 format_version dispatch (mirrors load_keypair).
         match stored.format_version {
             1 => {
                 if !allow_unsigned {
                     return Err(anyhow!(
-                        "keystore: entry {} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {}` to re-sign",
-                        key_id, key_id
+                        "keystore: entry {key_id} is unsigned legacy format; pass --allow-unsigned to read or run `sss keys upgrade {key_id}` to re-sign"
                     ));
                 }
                 // Proceed without verify.
@@ -1144,8 +1152,7 @@ impl Keystore {
             }
             v => {
                 return Err(anyhow!(
-                    "keystore: unsupported format_version {} for {}; upgrade sss",
-                    v, key_id
+                    "keystore: unsupported format_version {v} for {key_id}; upgrade sss"
                 ));
             }
         }
@@ -1171,25 +1178,25 @@ impl Keystore {
                 anyhow!("Salt missing for password-protected key")
             })?;
             let salt = crate::kdf::Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: salt-decode (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
             let dk = crate::kdf::DerivedKey::derive_with_params(
                 pw, &salt, &self.kdf_params,
             )
-                .map_err(|e| anyhow!("keystore: kdf-derive (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
             let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
             let decrypted = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
-                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (load_hybrid_keypair) for key_id={}: {}", key_id, e))?);
+                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (load_hybrid_keypair) for key_id={key_id}: {e}"))?);
             // decrypted is the base64 string of the raw secret bytes
             Zeroizing::new(BASE64_STANDARD.decode(
                 std::str::from_utf8(&decrypted)
-                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (load_hybrid_keypair) for key_id={}: {}", key_id, e))?
+                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (load_hybrid_keypair) for key_id={key_id}: {e}"))?
             )
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (load_hybrid_keypair) for key_id={}: {}", key_id, e))?)
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (load_hybrid_keypair) for key_id={key_id}: {e}"))?)
         } else {
             // Passwordless — stored as raw base64
             Zeroizing::new(BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair, passwordless) for key_id={}: {}", key_id, e))?)
+                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair, passwordless) for key_id={key_id}: {e}"))?)
         };
 
         if raw_secret_bytes.len() != HYBRID_SECRET_KEY_SIZE {
@@ -1202,7 +1209,7 @@ impl Keystore {
 
         // Reconstruct public bytes
         let pub_bytes_raw = BASE64_STANDARD.decode(&hybrid_pub_b64)
-            .map_err(|e| anyhow!("keystore: base64-decode-hybrid-public-key (load_hybrid_keypair) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: base64-decode-hybrid-public-key (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
         if pub_bytes_raw.len() != HYBRID_PUBLIC_KEY_SIZE {
             return Err(anyhow!(
                 "hybrid public key wrong length: expected {} bytes, got {}",
@@ -1234,7 +1241,7 @@ impl Keystore {
     /// - password-protected: derive KEK → AEAD-decrypt → inner-base64-decode → parse key bytes
     /// - passwordless: outer-base64-decode → parse key bytes directly
     ///
-    /// Returns `Err` if the current key has no sig material (format_version < 2 or
+    /// Returns `Err` if the current key has no sig material (`format_version` < 2 or
     /// fields absent) or if decryption / key-parse fails.
     #[cfg(feature = "hybrid")]
     pub fn load_sig_keypair(
@@ -1256,9 +1263,9 @@ impl Keystore {
         }
 
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file (load_sig_keypair) for key_id={key_id}: {e}"))?;
         let stored: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (load_sig_keypair) for key_id={key_id}: {e}"))?;
 
         // Guard: sig material only exists in format_version >= 2 entries.
         // format_version == 1 entries were created before Phase 18 sig keys.
@@ -1281,9 +1288,9 @@ impl Keystore {
                 anyhow!("Salt missing for password-protected key")
             })?;
             let salt = crate::kdf::Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: salt-decode (load_sig_keypair) for key_id={key_id}: {e}"))?;
             let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
-                .map_err(|e| anyhow!("keystore: kdf-derive (load_sig_keypair) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive (load_sig_keypair) for key_id={key_id}: {e}"))?;
             Some(dk.to_encryption_key())
         } else {
             None
@@ -1295,22 +1302,22 @@ impl Keystore {
             if let Some(ref enc_key) = kek {
                 // Password-protected: outer b64 → AEAD decrypt → inner b64 → raw bytes
                 let enc_bytes = BASE64_STANDARD.decode(field_b64)
-                    .map_err(|e| anyhow!("keystore: base64-decode-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: base64-decode-{field_name} (load_sig_keypair) for key_id={key_id}: {e}"))?;
                 let decrypted = Zeroizing::new(
                     crate::crypto::decrypt(&enc_bytes, enc_key)
-                        .map_err(|e| anyhow!("keystore: aead-decrypt-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?
+                        .map_err(|e| anyhow!("keystore: aead-decrypt-{field_name} (load_sig_keypair) for key_id={key_id}: {e}"))?
                 );
                 let inner_b64 = std::str::from_utf8(&decrypted)
-                    .map_err(|e| anyhow!("keystore: utf8-{} (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: utf8-{field_name} (load_sig_keypair) for key_id={key_id}: {e}"))?;
                 Ok(Zeroizing::new(
                     BASE64_STANDARD.decode(inner_b64)
-                        .map_err(|e| anyhow!("keystore: base64-decode-{}-inner (load_sig_keypair) for key_id={}: {}", field_name, key_id, e))?
+                        .map_err(|e| anyhow!("keystore: base64-decode-{field_name}-inner (load_sig_keypair) for key_id={key_id}: {e}"))?
                 ))
             } else {
                 // Passwordless: plain base64 → raw bytes
                 Ok(Zeroizing::new(
                     BASE64_STANDARD.decode(field_b64)
-                        .map_err(|e| anyhow!("keystore: base64-decode-{} (load_sig_keypair, passwordless) for key_id={}: {}", field_name, key_id, e))?
+                        .map_err(|e| anyhow!("keystore: base64-decode-{field_name} (load_sig_keypair, passwordless) for key_id={key_id}: {e}"))?
                 ))
             }
         };
@@ -1318,26 +1325,24 @@ impl Keystore {
         // Ed448 signing key
         let ed448_enc_sk = stored.sig_ed448_encrypted_secret_key.as_deref().ok_or_else(|| {
             anyhow!(
-                "keystore: sig_ed448_encrypted_secret_key absent for key_id={}; \
-                 run `sss keys upgrade {}` to add sig keys",
-                key_id, key_id
+                "keystore: sig_ed448_encrypted_secret_key absent for key_id={key_id}; \
+                 run `sss keys upgrade {key_id}` to add sig keys"
             )
         })?;
         let ed448_sk_bytes = decrypt_sig_key_bytes(ed448_enc_sk, "sig_ed448_sk")?;
         let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_bytes)
-            .map_err(|e| anyhow!("keystore: parse-ed448-sig-signing-key for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-ed448-sig-signing-key for key_id={key_id}: {e}"))?;
 
         // ML-DSA-65 signing key
         let mldsa_enc_sk = stored.sig_mldsa65_encrypted_secret_key.as_deref().ok_or_else(|| {
             anyhow!(
-                "keystore: sig_mldsa65_encrypted_secret_key absent for key_id={}; \
-                 run `sss keys upgrade {}` to add sig keys",
-                key_id, key_id
+                "keystore: sig_mldsa65_encrypted_secret_key absent for key_id={key_id}; \
+                 run `sss keys upgrade {key_id}` to add sig keys"
             )
         })?;
         let mldsa_sk_bytes = decrypt_sig_key_bytes(mldsa_enc_sk, "sig_mldsa65_sk")?;
         let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_bytes)
-            .map_err(|e| anyhow!("keystore: parse-mldsa65-sig-signing-key for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-mldsa65-sig-signing-key for key_id={key_id}: {e}"))?;
 
         Ok((ed448_sk, mldsa_sk))
     }
@@ -1366,6 +1371,11 @@ impl Keystore {
     ///
     /// T-18-04-03: raw sig SK bytes are wrapped in `Zeroizing<Vec<u8>>` and
     /// dropped at end-of-scope.
+    // Why: 129 lines is the natural shape of in-place upgrade — read stored
+    // keypair → decrypt → generate fresh sig keypairs → build signed payload →
+    // re-encrypt with current KDF → atomic write-and-replace. Sequential
+    // narrative; splitting would obscure the transactional sequence.
+    #[allow(clippy::too_many_lines)]
     #[cfg(feature = "hybrid")]
     pub fn upgrade_keypair_in_place(
         &self,
@@ -1391,9 +1401,9 @@ impl Keystore {
         // Read on-disk TOML directly (bypasses load_keypair so we can read a
         // v1 entry without --allow-unsigned).
         let content = fs::read_to_string(&key_file)
-            .map_err(|e| anyhow!("keystore: read key file (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: read key file (upgrade) for key_id={key_id}: {e}"))?;
         let mut stored: StoredKeyPair = toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (upgrade) for key_id={key_id}: {e}"))?;
 
         // Refuse already-signed entries (D-17): upgrade IS the upgrade path
         // for v1 → v2; there is no v2 → v2 re-sign mode.
@@ -1415,28 +1425,28 @@ impl Keystore {
         // Passwordless entries skip this probe (no KEK to validate).
         if stored.is_password_protected {
             let pw = password.ok_or_else(|| {
-                anyhow!("Password required to upgrade protected key {}", key_id)
+                anyhow!("Password required to upgrade protected key {key_id}")
             })?;
             let salt_str = stored
                 .salt
                 .as_ref()
-                .ok_or_else(|| anyhow!("Salt missing for password-protected key {}", key_id))?;
+                .ok_or_else(|| anyhow!("Salt missing for password-protected key {key_id}"))?;
             let salt = crate::kdf::Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: salt-decode (upgrade) for key_id={key_id}: {e}"))?;
             let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
-                .map_err(|e| anyhow!("keystore: kdf-derive (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive (upgrade) for key_id={key_id}: {e}"))?;
             let enc_bytes = BASE64_STANDARD
                 .decode(&stored.encrypted_secret_key)
-                .map_err(|e| anyhow!("keystore: base64-decode-secret-key (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: base64-decode-secret-key (upgrade) for key_id={key_id}: {e}"))?;
             let _probe = Zeroizing::new(
                 crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
-                    .map_err(|_| anyhow!("keystore: passphrase verification failed for {}", key_id))?,
+                    .map_err(|_| anyhow!("keystore: passphrase verification failed for {key_id}"))?,
             );
         }
 
         // Generate fresh per-entry sig keypairs (D-06).
         let ed448_sk = Ed448Standard::generate()
-            .map_err(|e| anyhow!("keystore: Ed448 sig keygen (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: Ed448 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
         let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
         let ed448_pk_b64 =
             BASE64_STANDARD.encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
@@ -1444,7 +1454,7 @@ impl Keystore {
             Zeroizing::new(Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec());
 
         let mldsa_sk = MlDsa65Fips204::generate()
-            .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
         let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
         let mldsa_pk_b64 =
             BASE64_STANDARD.encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
@@ -1456,23 +1466,28 @@ impl Keystore {
         // Case A/B for D-07 consistency.
         let (sig_ed448_sk_field, sig_mldsa_sk_field) = if stored.is_password_protected {
             // Re-derive KEK (we already validated the passphrase above).
+            // Why: password and salt are validated as Some(_) in the preceding
+            // is_password_protected branch (see passphrase validation earlier in
+            // this fn body). HARDEN-01 / 08-01.
+            #[allow(clippy::expect_used)]
             let pw = password.expect("checked above");
+            #[allow(clippy::expect_used)]
             let salt_str = stored.salt.as_ref().expect("checked above");
             let salt = crate::kdf::Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={key_id}: {e}"))?;
             let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
-                .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade) for key_id={key_id}: {e}"))?;
             let enc_key = dk.to_encryption_key();
 
             let sig_ed448_sk_b64 = BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
             let enc_sig_ed448 =
                 crate::crypto::encrypt_to_base64(&sig_ed448_sk_b64, &enc_key)
-                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (upgrade) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (upgrade) for key_id={key_id}: {e}"))?;
 
             let sig_mldsa_sk_b64 = BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
             let enc_sig_mldsa =
                 crate::crypto::encrypt_to_base64(&sig_mldsa_sk_b64, &enc_key)
-                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (upgrade) for key_id={}: {}", key_id, e))?;
+                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (upgrade) for key_id={key_id}: {e}"))?;
 
             (enc_sig_ed448, enc_sig_mldsa)
         } else {
@@ -1501,11 +1516,11 @@ impl Keystore {
             &stored.created_at.to_rfc3339(),
         );
         let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
-            .map_err(|e| anyhow!("keystore: sign-entry (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: sign-entry (upgrade) for key_id={key_id}: {e}"))?;
         stored.signature = Some(sig);
 
         let new_content = toml::to_string_pretty(&stored)
-            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: serialise stored-keypair toml (upgrade) for key_id={key_id}: {e}"))?;
 
         // Atomic write via NamedTempFile::new_in(parent).persist(target) (D-15).
         // Pitfall 4: MUST be `new_in(parent_dir)` — `new()` defaults to /tmp,
@@ -1514,13 +1529,13 @@ impl Keystore {
             anyhow!("keystore: cannot resolve parent dir of {}", key_file.display())
         })?;
         let mut tmp = tempfile::NamedTempFile::new_in(parent)
-            .map_err(|e| anyhow!("keystore: tempfile-create (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: tempfile-create (upgrade) for key_id={key_id}: {e}"))?;
         tmp.write_all(new_content.as_bytes())
-            .map_err(|e| anyhow!("keystore: tempfile-write (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: tempfile-write (upgrade) for key_id={key_id}: {e}"))?;
         tmp.flush()
-            .map_err(|e| anyhow!("keystore: tempfile-flush (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: tempfile-flush (upgrade) for key_id={key_id}: {e}"))?;
         tmp.persist(&key_file)
-            .map_err(|e| anyhow!("keystore: tempfile-persist (upgrade) for key_id={}: {}", key_id, e))?;
+            .map_err(|e| anyhow!("keystore: tempfile-persist (upgrade) for key_id={key_id}: {e}"))?;
 
         // Restore 0o600 permissions (NamedTempFile defaults are mode 0o600 on
         // Unix already, but persist() onto an existing 0o600 file may pick up
@@ -1529,11 +1544,11 @@ impl Keystore {
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&key_file)
-                .map_err(|e| anyhow!("keystore: stat key file (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: stat key file (upgrade) for key_id={key_id}: {e}"))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600);
             fs::set_permissions(&key_file, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on key file (upgrade) for key_id={}: {}", key_id, e))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on key file (upgrade) for key_id={key_id}: {e}"))?;
         }
 
         Ok(())
@@ -1548,7 +1563,12 @@ impl Keystore {
     ///
     /// `pub(crate)` so the import/export handlers in `commands/keys.rs` can
     /// invoke it without re-implementing the dispatch logic.
+    // Why: kept as &self method for API parity with other KeyStore methods that
+    // dispatch verification; the call sites at lines 369 and 1144 already pass
+    // self. Refactoring to associated fn would require call-site rewrites
+    // across the keystore module without semantic gain.
     #[cfg(feature = "hybrid")]
+    #[allow(clippy::unused_self)]
     pub(crate) fn verify_stored_signature(
         &self,
         stored: &StoredKeyPair,
@@ -1842,7 +1862,7 @@ mod tests {
     // methods introduced in Task 1 are in place.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Classic-only StoredKeyPair has hybrid fields set to None (backward compat).
+    /// Classic-only `StoredKeyPair` has hybrid fields set to None (backward compat).
     #[test]
     fn test_stored_keypair_hybrid_fields_default_none() -> Result<()> {
         let (keystore, _temp_dir) = create_temp_keystore()?;
@@ -1862,7 +1882,7 @@ mod tests {
         Ok(())
     }
 
-    /// get_current_stored_raw returns the raw StoredKeyPair without decrypting.
+    /// `get_current_stored_raw` returns the raw `StoredKeyPair` without decrypting.
     #[cfg(feature = "hybrid")]
     #[test]
     fn test_get_current_stored_raw_returns_stored_keypair() -> Result<()> {
@@ -1878,7 +1898,7 @@ mod tests {
         Ok(())
     }
 
-    /// load_hybrid_keypair on a classic-only file returns the expected error.
+    /// `load_hybrid_keypair` on a classic-only file returns the expected error.
     #[cfg(feature = "hybrid")]
     #[test]
     fn test_load_hybrid_keypair_on_classic_only_errors() -> Result<()> {
@@ -1906,7 +1926,7 @@ mod tests {
     // brings KdfParams into scope without widening any public API.
     // -------------------------------------------------------------------------
 
-    /// Faster temp keystore for property tests — uses KdfParams::interactive()
+    /// Faster temp keystore for property tests — uses `KdfParams::interactive()`
     /// (N=32768) rather than the sensitive default to keep per-case latency low.
     fn create_temp_keystore_interactive() -> Result<(Keystore, TempDir)> {
         let temp_dir = TempDir::new()?;
@@ -2094,7 +2114,7 @@ hybrid_encrypted_secret_key = "hybrid-sk-encrypted"
         assert!(stored.sig_mldsa65_public_key.is_none());
     }
 
-    /// Round-trip a `format_version=1, signature=None` StoredKeyPair through
+    /// Round-trip a `format_version=1, signature=None` `StoredKeyPair` through
     /// serde and assert the serialized form contains NO `[signature]` table
     /// and NO `sig_*` field lines. Closes T-18-02-03 (no phantom fields).
     #[cfg(feature = "hybrid")]
@@ -2245,9 +2265,9 @@ mldsa65 = "ml-sig"
     // password-protected and passwordless identities.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Passwordless round-trip: store_dual_keypair (passwordless) → load_sig_keypair.
-    /// The sig SK stored as plain base64; load_sig_keypair must reconstruct valid
-    /// Ed448SigningKey and MlDsa65SigningKey objects that produce verifiable signatures.
+    /// Passwordless round-trip: `store_dual_keypair` (passwordless) → `load_sig_keypair`.
+    /// The sig SK stored as plain base64; `load_sig_keypair` must reconstruct valid
+    /// `Ed448SigningKey` and `MlDsa65SigningKey` objects that produce verifiable signatures.
     #[cfg(feature = "hybrid")]
     #[test]
     fn load_sig_keypair_round_trip_passwordless() {
@@ -2293,8 +2313,8 @@ mldsa65 = "ml-sig"
             .expect("ML-DSA-65 sig must verify after load_sig_keypair passwordless round-trip");
     }
 
-    /// Password-protected round-trip: store_dual_keypair (pw) → load_sig_keypair(pw).
-    /// The sig SK stored AEAD-encrypted; load_sig_keypair must decrypt and reconstruct.
+    /// Password-protected round-trip: `store_dual_keypair` (pw) → `load_sig_keypair(pw)`.
+    /// The sig SK stored AEAD-encrypted; `load_sig_keypair` must decrypt and reconstruct.
     #[cfg(feature = "hybrid")]
     #[test]
     fn load_sig_keypair_round_trip_password_protected() {
@@ -2338,7 +2358,7 @@ mldsa65 = "ml-sig"
             .expect("ML-DSA-65 sig must verify after load_sig_keypair pw round-trip");
     }
 
-    /// Wrong password must fail load_sig_keypair (AEAD authentication failure).
+    /// Wrong password must fail `load_sig_keypair` (AEAD authentication failure).
     #[cfg(feature = "hybrid")]
     #[test]
     fn load_sig_keypair_wrong_password_fails() {

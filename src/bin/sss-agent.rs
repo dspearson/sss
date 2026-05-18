@@ -1,5 +1,10 @@
 // Why: sss-agent is deliberately excluded from the structural-unsafe-ban scope per locked CONTEXT.md decision because it has libc-FFI-adjacent code paths via re-export of sss::* modules that use libc/sodium FFI; future internal refactor may inline FFI. Pedantic noise has no audit benefit on the tiny CLI dispatch surface (per REQUIREMENTS.md agent-binary carve-out).
 #![allow(clippy::pedantic)]
+// Why: sss-agent is a thin CLI dispatcher; .unwrap()/.expect() on Mutex locks and
+// stdin reads is the appropriate behaviour (failure = exit) — refactor to ?
+// would require restructuring the agent loop without semantic gain. Panic in
+// this binary is treated as program-termination, not error-handling.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use anyhow::{anyhow, Result};
 use clap::Parser;

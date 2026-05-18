@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Spec Compliance Verification Tests
 //!
 //! Tests that verify exact compliance with marker-design.md specification.
@@ -91,8 +95,8 @@ fn test_section_8_3_example_3_nested_delimiters() {
 
     // Ensure single quotes are not inside the marker
     assert!(
-        !result.output.contains(r#"⊕{'modified'}"#)
-            && !result.output.contains(r#"o+{'modified'}"#),
+        !result.output.contains(r"⊕{'modified'}")
+            && !result.output.contains(r"o+{'modified'}"),
         "Single quotes should NOT be inside marker. Got: {}",
         result.output
     );

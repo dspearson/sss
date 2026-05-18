@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use base64::Engine;
 use proptest::prelude::*;
 use sss::crypto::{decrypt_from_base64, encrypt_to_base64, Key};
@@ -378,8 +382,7 @@ mod deterministic_tests {
             // All ciphertexts should be unique
             assert!(
                 ciphertexts.insert(encrypted.clone()),
-                "Duplicate ciphertext found: {}",
-                encrypted
+                "Duplicate ciphertext found: {encrypted}"
             );
 
             // All should decrypt correctly
@@ -405,8 +408,7 @@ mod deterministic_tests {
             // Each key should produce different ciphertext
             assert!(
                 key_results.insert(encrypted.clone()),
-                "Duplicate ciphertext from different keys: {}",
-                encrypted
+                "Duplicate ciphertext from different keys: {encrypted}"
             );
         }
 

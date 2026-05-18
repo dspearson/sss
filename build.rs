@@ -1,3 +1,12 @@
+// Why: build scripts run at compile time; .expect() panics on missing
+// vendor/missing-tooling are the expected build-failure surface and are
+// categorically distinct from runtime panic-surface lints (QUAL-03).
+// Build-script .expect() calls are appropriate signals for "cannot proceed
+// because the development environment is broken" — refactoring to ? + Result
+// is not productive for build-time validation logic. Cross-plan finding
+// flagged in 21-04-SUMMARY.md "Issues Encountered" section.
+#![allow(clippy::expect_used)]
+
 use std::path::Path;
 use std::process::Command;
 

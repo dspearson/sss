@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! HARDEN-05 — public-API panic-surface regression suite (Phase 8 / Plan 05).
 //!
 //! Goal: every type re-exported from `src/lib.rs` is exercised with caller-facing
@@ -82,7 +86,7 @@ fn repository_key_from_base64_empty_returns_err() {
 #[test]
 fn repository_key_from_base64_wrong_length_returns_err() {
     // Valid base64 of a 5-byte buffer — wrong length for RepositoryKey.
-    let s = base64::engine::general_purpose::STANDARD.encode(&[0u8; 5]);
+    let s = base64::engine::general_purpose::STANDARD.encode([0u8; 5]);
     let result = RepositoryKey::from_base64(&s);
     assert!(result.is_err());
 }
@@ -90,7 +94,7 @@ fn repository_key_from_base64_wrong_length_returns_err() {
 #[test]
 fn repository_key_from_base64_huge_returns_err() {
     // 100 KiB of base64; decodes cleanly but length != 32.
-    let s = base64::engine::general_purpose::STANDARD.encode(&vec![0u8; 100_000]);
+    let s = base64::engine::general_purpose::STANDARD.encode(vec![0u8; 100_000]);
     let result = RepositoryKey::from_base64(&s);
     assert!(result.is_err());
 }
@@ -526,10 +530,11 @@ fn sss_error_from_io_does_not_panic() {
 
 #[test]
 fn reexport_compile_check() {
+    fn assert_type<T>() {}
+
     // src/lib.rs:39 — config::{load_key, load_key_for_user, Config}
     let _: fn() -> anyhow::Result<crypto::Key> = config::load_key;
     let _: fn(&str) -> anyhow::Result<crypto::Key> = config::load_key_for_user;
-    fn assert_type<T>() {}
     assert_type::<Config>();
 
     // src/lib.rs:40 — crypto::{KeyPair, RepositoryKey}

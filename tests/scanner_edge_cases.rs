@@ -1,4 +1,8 @@
-//! Comprehensive edge case tests for FileScanner module
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+//! Comprehensive edge case tests for `FileScanner` module
 //!
 //! This test suite covers edge cases not typically covered in regular integration tests:
 //! - Symlink handling
@@ -85,13 +89,10 @@ fn test_scanner_with_circular_symlinks() -> Result<()> {
     let results = scanner.scan_directory(root);
 
     // Should either succeed or fail gracefully, but not hang
-    match results {
-        Ok(files) => {
-            assert!(files.iter().any(|p| p.ends_with("secret.txt")));
-        }
-        Err(_) => {
-            // Acceptable to fail on circular symlinks
-        }
+    if let Ok(files) = results {
+        assert!(files.iter().any(|p| p.ends_with("secret.txt")));
+    } else {
+        // Acceptable to fail on circular symlinks
     }
 
     Ok(())
@@ -214,7 +215,7 @@ fn test_scanner_with_deeply_nested_empty_dirs() -> Result<()> {
     // Create deeply nested empty directories
     let mut path = root.to_path_buf();
     for i in 0..20 {
-        path = path.join(format!("level{}", i));
+        path = path.join(format!("level{i}"));
         fs::create_dir_all(&path)?;
     }
 
@@ -239,12 +240,12 @@ fn test_scanner_with_many_small_files() -> Result<()> {
     // Create 1000 small files, half with patterns
     for i in 0..500 {
         fs::write(
-            root.join(format!("with_pattern_{}.txt", i)),
-            format!("password=⊕{{secret{}}}", i),
+            root.join(format!("with_pattern_{i}.txt")),
+            format!("password=⊕{{secret{i}}}"),
         )?;
         fs::write(
-            root.join(format!("without_pattern_{}.txt", i)),
-            format!("normal content {}", i),
+            root.join(format!("without_pattern_{i}.txt")),
+            format!("normal content {i}"),
         )?;
     }
 
@@ -521,15 +522,15 @@ fn test_scanner_performance_with_large_directory() -> Result<()> {
 
     // Create a large directory structure (1000 files across 100 directories)
     for dir_i in 0..100 {
-        let dir = root.join(format!("dir_{}", dir_i));
+        let dir = root.join(format!("dir_{dir_i}"));
         fs::create_dir_all(&dir)?;
 
         for file_i in 0..10 {
-            let filename = format!("file_{}.txt", file_i);
+            let filename = format!("file_{file_i}.txt");
             let content = if file_i % 2 == 0 {
-                format!("password=⊕{{secret_{}_{}}}",  dir_i, file_i)
+                format!("password=⊕{{secret_{dir_i}_{file_i}}}")
             } else {
-                format!("normal content {} {}", dir_i, file_i)
+                format!("normal content {dir_i} {file_i}")
             };
             fs::write(dir.join(filename), content)?;
         }
@@ -544,7 +545,7 @@ fn test_scanner_performance_with_large_directory() -> Result<()> {
     assert_eq!(results.len(), 500);
 
     // Should complete in reasonable time (< 5 seconds for 1000 files)
-    assert!(duration.as_secs() < 5, "Scanning took too long: {:?}", duration);
+    assert!(duration.as_secs() < 5, "Scanning took too long: {duration:?}");
 
     Ok(())
 }

@@ -39,16 +39,18 @@ impl FileSystemOps for StdFileSystemOps {
 }
 
 /// Regex for secret interpolation - matches ⊲{`secret_name`} or <{`secret_name`}
-// INVARIANT: literal regex pattern is compile-time-correct; .expect is unreachable
+// Why: literal regex pattern is compile-time-correct; .expect is unreachable
 // on any successful build. Same applies to the other two LazyLock regexes below.
 // HARDEN-01 / 08-01.
+#[allow(clippy::expect_used)]
 pub static SECRETS_INTERPOLATION_REGEX: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"(?:⊲|<)\{([^}]+)\}").expect("Failed to compile secrets interpolation regex"));
 
 /// Regex for parsing secrets file format - single-line values
 /// Supports: name: value, "name": value, name: "value", "name": "value"
 /// Also supports: name: 'value', 'name': 'value'
-// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
+// Why: literal regex pattern is compile-time-correct; .expect unreachable.
+#[allow(clippy::expect_used)]
 static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|(.*))\s*$"#)
         .expect("Failed to compile secrets line regex")
@@ -56,7 +58,8 @@ static SECRETS_LINE_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new
 
 /// Regex for parsing YAML-style multi-line value indicator
 /// Matches: key: | or "key": | or 'key': |
-// INVARIANT: literal regex pattern is compile-time-correct; .expect unreachable.
+// Why: literal regex pattern is compile-time-correct; .expect unreachable.
+#[allow(clippy::expect_used)]
 static MULTILINE_INDICATOR_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(r#"^\s*(?:"([^"]+)"|'([^']+)'|([^:\s][^:]*?))\s*:\s*\|\s*$"#)
         .expect("Failed to compile multiline indicator regex")
@@ -451,17 +454,19 @@ fn collect_multiline_value(lines: &[&str], _start_line: usize) -> Result<(String
         }
 
         // Check if line is still indented at least to base level
-        // INVARIANT: base_indent is Some(_) at both unwraps below — the
-        // is_none() branch above either initialises it on this iteration or
-        // breaks out of the loop. Subsequent iterations cannot reach here with
-        // base_indent == None. HARDEN-01 / 08-01.
+        // Why: base_indent is Some(_) at both unwraps below — the is_none() branch
+        // above either initialises it on this iteration or breaks out of the loop.
+        // Subsequent iterations cannot reach here with base_indent == None.
+        // HARDEN-01 / 08-01.
+        #[allow(clippy::unwrap_used)]
         if indent < base_indent.unwrap() {
             // Dedented line means end of multi-line value
             break;
         }
 
         // Add the line with relative indentation preserved
-        // INVARIANT: same as the unwrap above — base_indent is Some(_) here.
+        // Why: same as the unwrap above — base_indent is Some(_) here.
+        #[allow(clippy::unwrap_used)]
         let relative_indent = indent - base_indent.unwrap();
         let dedented = format!("{}{}", " ".repeat(relative_indent), line.trim_start());
         value_lines.push(dedented);
@@ -647,7 +652,7 @@ trailing_spaces: value with trailing
 
         // Encrypt (seal) the secrets with marker
         let encrypted_secrets = crate::crypto::encrypt_to_base64(plaintext_secrets, &key).unwrap();
-        let sealed_content = format!("⊠{{{}}}", encrypted_secrets);
+        let sealed_content = format!("⊠{{{encrypted_secrets}}}");
 
         // Write the encrypted secrets to a file
         let secrets_file = project_root.join("secrets");
@@ -681,7 +686,7 @@ trailing_spaces: value with trailing
         // Create and seal a secrets file - use "secrets" so it will be found
         let plaintext = "token: secret_token_123\n";
         let encrypted = crate::crypto::encrypt_to_base64(plaintext, &key).unwrap();
-        let sealed_content = format!("⊠{{{}}}", encrypted);
+        let sealed_content = format!("⊠{{{encrypted}}}");
 
         let secrets_file = project_root.join("secrets");
         std::fs::write(&secrets_file, &sealed_content).unwrap();
@@ -703,11 +708,11 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"private_key: |
+        let content = r"private_key: |
   -----BEGIN RSA PRIVATE KEY-----
   MIIEowIBAAKCAQEA
   -----END RSA PRIVATE KEY-----
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -722,13 +727,13 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"certificate: |
+        let content = r"certificate: |
   -----BEGIN CERTIFICATE-----
   line1
 
   line3
   -----END CERTIFICATE-----
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
         let cert = secrets.get("certificate").unwrap();
@@ -765,7 +770,7 @@ trailing_spaces: value with trailing
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"# Mixed format test
+        let content = r"# Mixed format test
 simple_key: simple_value
 multiline_key: |
   line1
@@ -774,7 +779,7 @@ another_simple: another_value
 another_multiline: |
   block1
   block2
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -789,9 +794,9 @@ another_multiline: |
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"empty_multiline: |
+        let content = r"empty_multiline: |
 next_key: value
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -824,14 +829,14 @@ next_key: value
         let secrets_file = temp_dir.path().join("secrets");
 
         // Realistic SSH private key format
-        let content = r#"ssh_private_key: |
+        let content = r"ssh_private_key: |
   -----BEGIN OPENSSH PRIVATE KEY-----
   b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
   QyNTUxOQAAACDqZ3qJVZHqHQKBqQxFqH+jHqQxFqH+jHqQxFqH+jHqQxFqAAAAAJgM8uE
   -----END OPENSSH PRIVATE KEY-----
 
 api_key: simple_api_key_value
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
 
@@ -849,13 +854,13 @@ api_key: simple_api_key_value
         let temp_dir = tempdir().unwrap();
         let secrets_file = temp_dir.path().join("secrets");
 
-        let content = r#"database_config: |
+        let content = r"database_config: |
   host=localhost
   port=5432
   user=admin
   password=secret
   dbname=myapp
-"#;
+";
 
         let secrets = parse_secrets_content(content, &secrets_file).unwrap();
         let config = secrets.get("database_config").unwrap();

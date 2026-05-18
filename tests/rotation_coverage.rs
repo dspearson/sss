@@ -1,13 +1,17 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 #![allow(deprecated)]
 //! Rotation module coverage expansion tests (TEST-03)
 //!
 //! Targets the 93.6% uncovered paths in src/rotation.rs that are NOT covered
-//! by tests/rotation_security.rs:
+//! by `tests/rotation_security.rs`:
 //! - Old-key cryptographic invalidation after rotation (new key only)
 //! - Multi-user rotation: verify both users can actually decrypt with new key
 //! - Backup content is byte-identical to pre-rotation content
 //! - Partial failure recovery: read-only file retains original; others rotate
-//! - RotationResult field accuracy (duration > 0, exact counts)
+//! - `RotationResult` field accuracy (duration > 0, exact counts)
 
 use anyhow::Result;
 use std::fs;
@@ -255,7 +259,7 @@ fn test_backup_content_byte_identical_to_pre_rotation() -> Result<()> {
     Ok(())
 }
 
-/// Test: RotationOptions { no_backup: true } does NOT create any backup directory.
+/// Test: `RotationOptions` { `no_backup`: true } does NOT create any backup directory.
 #[test]
 fn test_rotation_with_no_backup_creates_no_backup_dir() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -278,7 +282,7 @@ fn test_rotation_with_no_backup_creates_no_backup_dir() -> Result<()> {
 
     // No .sss_backup_* directory should exist in root
     let backup_dirs: Vec<_> = fs::read_dir(root)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
@@ -289,7 +293,7 @@ fn test_rotation_with_no_backup_creates_no_backup_dir() -> Result<()> {
     assert!(
         backup_dirs.is_empty(),
         "No backup directory should be created when no_backup=true, found: {:?}",
-        backup_dirs.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        backup_dirs.iter().map(std::fs::DirEntry::file_name).collect::<Vec<_>>()
     );
 
     Ok(())
@@ -336,31 +340,28 @@ fn test_partial_failure_read_only_file_retains_old_encryption() -> Result<()> {
     perms.set_mode(0o644);
     fs::set_permissions(&file_b, perms)?;
 
-    match result {
-        Ok(rotation_result) => {
-            // At least one file must have failed (the read-only one)
-            assert!(
-                rotation_result.files_failed >= 1,
-                "Expected at least 1 failed file, got: {}",
-                rotation_result.files_failed
-            );
+    if let Ok(rotation_result) = result {
+        // At least one file must have failed (the read-only one)
+        assert!(
+            rotation_result.files_failed >= 1,
+            "Expected at least 1 failed file, got: {}",
+            rotation_result.files_failed
+        );
 
-            // The read-only file must NOT have been modified (old content preserved)
-            let b_after = fs::read_to_string(&file_b)?;
-            assert_eq!(
-                b_after, b_original_content,
-                "Read-only file must retain original encrypted content after partial failure"
-            );
-        }
-        Err(_) => {
-            // Acceptable: rotation may surface an error on partial failure.
-            // Verify file_b still has its original content.
-            let b_after = fs::read_to_string(&file_b)?;
-            assert_eq!(
-                b_after, b_original_content,
-                "Read-only file must retain original content even when rotation returns Err"
-            );
-        }
+        // The read-only file must NOT have been modified (old content preserved)
+        let b_after = fs::read_to_string(&file_b)?;
+        assert_eq!(
+            b_after, b_original_content,
+            "Read-only file must retain original encrypted content after partial failure"
+        );
+    } else {
+        // Acceptable: rotation may surface an error on partial failure.
+        // Verify file_b still has its original content.
+        let b_after = fs::read_to_string(&file_b)?;
+        assert_eq!(
+            b_after, b_original_content,
+            "Read-only file must retain original content even when rotation returns Err"
+        );
     }
 
     Ok(())
@@ -371,7 +372,7 @@ fn test_partial_failure_read_only_file_retains_old_encryption() -> Result<()> {
 // ============================================================================
 
 /// Test: rotation on a project with zero sealed files completes successfully
-/// with files_processed=0 and no errors.
+/// with `files_processed=0` and no errors.
 #[test]
 fn test_rotation_empty_project_zero_files_processed() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -402,7 +403,7 @@ fn test_rotation_empty_project_zero_files_processed() -> Result<()> {
 // RotationResult field accuracy
 // ============================================================================
 
-/// Test: RotationResult fields (files_processed, files_failed, duration) are
+/// Test: `RotationResult` fields (`files_processed`, `files_failed`, duration) are
 /// populated correctly for a 3-file rotation.
 #[test]
 fn test_rotation_result_fields_accurate() -> Result<()> {
@@ -449,10 +450,10 @@ fn test_rotation_result_fields_accurate() -> Result<()> {
 // ============================================================================
 
 /// Regression: .secrets files must be re-encrypted (not written as plaintext)
-/// after key rotation via RotationManager.
+/// after key rotation via `RotationManager`.
 ///
-/// Previously RotationManager::reencrypt_single_file passed "<content>" as the
-/// path to process_content, causing is_secrets_file to return false and the
+/// Previously `RotationManager::reencrypt_single_file` passed "<content>" as the
+/// path to `process_content`, causing `is_secrets_file` to return false and the
 /// decrypted plaintext to be written back without re-encryption.
 #[test]
 fn test_rotation_secrets_file_stays_encrypted() -> Result<()> {
@@ -501,7 +502,7 @@ fn test_rotation_secrets_file_stays_encrypted() -> Result<()> {
 /// Regression: after rotation, two different files containing the same secret
 /// value must receive different ciphertexts (per-file nonce uniqueness).
 ///
-/// Previously RotationManager::reencrypt_single_file passed "<content>" as the
+/// Previously `RotationManager::reencrypt_single_file` passed "<content>" as the
 /// path, so both files shared the same nonce derivation inputs and produced
 /// identical ciphertexts for identical plaintexts.
 #[test]

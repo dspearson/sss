@@ -502,10 +502,10 @@ fn apply_boundary_adjustments(text: &str, start: usize, end: usize) -> (usize, u
 
 /// Floor a byte index to the nearest preceding UTF-8 char boundary.
 ///
-/// For idx >= text.len(), pass through unchanged: callers (e.g.,
+/// For idx >= `text.len()`, pass through unchanged: callers (e.g.,
 /// `apply_marker_rule`) treat `new_end > edited_text.len()` as a signal that
 /// the marked region was deleted and suppress marker creation. Clamping to
-/// text.len() would erase that signal and incorrectly resurrect markers on
+/// `text.len()` would erase that signal and incorrectly resurrect markers on
 /// pure-deletion edits.
 fn floor_char_boundary(text: &str, idx: usize) -> usize {
     if idx >= text.len() {

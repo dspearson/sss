@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Property-based tests using proptest
 //!
 //! These tests verify invariants that should hold for all inputs.
@@ -77,7 +81,7 @@ proptest! {
     fn prop_content_preservation(
         content in "[a-z0-9 ]{1,50}"
     ) {
-        let source = format!("o+{{{}}}", content);
+        let source = format!("o+{{{content}}}");
         let edited = content.clone();
 
         if let Ok(result) = infer_markers(&source, &edited) {
@@ -107,8 +111,8 @@ proptest! {
         content in "[a-z]+",
         filler in "[a-z ]*"
     ) {
-        let source = format!("o+{{{}}} {}", content, filler);
-        let edited = format!("{} {}", content, filler);
+        let source = format!("o+{{{content}}} {filler}");
+        let edited = format!("{content} {filler}");
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Output should contain the marked content
@@ -128,8 +132,8 @@ proptest! {
     /// Property: No change means markers preserved
     #[test]
     fn prop_no_change_preserves_markers(content in "[a-z ]{1,50}") {
-        let source = format!("text o+{{{}}} more", content);
-        let edited = format!("text {} more", content);
+        let source = format!("text o+{{{content}}} more");
+        let edited = format!("text {content} more");
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Should have at least one marker
@@ -140,12 +144,12 @@ proptest! {
     /// Property: Propagation - marked content appears multiple times
     #[test]
     fn prop_propagation(content in "[a-z]{3,10}") {
-        let source = format!("o+{{{}}}", content);
-        let edited = format!("{} and {}", content, content);
+        let source = format!("o+{{{content}}}");
+        let edited = format!("{content} and {content}");
 
         if let Ok(result) = infer_markers(&source, &edited) {
             // Both instances should be marked
-            let marker_count = result.output.matches(&format!("⊕{{{}}}", content)).count();
+            let marker_count = result.output.matches(&format!("⊕{{{content}}}")).count();
             prop_assert!(marker_count >= 1);
         }
     }
@@ -154,11 +158,11 @@ proptest! {
     #[test]
     fn prop_user_marker_preservation(content in "[a-z]{3,10}") {
         let source = "plain text";
-        let edited = format!("plain o+{{{}}}",  content);
+        let edited = format!("plain o+{{{content}}}");
 
         if let Ok(result) = infer_markers(source, &edited) {
             // User marker should be converted to canonical form
-            let expected = format!("⊕{{{}}}", content);
+            let expected = format!("⊕{{{content}}}");
             assert!(result.output.contains(&expected));
         }
     }
@@ -198,7 +202,7 @@ proptest! {
     /// Property: Deletion should not create new markers
     #[test]
     fn prop_deletion_no_new_markers(content in "[a-z ]{10,30}") {
-        let source = format!("o+{{{}}} extra text", content);
+        let source = format!("o+{{{content}}} extra text");
         let edited = content.clone();
 
         if let Ok(result) = infer_markers(&source, &edited) {

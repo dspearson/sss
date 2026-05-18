@@ -110,18 +110,16 @@ fn unescape_default_delimiter(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.clone().next() {
-                Some('{') | Some('}') | Some('\\') => {
-                    // Escaped brace or backslash — emit the literal.
-                    // INVARIANT: chars.clone().next() returned Some(_) at the match
-                    // arm above, so the un-cloned chars iterator yields the same
-                    // value. .unwrap is unreachable. HARDEN-01 / 08-01.
-                    out.push(chars.next().unwrap());
-                    continue;
-                }
-                _ => {}
-            }
+        if ch == '\\'
+            && let Some('{' | '}' | '\\') = chars.clone().next()
+        {
+            // Escaped brace or backslash — emit the literal.
+            // Why: chars.clone().next() returned Some(_) at the match arm above,
+            // so the un-cloned chars iterator yields the same value. .unwrap is
+            // unreachable. HARDEN-01 / 08-01.
+            #[allow(clippy::unwrap_used)]
+            out.push(chars.next().unwrap());
+            continue;
         }
         out.push(ch);
     }
@@ -160,7 +158,7 @@ fn find_balanced_markers_with_prefix<'a>(
 
     while byte_pos < bytes.len() {
         // Try to match each prefix at current position
-        let mut matched: Option<(&str, usize, char, char)> = None;
+        let mut prefix_match: Option<(&str, usize, char, char)> = None;
 
         for &prefix in prefixes {
             let plen = prefix.len();
@@ -172,12 +170,12 @@ fn find_balanced_markers_with_prefix<'a>(
             let after_prefix = &content[byte_pos + plen..];
             let Some(open) = after_prefix.chars().next() else { continue };
             if let Some(close) = close_for_open(open) {
-                matched = Some((prefix, plen + open.len_utf8(), open, close));
+                prefix_match = Some((prefix, plen + open.len_utf8(), open, close));
                 break;
             }
         }
 
-        if let Some((prefix, header_len, open, close)) = matched {
+        if let Some((prefix, header_len, open, close)) = prefix_match {
             let marker_start = byte_pos;
             let content_start = byte_pos + header_len;
             let mut depth = 1u32;
@@ -283,7 +281,7 @@ fn classify_prefix(prefix: &str) -> MarkerKind {
 /// Converts <{ to ⊲{ for consistent marker style
 ///
 /// Fast-path: if content contains no "<{" sequences (the common case), returns
-/// a Cow::Borrowed referencing the original slice and avoids any allocation.
+/// a `Cow::Borrowed` referencing the original slice and avoids any allocation.
 fn normalize_secrets_markers(content: &str) -> std::borrow::Cow<'_, str> {
     if content.contains("<{") {
         std::borrow::Cow::Owned(content.replace("<{", "⊲{"))
@@ -731,10 +729,7 @@ impl Processor {
             result.push_str(&normalized_content[last_end..marker.start]);
 
             // Inline marker encryption directly into result to avoid intermediate String.
-            if !self.check_marker_size(&marker.content, "Plaintext") {
-                // Keep original marker if too large
-                result.push_str(&normalized_content[marker.start..marker.end]);
-            } else {
+            if self.check_marker_size(&marker.content, "Plaintext") {
                 let encrypted_result = if self.project_created.is_empty() {
                     encrypt_to_base64(&marker.content, &self.repository_key)
                 } else {
@@ -757,6 +752,9 @@ impl Processor {
                         result.push_str(&self.handle_encrypt_error(&e, original));
                     }
                 }
+            } else {
+                // Keep original marker if too large
+                result.push_str(&normalized_content[marker.start..marker.end]);
             }
 
             last_end = marker.end;
@@ -1620,8 +1618,7 @@ mod tests {
         let marker = format_marker("⊕", secret_value);
         assert!(
             !marker.starts_with("⊕{"),
-            "value with unbalanced `}}` must NOT use default {{}} delimiter, got: {}",
-            marker,
+            "value with unbalanced `}}` must NOT use default {{}} delimiter, got: {marker}",
         );
         // Full content round-trip through encrypt/decrypt.
         let document = format!("secret: {marker}\n");
@@ -1779,8 +1776,8 @@ mod tests {
     // Bug-fix regression: process_secrets_file_content path threading
     // =========================================================================
 
-    /// Regression: process_content_with_path must thread the actual file path
-    /// into process_secrets_file_content so the nonce is keyed to the path.
+    /// Regression: `process_content_with_path` must thread the actual file path
+    /// into `process_secrets_file_content` so the nonce is keyed to the path.
     ///
     /// - Same plaintext at different .secrets paths → different ciphertexts
     /// - Same path + same plaintext twice → identical ciphertext (deterministic)

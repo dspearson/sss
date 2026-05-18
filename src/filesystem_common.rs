@@ -212,9 +212,9 @@ mod tests {
     fn test_marker_detection_consistency() {
         // Verify byte and string versions stay in sync
         for marker in MARKER_PATTERNS {
-            let content = format!("test {}secret}}", marker);
-            assert!(has_any_markers(&content), "String version should detect marker: {}", marker);
-            assert!(has_any_markers_bytes(content.as_bytes()), "Byte version should detect marker: {}", marker);
+            let content = format!("test {marker}secret}}");
+            assert!(has_any_markers(&content), "String version should detect marker: {marker}");
+            assert!(has_any_markers_bytes(content.as_bytes()), "Byte version should detect marker: {marker}");
         }
     }
 

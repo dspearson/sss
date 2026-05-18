@@ -241,8 +241,9 @@ pub fn handle_process(matches: &ArgMatches) -> Result<()> {
 
 /// Process a file or stdin with a specific operation
 fn process_file_or_stdin(sub_matches: &ArgMatches, operation: &str) -> Result<()> {
-    // INVARIANT: clap declares `file` as required_unless_present="project"; the
+    // Why: clap declares `file` as required_unless_present="project"; the
     // dispatcher only routes here when `file` is supplied. HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
     let in_place = sub_matches.get_flag("in-place");
 
@@ -376,12 +377,11 @@ fn find_project_for_path<'a>(
             return None;
         }
         if let Some((proc, gs)) = projects.get(dir) {
-            return Some((
-                // SAFETY: the key exists, we can get a reference to it from the map
-                projects.keys().find(|k| *k == dir).unwrap(),
-                proc,
-                gs,
-            ));
+            // Why: dir was just confirmed to be a key in projects via .get() above;
+            // .keys().find() therefore yields Some(_). Infallible-by-construction.
+            #[allow(clippy::unwrap_used)]
+            let key_ref = projects.keys().find(|k| *k == dir).unwrap();
+            return Some((key_ref, proc, gs));
         }
         current = dir.parent();
     }
@@ -786,8 +786,9 @@ fn handle_edit_regular(file_path: &Path, processor: &Processor) -> Result<()> {
 
 /// Main edit handler - dispatches to FUSE or regular file handler
 pub fn handle_edit(_main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
-    // INVARIANT: clap declares `file` as required for the edit subcommand.
+    // Why: clap declares `file` as required for the edit subcommand.
     // HARDEN-01 / 08-01.
+    #[allow(clippy::unwrap_used)]
     let file_path_str = sub_matches.get_one::<String>("file").unwrap();
 
     if file_path_str == "-" {
@@ -986,8 +987,10 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_single_pattern_matches() {
-        let mut cfg = ProjectConfig::default();
-        cfg.ignore = Some("*.log".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built");
         assert!(gs.is_match("server.log"));
         assert!(!gs.is_match("server.txt"));
@@ -995,8 +998,10 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_multiple_patterns_match() {
-        let mut cfg = ProjectConfig::default();
-        cfg.ignore = Some("*.log build/*".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log build/*".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built");
         assert!(gs.is_match("a.log"));
         assert!(gs.is_match("build/foo"));
@@ -1005,10 +1010,12 @@ mod tests {
 
     #[test]
     fn test_build_ignore_globset_invalid_pattern_logs_and_continues() {
-        let mut cfg = ProjectConfig::default();
         // Mix one valid and one invalid pattern. The invalid one should be
         // skipped (warning emitted) without aborting the whole build.
-        cfg.ignore = Some("*.log [unterminated".to_string());
+        let cfg = ProjectConfig {
+            ignore: Some("*.log [unterminated".to_string()),
+            ..ProjectConfig::default()
+        };
         let gs = build_ignore_globset(&cfg).expect("globset built despite invalid entry");
         assert!(gs.is_match("foo.log"));
     }

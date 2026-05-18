@@ -1,5 +1,9 @@
-//! Direct coverage of every public method on HybridCryptoSuite, HybridKeyPair,
-//! and HybridPublicKey (TEST-07).
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+//! Direct coverage of every public method on `HybridCryptoSuite`, `HybridKeyPair`,
+//! and `HybridPublicKey` (TEST-07).
 //!
 //! Why: complements the property-test surface in `tests/cross_suite_property_test.rs`
 //! with one deterministic test per public method, so a tarpaulin baseline reaches
@@ -36,7 +40,7 @@ fn hybrid_public_key_from_bytes_too_short_returns_err() {
     let result = HybridPublicKey::from_bytes(&[0u8; 10]);
     assert!(result.is_err(), "from_bytes must reject a too-short slice");
     let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {}", msg);
+    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {msg}");
 }
 
 #[test]
@@ -47,7 +51,7 @@ fn hybrid_public_key_from_bytes_too_long_returns_err() {
     let result = HybridPublicKey::from_bytes(&too_long);
     assert!(result.is_err(), "from_bytes must reject a too-long slice");
     let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {}", msg);
+    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {msg}");
 }
 
 #[test]
@@ -123,8 +127,7 @@ fn hybrid_crypto_suite_seal_rejects_classic_public_key_returns_err() {
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("version mismatch") || msg.contains("classic public key"),
-        "expected version-mismatch error, got: {}",
-        msg
+        "expected version-mismatch error, got: {msg}"
     );
 }
 
@@ -139,8 +142,7 @@ fn hybrid_crypto_suite_open_rejects_classic_keypair_returns_err() {
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("version mismatch") || msg.contains("classic"),
-        "expected version-mismatch error, got: {}",
-        msg
+        "expected version-mismatch error, got: {msg}"
     );
 }
 
@@ -150,11 +152,11 @@ fn hybrid_crypto_suite_open_rejects_wrong_length_sealed_key_returns_err() {
     // any deviation must fail before KEM or AEAD is attempted.
     let kp = HybridKeyPair::generate().expect("keypair generation");
     let hybrid_kp = KeyPair::Hybrid(kp);
-    let short_encoded = BASE64_STANDARD.encode(&[0u8; 16]);
+    let short_encoded = BASE64_STANDARD.encode([0u8; 16]);
     let result = HybridCryptoSuite.open_repo_key(&short_encoded, &hybrid_kp);
     assert!(result.is_err(), "hybrid open must reject a wrong-length sealed key");
     let msg = format!("{}", result.unwrap_err());
-    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {}", msg);
+    assert!(msg.contains("wrong length"), "expected 'wrong length', got: {msg}");
 }
 
 #[test]
@@ -174,8 +176,7 @@ fn hybrid_crypto_suite_open_detects_aead_tamper_returns_err() {
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("authentication or decryption error"),
-        "expected 'authentication or decryption error', got: {}",
-        msg
+        "expected 'authentication or decryption error', got: {msg}"
     );
 }
 

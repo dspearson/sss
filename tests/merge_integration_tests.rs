@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Integration tests for smart merge/reconstruction
 //!
 //! These tests cover complex scenarios not covered by inline unit tests:
@@ -112,7 +116,7 @@ fn test_reconstruct_multiline_marker() -> Result<()> {
 
     // Should handle multiline markers correctly
     assert!(result.starts_with("⊕{"));
-    assert!(result.ends_with("}"));
+    assert!(result.ends_with('}'));
     Ok(())
 }
 
@@ -120,10 +124,10 @@ fn test_reconstruct_multiline_marker() -> Result<()> {
 fn test_reconstruct_very_long_multiline_marker() -> Result<()> {
     let mut lines = Vec::new();
     for i in 0..1000 {
-        lines.push(format!("line {}", i));
+        lines.push(format!("line {i}"));
     }
     let rendered_old = lines.join("\n");
-    let opened_old = format!("⊕{{{}}}", rendered_old);
+    let opened_old = format!("⊕{{{rendered_old}}}");
 
     // Remove last 100 lines
     let rendered_new = lines[..900].join("\n");
@@ -132,7 +136,7 @@ fn test_reconstruct_very_long_multiline_marker() -> Result<()> {
 
     // Should preserve marker structure
     assert!(result.starts_with("⊕{"));
-    assert!(result.ends_with("}"));
+    assert!(result.ends_with('}'));
     Ok(())
 }
 
@@ -343,11 +347,11 @@ fn test_reconstruct_special_characters() -> Result<()> {
 #[test]
 fn test_reconstruct_very_long_line() -> Result<()> {
     let secret = "x".repeat(10000);
-    let rendered_old = format!("key: {}", secret);
-    let opened_old = format!("key: ⊕{{{}}}", secret);
+    let rendered_old = format!("key: {secret}");
+    let opened_old = format!("key: ⊕{{{secret}}}");
 
     let new_secret = "y".repeat(10000);
-    let rendered_new = format!("key: {}", new_secret);
+    let rendered_new = format!("key: {new_secret}");
 
     let result = smart_reconstruct(&rendered_new, &opened_old, &rendered_old)?;
 

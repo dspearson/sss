@@ -1,8 +1,8 @@
 //! `sss envelope` subcommand group (Phase 19, D-11, PQSIG-06).
 //!
 //! Currently exposes a single verb: `sss envelope upgrade-sig`, which retro-fits
-//! a hybrid AND-composition signature onto a legacy un-signed (format_version=1)
-//! `.sss.toml` envelope, promoting it to format_version=2 in place, atomically.
+//! a hybrid AND-composition signature onto a legacy un-signed (`format_version=1`)
+//! `.sss.toml` envelope, promoting it to `format_version=2` in place, atomically.
 //!
 //! Future verbs (rotate-sig, dump-sig) can join this group cleanly per D-11.
 

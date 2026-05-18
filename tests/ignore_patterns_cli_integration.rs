@@ -1,3 +1,7 @@
+// Why: integration tests use .unwrap()/.expect()/panic! freely; test code is exempt
+// from the panic-surface lint policy per CONTEXT.md Area 1 carve-out.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 //! Integration tests for ignore patterns CLI commands
 //!
 //! Tests the full workflow of managing ignore patterns via CLI:
@@ -203,7 +207,7 @@ fn test_long_pattern_list() -> Result<()> {
     // Create 50 patterns
     let mut pattern_vec = Vec::new();
     for i in 0..50 {
-        pattern_vec.push(format!("*.ext{}", i));
+        pattern_vec.push(format!("*.ext{i}"));
     }
     let pattern_str = pattern_vec.join(" ");
 

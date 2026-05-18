@@ -2,7 +2,6 @@
 //!
 //! This module handles launching external editors with appropriate security flags
 //! to prevent sensitive data from leaking via swap files, backups, or temp files.
-#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use std::env;

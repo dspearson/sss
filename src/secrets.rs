@@ -1,8 +1,9 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::unnecessary_wraps,   // collect_multiline_value returns Result for API consistency
-    clippy::doc_markdown,        // doc_list_overindented false positive on YAML block scalars
-)]
+// Why: doc_markdown false positives on YAML block-scalar examples in the
+// module-level rustdoc (Multi-Line YAML Values section); the lint flags
+// "values" / "field" / etc. as missing-backticks in narrative prose.
+// missing_errors_doc + unnecessary_wraps are workspace-suppressed in
+// Cargo.toml [lints.clippy]; no per-file allow needed for those.
+#![allow(clippy::doc_markdown)]
 
 use anyhow::{anyhow, Result};
 use regex::Regex;

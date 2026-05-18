@@ -1,9 +1,3 @@
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc, // regex expects are compile-time validated patterns
-    clippy::unnecessary_wraps,  // Result return kept for API consistency
-)]
-
 use anyhow::{anyhow, Result};
 use globset::GlobSet;
 use regex::Regex;

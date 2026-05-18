@@ -3,7 +3,6 @@
 //! This module provides optional integration with the OS keyring (macOS Keychain,
 //! Windows Credential Manager, Linux Secret Service) for storing private keys
 //! without password protection while maintaining security.
-#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use keyring::Entry;

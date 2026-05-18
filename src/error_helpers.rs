@@ -2,7 +2,6 @@
 //!
 //! This module provides common error handling patterns used throughout the SSS codebase
 //! to maintain consistency and reduce repetitive error conversion code.
-#![allow(clippy::missing_errors_doc)]
 
 use anyhow::{anyhow, Result};
 use std::path::Path;

@@ -2,7 +2,10 @@
 //!
 //! This module provides common functionality used across multiple command handlers,
 //! eliminating code duplication and ensuring consistent behavior.
-#![allow(clippy::missing_errors_doc, clippy::items_after_statements)]
+// Why: items_after_statements is NOT in the workspace pedantic suppression set per
+// CONTEXT.md Area 1; survives at file scope. missing_errors_doc was removed as
+// redundant since Plan 21-01 added workspace-level suppression.
+#![allow(clippy::items_after_statements)]
 
 use anyhow::{anyhow, Result};
 use clap::ArgMatches;
@@ -332,11 +335,14 @@ mod tests {
         // Restore original values
         // SAFETY: test-only env var restoration; single-threaded test context.
         if let Some(val) = original {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::set_var("USER", val); }
         } else {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::remove_var("USER"); }
         }
         if let Some(val) = original_sss_user {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::set_var("SSS_USER", val); }
         }
     }
@@ -373,14 +379,18 @@ mod tests {
         // Restore original values
         // SAFETY: test-only env var restoration; single-threaded test context.
         if let Some(val) = original_user {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::set_var("USER", val); }
         }
         if let Some(val) = original_username {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::set_var("USERNAME", val); }
         } else {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::remove_var("USERNAME"); }
         }
         if let Some(val) = original_sss_user {
+            // SAFETY: env var mutation unsafe since Rust 1.83; #[serial] test, single-threaded.
             unsafe { env::set_var("SSS_USER", val); }
         }
     }

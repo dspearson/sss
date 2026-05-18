@@ -18,8 +18,7 @@ pub use classic::{
     encrypt_to_base64_deterministic, ClassicKeyPair,
     ClassicSuite, Key, KeyPair, PublicKey, RepositoryKey, SecretKey,
 };
-// Retained for integration-test wire-format compatibility only; new code must
-// use ClassicSuite.seal_repo_key / open_repo_key via the CryptoSuite trait.
+// Why: open_repository_key + seal_repository_key are the v1.x free-function forms retained for integration-test wire-format compatibility only; new code must use ClassicSuite.seal_repo_key / open_repo_key via the CryptoSuite trait; the public re-export with #[allow(deprecated)] preserves the existing .sss.toml ciphertext read path until the v2.4 migration plan removes the deprecated entry points.
 #[allow(deprecated)]
 pub use classic::{open_repository_key, seal_repository_key};
 pub use suite::{CryptoSuite, Suite};
@@ -27,8 +26,7 @@ pub use suite::{CryptoSuite, Suite};
 #[cfg(feature = "hybrid")]
 pub use hybrid::{HybridCryptoSuite, HybridKeyPair, HybridPublicKey};
 
-// Keep the internal `encrypt_internal` reachable from keystore etc. exactly
-// as before — it was `pub(crate)` in the old flat module and must remain so.
+// Why: keep the internal encrypt_internal reachable from keystore etc. exactly as before — it was pub(crate) in the old flat module and must remain so; the unused_imports allow guards against feature-flag arms where this re-export appears unused at compile time, while the symbol remains required by other modules' visibility contract.
 #[allow(unused_imports)]
 pub(crate) use classic::encrypt_internal;
 

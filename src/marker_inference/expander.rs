@@ -1,10 +1,12 @@
 //! Marker expansion rules (Step 5)
 //!
 //! Apply the 5 core expansion rules to determine which content should be marked.
+
+// Why: cast_possible_wrap (usize→isize for signed offset arithmetic), cast_sign_loss (isize→usize after .max(0) guard), and needless_continue (explicit continue after early-return improves rule readability) are deliberate at the module scope because the expansion-rule dispatch loop is the load-bearing data-flow site and refactoring each call site to avoid the casts would obscure the rule numbering documented in the file rustdoc.
 #![allow(
-    clippy::cast_possible_wrap,  // usize→isize for signed offset arithmetic
-    clippy::cast_sign_loss,      // isize→usize after .max(0) guard
-    clippy::needless_continue,   // explicit continue after early-return improves rule readability
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::needless_continue,
 )]
 
 use super::types::{Marker, MappedChange, UserMarker};
@@ -18,7 +20,8 @@ use super::types::{Marker, MappedChange, UserMarker};
 /// 3. **Ambiguous Adjacency (Left-Bias)**: Adjacent to multiple markers → merge with left
 /// 4. **Preservation of Separate Markers**: Change affects only one → preserve separation
 /// 5. **Unmarked Content Modifications**: No adjacent/overlapping markers → handled by propagation
-#[allow(clippy::needless_pass_by_value)] // Vec owned by caller; slice would require caller refactor
+// Why: Vec is owned by the caller (the rule-dispatch entry point); rewriting the signature to take a slice would force a caller refactor across the marker-inference module without audit benefit.
+#[allow(clippy::needless_pass_by_value)]
 pub fn apply_expansion_rules(
     changes: Vec<MappedChange>,
     original_markers: &[Marker],
@@ -140,7 +143,8 @@ fn is_only_adjacent(
 }
 
 /// Process all grouped changes according to expansion rules
-#[allow(clippy::if_not_else)] // early-continue then else-if is clearest flow for rule dispatch
+// Why: early-continue then else-if is the clearest flow for rule dispatch in this hot path; inverting the condition would require restructuring three nested rule branches.
+#[allow(clippy::if_not_else)]
 fn process_grouped_changes(
     grouped: std::collections::HashMap<Vec<usize>, Vec<&MappedChange>>,
     original_markers: &[Marker],

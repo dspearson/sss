@@ -926,15 +926,13 @@ created = "2026-01-01T00:00:00Z"
 
     #[test]
     fn test_project_config_suite_returns_classic_for_v1() {
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "1.0".to_string();
+        let cfg = ProjectConfig { version: "1.0".to_string(), ..Default::default() };
         assert_eq!(cfg.suite().unwrap(), Suite::Classic);
     }
 
     #[test]
     fn test_project_config_suite_returns_error_for_unknown() {
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "3.14".to_string();
+        let cfg = ProjectConfig { version: "3.14".to_string(), ..Default::default() };
         let err = cfg.suite().unwrap_err().to_string();
         assert!(err.contains("unknown .sss.toml version"));
     }
@@ -1027,8 +1025,7 @@ created = "2026-01-01T00:00:00Z"
 
     #[test]
     fn test_project_config_suite_returns_hybrid_for_v2() {
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "2.0".to_string();
+        let cfg = ProjectConfig { version: "2.0".to_string(), ..Default::default() };
         assert_eq!(
             cfg.suite().unwrap(),
             Suite::Hybrid,

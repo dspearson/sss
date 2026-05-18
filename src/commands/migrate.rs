@@ -210,8 +210,7 @@ mod tests {
         repo_key: &RepositoryKey,
     ) -> ProjectConfig {
         use crate::crypto::ClassicSuite;
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "1.0".to_string();
+        let mut cfg = ProjectConfig { version: "1.0".to_string(), ..Default::default() };
         for (username, hkp) in users {
             let classic_kp = crate::crypto::KeyPair::generate().unwrap();
             let classic_pk = classic_kp.public_key();
@@ -324,8 +323,7 @@ mod tests {
         // Ensures a classic KeyPair's public_key() is found by scanning config.users[*].public.
         let alice_kp = KeyPair::generate().unwrap();
         let repo_key = RepositoryKey::new();
-        let mut cfg = ProjectConfig::default();
-        cfg.version = "1.0".to_string();
+        let mut cfg = ProjectConfig { version: "1.0".to_string(), ..Default::default() };
         cfg.users.insert("alice".to_string(), UserConfig {
             public: alice_kp.public_key().to_base64(),
             sealed_key: ClassicSuite.seal_repo_key(&repo_key, &alice_kp.public_key()).unwrap(),
@@ -458,8 +456,7 @@ mod tests {
         (1usize..=4).prop_map(|n_users| {
             use crate::crypto::ClassicSuite;
             let repo_key = RepositoryKey::new();
-            let mut cfg = ProjectConfig::default();
-            cfg.version = "1.0".to_string();
+            let mut cfg = ProjectConfig { version: "1.0".to_string(), ..Default::default() };
             for i in 0..n_users {
                 let classic_kp = KeyPair::generate().expect("classic kp");
                 let hybrid_kp = HybridKeyPair::generate().expect("hybrid kp");

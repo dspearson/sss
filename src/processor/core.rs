@@ -197,11 +197,11 @@ fn find_balanced_markers_with_prefix<'a>(
                 if escapes_enabled && ch == '\\' {
                     // Peek the next char — if it's one of the escape targets,
                     // consume it and continue without touching depth.
-                    if let Some((_, next)) = iter.clone().next() {
-                        if next == '{' || next == '}' || next == '\\' {
-                            iter.next();
-                            continue;
-                        }
+                    if let Some((_, next)) = iter.clone().next()
+                        && (next == '{' || next == '}' || next == '\\')
+                    {
+                        iter.next();
+                        continue;
                     }
                     continue;
                 }

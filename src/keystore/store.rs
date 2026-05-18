@@ -412,7 +412,7 @@ impl Keystore {
         }
 
         // Sort by public-key base64 for deterministic ordering.
-        keypairs.sort_by(|a, b| b.public_key().to_base64().cmp(&a.public_key().to_base64()));
+        keypairs.sort_by_key(|kp| std::cmp::Reverse(kp.public_key().to_base64()));
 
         Ok(keypairs)
     }
@@ -506,7 +506,7 @@ impl Keystore {
         if let Some(ref enc_hybrid_b64) = stored.hybrid_encrypted_secret_key.clone() {
             use base64::prelude::BASE64_STANDARD;
             use zeroize::Zeroizing;
-            let raw_hybrid: Zeroizing<Vec<u8>> = if let Some(ref old_pw) = old_password {
+            let raw_hybrid: Zeroizing<Vec<u8>> = if let Some(old_pw) = old_password {
                 let old_salt_str = stored
                     .salt
                     .as_ref()
@@ -745,8 +745,8 @@ impl Keystore {
         }
         let content = fs::read_to_string(&key_file)
             .map_err(|e| anyhow!("keystore: read key file (get_current_stored_raw) for key_id={}: {}", key_id, e))?;
-        Ok(toml::from_str(&content)
-            .map_err(|e| anyhow!("keystore: parse-stored-toml (get_current_stored_raw) for key_id={}: {}", key_id, e))?)
+        toml::from_str(&content)
+            .map_err(|e| anyhow!("keystore: parse-stored-toml (get_current_stored_raw) for key_id={}: {}", key_id, e))
     }
 
     /// Store a dual-suite keypair with optional password protection.
@@ -892,7 +892,7 @@ impl Keystore {
                 let created_at = chrono::Utc::now();
                 let public_key_b64 =
                     KeyPair::Classic(classic.clone()).public_key().to_base64();
-                let hybrid_public_key_b64 = BASE64_STANDARD.encode(&hybrid.public_bytes);
+                let hybrid_public_key_b64 = BASE64_STANDARD.encode(hybrid.public_bytes);
 
                 // D-08 / D-19 canonical payload (identity-bearing public fields only)
                 let payload = build_signed_payload(
@@ -1048,7 +1048,7 @@ impl Keystore {
                     };
 
                 // Append hybrid + sig fields — all classic fields are untouched (KEYSTORE-03)
-                let hybrid_public_key_b64 = BASE64_STANDARD.encode(&hybrid.public_bytes);
+                let hybrid_public_key_b64 = BASE64_STANDARD.encode(hybrid.public_bytes);
                 stored.hybrid_public_key = Some(hybrid_public_key_b64.clone());
                 stored.hybrid_encrypted_secret_key = Some(enc_hybrid);
 

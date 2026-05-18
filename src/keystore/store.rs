@@ -134,18 +134,18 @@ impl Keystore {
     fn create_with_directory(keys_dir: PathBuf, kdf_params: KdfParams, use_keyring: bool) -> Result<Self> {
         // Ensure directory exists
         fs::create_dir_all(&keys_dir)
-            .map_err(|e| anyhow!("keystore: dir-create {keys_dir:?}: {e}"))?;
+            .map_err(|e| anyhow!("keystore: dir-create {}: {e}", keys_dir.display()))?;
 
         // Set secure permissions on the directory
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&keys_dir)
-                .map_err(|e| anyhow!("keystore: stat keys-dir {keys_dir:?}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: stat keys-dir {}: {e}", keys_dir.display()))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o700); // Owner read/write/execute only
             fs::set_permissions(&keys_dir, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on keys-dir {keys_dir:?}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on keys-dir {}: {e}", keys_dir.display()))?;
         }
 
         // Validate keyring availability if requested
@@ -259,18 +259,18 @@ impl Keystore {
         let content = toml::to_string_pretty(&stored_keypair)
             .map_err(|e| anyhow!("keystore: serialise stored-keypair toml for key_id={key_id}: {e}"))?;
         fs::write(&key_file, content)
-            .map_err(|e| anyhow!("keystore: write key file {key_file:?} for key_id={key_id}: {e}"))?;
+            .map_err(|e| anyhow!("keystore: write key file {} for key_id={key_id}: {e}", key_file.display()))?;
 
         // Set secure permissions on the key file
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let metadata = fs::metadata(&key_file)
-                .map_err(|e| anyhow!("keystore: stat key file {key_file:?} for key_id={key_id}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: stat key file {} for key_id={key_id}: {e}", key_file.display()))?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o600); // Owner read/write only
             fs::set_permissions(&key_file, perms)
-                .map_err(|e| anyhow!("keystore: set-permissions on key file {key_file:?} for key_id={key_id}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: set-permissions on key file {} for key_id={key_id}: {e}", key_file.display()))?;
         }
 
         // Update "current" symlink to point to this key
@@ -391,10 +391,10 @@ impl Keystore {
         let mut keypairs = Vec::new();
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -403,7 +403,7 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)
-                .map_err(|e| anyhow!("keystore: read key file {path:?}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: read key file {}: {e}", path.display()))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content)
                 && let Ok(keypair) = self.decrypt_stored_keypair(&stored_keypair, password) {
                     keypairs.push(keypair);
@@ -421,10 +421,10 @@ impl Keystore {
         let mut count = 0;
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             if path.extension().is_some_and(|ext| ext == "toml") {
@@ -671,10 +671,10 @@ impl Keystore {
         let mut keys = Vec::new();
 
         for entry in fs::read_dir(&self.keys_dir)
-            .map_err(|e| anyhow!("keystore: read keys-dir {:?}: {}", self.keys_dir, e))?
+            .map_err(|e| anyhow!("keystore: read keys-dir {}: {}", self.keys_dir.display(), e))?
         {
             let entry = entry
-                .map_err(|e| anyhow!("keystore: iter keys-dir entry {:?}: {}", self.keys_dir, e))?;
+                .map_err(|e| anyhow!("keystore: iter keys-dir entry {}: {}", self.keys_dir.display(), e))?;
             let path = entry.path();
 
             // Skip non-TOML files and the "current" symlink/file
@@ -683,7 +683,7 @@ impl Keystore {
             }
 
             let content = fs::read_to_string(&path)
-                .map_err(|e| anyhow!("keystore: read key file {path:?}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: read key file {}: {e}", path.display()))?;
             if let Ok(stored_keypair) = toml::from_str::<StoredKeyPair>(&content) {
                 keys.push((stored_keypair.uuid.clone(), stored_keypair));
             }
@@ -703,7 +703,7 @@ impl Keystore {
         {
             // On Unix, read the symlink target
             let target = fs::read_link(&current_path)
-                .map_err(|e| anyhow!("keystore: read current symlink {current_path:?}: {e}"))?;
+                .map_err(|e| anyhow!("keystore: read current symlink {}: {e}", current_path.display()))?;
             let filename = target
                 .file_name()
                 .ok_or_else(|| anyhow!("Invalid current symlink target"))?

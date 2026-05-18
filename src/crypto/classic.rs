@@ -461,10 +461,10 @@ pub fn seal_repository_key(
     let repo_key_bytes = repo_key.to_base64().into_bytes();
     let mut sealed = vec![0u8; repo_key_bytes.len() + SEALED_BOX_OVERHEAD];
 
-    // SAFETY: `sealed` is sized to fit `repo_key_bytes.len() + SEALED_BOX_OVERHEAD`,
-    // which is exactly what `crypto_box_seal` writes; `repo_key_bytes`/`pk_bytes` are
-    // valid Vec/array pointers. libsodium returns 0 on success and no writes on
-    // failure. Init guaranteed by the preceding `ensure_sodium_init()` call.
+    // `sealed` is sized to fit `repo_key_bytes.len() + SEALED_BOX_OVERHEAD`, which is
+    // exactly what `crypto_box_seal` writes; `repo_key_bytes`/`pk_bytes` are valid
+    // pointers. libsodium returns 0 on success and no writes on failure.
+    // SAFETY: libsodium init via preceding ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_box_seal(
             sealed.as_mut_ptr(),
@@ -521,10 +521,10 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
 
     let mut opened = vec![0u8; sealed_bytes.len() - SEALED_BOX_OVERHEAD];
 
-    // SAFETY: `opened` is sized to `sealed_bytes.len() - SEALED_BOX_OVERHEAD`, the
-    // exact byte count `crypto_box_seal_open` writes on success. Input/key pointers
-    // refer to live data of validated lengths. Returns 0 on success, !=0 on MAC/decrypt
-    // failure with no writes. Init guaranteed by the caller-side ensure_sodium_init().
+    // `opened` is sized to `sealed_bytes.len() - SEALED_BOX_OVERHEAD`, the exact byte
+    // count `crypto_box_seal_open` writes on success. Input/key pointers refer to live
+    // data of validated lengths. Returns 0 on success, !=0 on MAC/decrypt failure.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_box_seal_open(
             opened.as_mut_ptr(),
@@ -584,11 +584,11 @@ fn derive_nonce(
 
     let mut nonce = [0u8; SYMMETRIC_NONCE_SIZE];
 
-    // SAFETY: `nonce` is a SYMMETRIC_NONCE_SIZE (24-byte) stack buffer; output length
-    // passed to libsodium matches. `input`/`key.0`/`personal_padded` are valid Vec/array
-    // pointers with consistent (ptr, len) pairs. `std::ptr::null()` is accepted by
-    // libsodium for the unused salt parameter. Returns 0 on success. Init guaranteed
-    // by the caller-side ensure_sodium_init().
+    // `nonce` is a SYMMETRIC_NONCE_SIZE (24-byte) stack buffer; output length passed to
+    // libsodium matches. `input`/`key.0`/`personal_padded` are valid pointers with
+    // consistent (ptr, len) pairs. `std::ptr::null()` is accepted by libsodium for the
+    // unused salt parameter. Returns 0 on success.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_generichash_blake2b_salt_personal(
             nonce.as_mut_ptr(),                      // output
@@ -632,11 +632,11 @@ pub(crate) fn encrypt_internal(plaintext: &[u8], key: &Key) -> Result<Vec<u8>> {
     // Store nonce at beginning
     result[0..SYMMETRIC_NONCE_SIZE].copy_from_slice(&nonce);
 
-    // SAFETY: `result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE)` is in-bounds (allocation is
-    // SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE bytes). `plaintext` is a
-    // valid Vec/slice with matching length; `nonce`/`key.0` are valid stack/array buffers
-    // of the libsodium-expected sizes. Returns 0 on success; non-zero is propagated as an
-    // error. Init guaranteed by the caller-side ensure_sodium_init().
+    // `result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE)` is in-bounds for the allocation
+    // (SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE bytes). `plaintext`
+    // has matching length; `nonce`/`key.0` are valid pointers of libsodium-expected size.
+    // Returns 0 on success.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -677,11 +677,11 @@ pub fn encrypt(
     // Store nonce at beginning
     result[0..SYMMETRIC_NONCE_SIZE].copy_from_slice(&nonce);
 
-    // SAFETY: same invariants as `encrypt_internal` above; `result.as_mut_ptr().add(...)`
-    // is in-bounds for the SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE
-    // allocation; `plaintext`/`nonce`/`key.0` are valid pointers with libsodium-expected
-    // lengths. Init guaranteed by the caller-side ensure_sodium_init(). This is the
+    // Same invariants as `encrypt_internal` above; `result.as_mut_ptr().add(...)` is
+    // in-bounds for the SYMMETRIC_NONCE_SIZE + plaintext.len() + SYMMETRIC_MAC_SIZE
+    // allocation; `plaintext`/`nonce`/`key.0` are valid pointers. This is the
     // deterministic-nonce variant — nonce derived from project_timestamp/path/plaintext.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_easy(
             result.as_mut_ptr().add(SYMMETRIC_NONCE_SIZE), // ciphertext output (after nonce)
@@ -713,11 +713,11 @@ pub fn decrypt(ciphertext_with_nonce: &[u8], key: &Key) -> Result<Vec<u8>> {
     // Allocate space for plaintext (ciphertext length minus MAC)
     let mut plaintext = vec![0u8; ciphertext.len() - SYMMETRIC_MAC_SIZE];
 
-    // SAFETY: `plaintext` is sized to `ciphertext.len() - SYMMETRIC_MAC_SIZE`, the exact
-    // byte count libsodium writes on success. Input/nonce/key pointers refer to validated
+    // `plaintext` is sized to `ciphertext.len() - SYMMETRIC_MAC_SIZE`, the exact byte
+    // count libsodium writes on success. Input/nonce/key pointers refer to validated
     // slices with consistent (ptr, len) pairs. Returns 0 on success; non-zero indicates
-    // MAC/decrypt failure with no writes. Init guaranteed by the caller-side
-    // ensure_sodium_init().
+    // MAC/decrypt failure with no writes.
+    // SAFETY: libsodium init via caller-side ensure_sodium_init(); invariants above.
     unsafe {
         let ret = sodium::crypto_secretbox_xchacha20poly1305_open_easy(
             plaintext.as_mut_ptr(),  // plaintext output

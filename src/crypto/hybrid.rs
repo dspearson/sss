@@ -685,10 +685,9 @@ mod tests {
         unsafe { ManuallyDrop::drop(&mut wrapped) };
 
         // Every byte of the derived key must be zero after Zeroizing's drop.
-        // SAFETY: raw_ptr still points into live stack storage owned by
-        // `wrapped` (ManuallyDrop leaves the storage intact); reading those
-        // bytes is well-defined.
         let all_zero_post_drop = (0..32).all(|i| {
+            // SAFETY: raw_ptr still points into live stack storage owned by `wrapped`
+            // (ManuallyDrop leaves the storage intact); reading those bytes is defined.
             let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
             byte == 0
         });

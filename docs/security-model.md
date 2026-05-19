@@ -679,3 +679,38 @@ Phase 9 (THREAT-01..04) consumes this section as input to the threat model.
 - [Marker format details](./marker-format.md)
 - [trelis (experimental KEM library)](https://github.com/dspearson/trelis)
 - [BLAKE3](https://github.com/BLAKE3-team/BLAKE3)
+
+## Constant-Time Considerations
+
+Phase 23 / MEMSAFE-06 — v2.3 decision documented per **D-V23-03** (locked 2026-05-17).
+
+### Per-leg envelope-sig error surface (out of scope for v2.3)
+
+The Phase 19 envelope-sig verify path reports per-leg failures (`Ed448 signature failed` vs `ML-DSA-65 signature failed` vs `both legs failed`) for operator debuggability when an envelope fails verification. This is **not** constant-time: the timing difference between the three error paths is observable to an attacker who can repeatedly invoke verify on chosen inputs.
+
+**Decision (locked per D-V23-03):** The timing channel is **out of scope for v2.3**. Rationale:
+
+- Envelopes are **at rest** (committed to git, read locally by the same user who wrote them), not live-submitted over a network. There is no live attacker who can repeatedly probe verify-error timing.
+- **Operator debuggability** — knowing which leg failed when an envelope cannot be verified — is more valuable than the side-channel resistance gained by collapsing all three errors to a single constant-time `Err("envelope signature verification failed")`.
+- Trade-off accepted: if a future deployment moves envelope-sig to live submission (e.g. an agent IPC RPC that accepts an envelope from a remote peer for verification), this decision **must** be revisited. The revisit triggers below cite the exact conditions.
+
+### Revisit triggers
+
+The constant-time decision must be revisited when **any** of these become true:
+
+- Envelope-sig verify is exposed via a live-submitted RPC (`sss-agent` IPC accepts an envelope from a remote peer, network protocol, etc.).
+- The same Ed448/ML-DSA-65 leg-pair is used for a high-value online signing surface (authentication tokens, payment intents, anything live-submitted).
+- A side-channel attack on hybrid AND-composition signatures is published that materially changes the threat model documented in **§ Hybrid Trust Boundaries**.
+- A third-party auditor at AUDIT-01 requests the timing channel be closed regardless of the at-rest threat model.
+
+### Related (in scope this milestone)
+
+- **Plan 23-04** `scripts/check-mem-forget.sh` + `.github/workflows/ci-matrix.yml` step — complementary belt-and-braces gate for the zeroisation-defeat anti-pattern (Phase 21 `clippy::mem_forget = "deny"` covers compile-time).
+- **Plan 21-01** `[lints.clippy]` block in `Cargo.toml` — `unwrap_used = "deny"` / `expect_used = "deny"` / `panic = "deny"` in non-test code forces explicit error handling on the verify path (which preserves the per-leg granularity we deliberately keep).
+- **v2.1 Phase 9** `## Hybrid Trust Boundaries` (earlier in this doc) — defines the threat-model layer this constant-time decision sits inside.
+
+### Implementation references
+
+- `src/envelope_sig.rs::verify_envelope` — the per-leg error path under the at-rest threat model.
+- `src/keystore/sig.rs::verify_stored_signature` — same shape for keystore entries; same decision applies.
+- `docs/CRYPTOGRAPHY.md § Hybrid AND-composition signatures` — the semantic spec the runtime preserves; references this constant-time decision by anchor.

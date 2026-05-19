@@ -630,6 +630,7 @@ See [docs/TESTING.md](docs/TESTING.md) for the full four-tier testing guide (def
 | [docs/SECRETS_PARSING_GUIDE.md](docs/SECRETS_PARSING_GUIDE.md) | Secrets file parsing and integration guide |
 | [docs/IGNORE_PATTERNS.md](docs/IGNORE_PATTERNS.md) | Ignore pattern syntax and behaviour |
 | [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) | Clippy strictness contract: enabled lints, `// Why:` requirement, evolution workflow |
+| [docs/SUPPLY-CHAIN.md](docs/SUPPLY-CHAIN.md) | Supply-chain policy: cargo-deny strictness, cargo-vet adoption, vendored deps, trelis pin invariant, evolution workflow |
 | [docs/security-depth.md](docs/security-depth.md) | Defence-in-depth posture: miri coverage scope, sanitizer coverage, supply chain, reproducible builds, audit packet |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Protocol specification |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability disclosure |

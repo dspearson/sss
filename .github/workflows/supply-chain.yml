@@ -1,0 +1,304 @@
+# Supply Chain — weekly cargo-deny + cargo-vet + trelis-pin invariant (SUPPLY-04 + SUPPLY-05)
+#
+# Purpose
+# -------
+# Consolidated supply-chain gate for v2.3 Phase 24. Three gate jobs +
+# one advisory job + one Phase-25 forward-pointer:
+#   - deny: `cargo deny check` against the Phase 24 deny.toml strictness
+#     uplift (multiple-versions = "deny" + curated skip list + unsound =
+#     "all" + RUSTSEC ignore ledger). GATE.
+#   - vet: `cargo vet check` against supply-chain/audits.toml +
+#     supply-chain/config.toml + supply-chain/imports.lock (Plan 24-02
+#     Mozilla + Google imports + [policy.trelis-*] + [policy.rust-9p]).
+#     GATE.
+#   - trelis-pin: grep-count invariant on the pinned trelis git rev
+#     5374dff482ba94a94695794b5e4554f908eb0d4d across Cargo.toml +
+#     docs/security-model.md + docs/CRYPTOGRAPHY.md + supply-chain/config.toml.
+#     Drift in any file fails the build. GATE.
+#   - geiger: `cargo geiger` informational unsafe-block surface count
+#     (MEMSAFE-07 / Phase 23). ADVISORY (continue-on-error).
+#   - auditable-stub: Phase 25 BUILD-04 forward-pointer; comment-only
+#     placeholder until that phase wires `cargo auditable build` into
+#     the release artefact pipeline.
+#
+# Decision references
+# -------------------
+# - SUPPLY-01 (Plan 24-01): deny.toml strictness uplift; the policy this
+#   workflow gates against.
+# - SUPPLY-02 (Plan 24-02): cargo-vet adoption at supply-chain/; Mozilla +
+#   Google imports + [policy.<crate>] entries for trelis-* + rust-9p.
+# - SUPPLY-04 (REQUIREMENTS.md): consolidated supply-chain CI workflow.
+# - SUPPLY-05 (REQUIREMENTS.md): trelis-pin grep invariant; live-discovered
+#   count = 10 occurrences across 4 files at Phase 24 close (see
+#   trelis-pin job EXPECTED entries below).
+# - CONTEXT.md weekly cron lock: Friday 03:00 UTC. miri.yml runs Sunday;
+#   sanitizer.yml runs Saturday. Friday is the third offset slot for the
+#   v2.3 scheduled-only workflow triad.
+# - CONTEXT.md trigger lock: pull_request added (PRs surface dep drift
+#   early). Per-push on master REJECTED (runner cost — weekly cron +
+#   PR trigger covers the common cases).
+# - D-SAN-1 inherited posture: linux-x86_64 ubuntu-24.04 only. Supply-chain
+#   tools are platform-agnostic; no need for a matrix.
+# - Pinned stable toolchain (CONTEXT.md): cargo-deny + cargo-vet do NOT
+#   need nightly; stable is the audit-defensible baseline. Differs from
+#   miri.yml + sanitizer.yml which pin nightly-2026-04-15 for -Zsanitizer.
+#
+# Scope
+# -----
+# linux-x86_64 only (`ubuntu-24.04`). All jobs run on the same runner;
+# they could parallelise but the wall-clock is dominated by `cargo deny`
+# and `cargo vet check` which are I/O-bound on the registry fetch (~1 min
+# each) — keeping them serial avoids registry-fetch thrash.
+#
+# Refresh cadence
+# ---------------
+# - deny.toml skip-list refresh dates: 30-day SLA per D-DENY-1. The
+#   30-day-past-refresh-date alert is an INFORMATIONAL line in the deny
+#   job output for v2.3 (CONTEXT.md Claude's Discretion §3: hard-fail-on-
+#   stale-skip is v2.4 enhancement).
+# - supply-chain/imports.lock: refreshed via `cargo vet regenerate imports`
+#   in a deliberate PR. CI does NOT auto-bump (lock semantics: a fresh
+#   pull from Mozilla / Google must be deliberately reviewed).
+# - trelis-pin EXPECTED counts: updated atomically when the pinned SHA
+#   itself bumps OR when references are added/removed. This workflow's
+#   EXPECTED array is the SoT for the count.
+#
+# Cross-references
+# ----------------
+# - deny.toml (Plan 24-01) — the policy this workflow gates.
+# - supply-chain/{config,audits}.toml + imports.lock (Plan 24-02) — the
+#   attestation database.
+# - docs/SUPPLY-CHAIN.md (Plan 24-04) — policy-of-record document
+#   describing the rationale + drift mitigation procedure for this
+#   workflow's gates.
+# - .github/workflows/miri.yml (Phase 22 / Plan 22-03) + sanitizer.yml
+#   (Phase 23 / Plan 23-01) — sibling scheduled-only workflows; this
+#   workflow mirrors their shape with supply-chain-specific tooling.
+# - Phase 25 BUILD-04 — `cargo auditable build` integration that will
+#   replace the auditable-stub job below with a substantive embed
+#   verification step.
+
+name: Supply Chain
+
+on:
+  # Scheduled — weekly Friday 03:00 UTC (CONTEXT.md cron lock).
+  schedule:
+    - cron: "0 3 * * 5"
+  # Manual trigger for iterating on the workflow or re-running after a
+  # known-fix lands. Mirrors miri.yml + sanitizer.yml convention.
+  workflow_dispatch:
+  # PR trigger (CONTEXT.md): surface dep drift early on PRs that touch
+  # Cargo.toml / deny.toml / supply-chain/. Filters keep CI cost bounded
+  # by skipping doc-only / .planning-only PRs.
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "supply-chain/**"
+      - "vendor/**"
+      - ".github/workflows/supply-chain.yml"
+
+# No `permissions:` block — defaults to read-only repo access (matches
+# miri.yml + sanitizer.yml + ci-matrix.yml convention).
+
+jobs:
+  deny:
+    name: "cargo-deny / linux-x86_64"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned stable toolchain
+        # Stable per CONTEXT.md (cargo-deny + cargo-vet don't need nightly).
+        # Differs from miri.yml + sanitizer.yml pinned nightly.
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Install cargo-deny
+        # --locked: pin the cargo-deny resolved deps at install time
+        # (load-bearing: avoids pulling untrusted lock-floats during the
+        # install of the supply-chain tool itself).
+        run: cargo install --locked cargo-deny
+
+      - name: cargo deny check
+        # Plan 24-01 SUPPLY-01 gate. Reads deny.toml at repo root:
+        #   - [graph] features = ["hybrid", "fuse", "ninep"] (winfsp
+        #     excluded — GPL-3.0; D-SAN-1 release-host posture)
+        #   - [advisories] unsound = "all" + yanked = "deny" +
+        #     ignore for RUSTSEC-2021-0154 (fuser) + RUSTSEC-2026-0097 (rand)
+        #   - [bans] multiple-versions = "deny" + 25-entry skip list with
+        #     30-day refresh SLA per D-DENY-1
+        run: cargo deny check
+
+  vet:
+    name: "cargo-vet / linux-x86_64"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned stable toolchain
+        # Same stable pin as the deny job. Per CONTEXT.md.
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Install cargo-vet
+        # --locked per Plan 24-02 install discipline. cargo-vet 0.10.2+
+        # required for the [policy.<crate>] notes form used in
+        # supply-chain/config.toml.
+        run: cargo install --locked cargo-vet
+
+      - name: cargo vet check
+        # Plan 24-02 SUPPLY-02 gate. Reads supply-chain/ (cargo-vet default
+        # location; deviates from earlier .cargo/ planning):
+        #   - [imports.google] + [imports.mozilla] — D-VET-1 lock (NO
+        #     Bytecode Alliance in v2.3)
+        #   - [policy.trelis-*] + [policy.rust-9p] — audit-defensible
+        #     notes citing AUDIT-01 + EXPERIMENTAL + vendor/rust-9p
+        #   - [[exemptions.<crate>]] × 294 — Phase 24 ships these as
+        #     tracked-not-reviewed; reduction is Phase 27 AUDIT-03 +
+        #     v2.4 hand-author campaign per Plan 24-02 SUMMARY
+        run: cargo vet check
+
+      - name: cargo vet check (exemption count surfacing)
+        # CONTEXT.md Claude's Discretion §3: informational-only in v2.3
+        # (hard-fail-on-exemption-growth is v2.4 enhancement). Print the
+        # current count so the auditor reading CI logs can compare against
+        # the Plan 24-02 SUMMARY baseline (294 at Phase 24 close).
+        run: |
+          COUNT=$(grep -c '^\[\[exemptions' supply-chain/config.toml || echo 0)
+          echo "::notice title=Exemption count::supply-chain/config.toml has $COUNT [[exemptions.*]] entries (baseline at Phase 24 close: 294)"
+
+  trelis-pin:
+    name: "trelis-pin invariant / linux-x86_64"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Grep-count trelis pinned SHA across enumerated files
+        # SUPPLY-05 gate. The pinned trelis git rev
+        #   5374dff482ba94a94695794b5e4554f908eb0d4d
+        # must appear with stable counts across the enumerated files. Drift
+        # in ANY file (added / removed / accidentally-reformatted reference)
+        # fails the build.
+        #
+        # EXPECTED list — live-discovered at Phase 24 close (2026-05-19):
+        #   Cargo.toml: 3        (lines 73, 82, 83 — trelis-hybrid, trelis-primitives, hybrid feature)
+        #   docs/security-model.md: 2
+        #   docs/CRYPTOGRAPHY.md: 3
+        #   supply-chain/config.toml: 2   (Plan 24-02 [policy.trelis-*] notes)
+        # Total = 10 occurrences across 4 files.
+        #
+        # When the pin itself bumps OR when a deliberate reference is
+        # added/removed: update Cargo.toml + every doc reference + every
+        # supply-chain/ reference + THIS EXPECTED block in a single
+        # atomic PR. Reviewer checks all four diff with the new SHA + the
+        # new EXPECTED counts.
+        run: |
+          set -euo pipefail
+          SHA='5374dff482ba94a94695794b5e4554f908eb0d4d'
+          declare -A EXPECTED=(
+            ["Cargo.toml"]=3
+            ["docs/security-model.md"]=2
+            ["docs/CRYPTOGRAPHY.md"]=3
+            ["supply-chain/config.toml"]=2
+          )
+          FAIL=0
+          for f in "${!EXPECTED[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "::error title=trelis-pin drift::expected file $f missing"
+              FAIL=1
+              continue
+            fi
+            ACTUAL=$(grep -c "$SHA" "$f" || echo 0)
+            if [ "$ACTUAL" != "${EXPECTED[$f]}" ]; then
+              echo "::error title=trelis-pin drift::$f expected ${EXPECTED[$f]} occurrences of pinned SHA, got $ACTUAL"
+              FAIL=1
+            else
+              echo "::notice::$f: $ACTUAL occurrences (matches expected)"
+            fi
+          done
+          if [ "$FAIL" != "0" ]; then
+            echo "::error title=trelis-pin drift::see SUPPLY-05 in docs/SUPPLY-CHAIN.md for the drift mitigation procedure"
+            exit 1
+          fi
+          echo "trelis-pin invariant: OK"
+
+      - name: Verify pinned SHA matches Cargo.toml rev= entries
+        # Secondary check: every `trelis-*` Cargo.toml dep line MUST contain
+        # the same pinned SHA. Catches the case where Cargo.toml count
+        # matches EXPECTED but a different SHA was substituted in one entry.
+        run: |
+          set -euo pipefail
+          SHA='5374dff482ba94a94695794b5e4554f908eb0d4d'
+          # Every line starting with `trelis-` and containing `rev =` MUST contain SHA
+          BAD=$(awk '/^trelis-[a-z-]+\s*=.*rev\s*=/ && !/5374dff482ba94a94695794b5e4554f908eb0d4d/ {print NR": "$0}' Cargo.toml || true)
+          if [ -n "$BAD" ]; then
+            echo "::error title=trelis-pin sha mismatch::Cargo.toml trelis-* entries reference a different SHA:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "trelis-pin SHA consistency: OK"
+
+  geiger:
+    name: "cargo-geiger (advisory) / linux-x86_64"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # ADVISORY — MEMSAFE-07 per Phase 23. cargo-geiger reports the unsafe
+    # block surface count across the dep tree; the v2.3 posture is
+    # informational publish (NOT a CI gate). continue-on-error preserves
+    # the signal without blocking the supply-chain workflow if cargo-geiger
+    # itself becomes flaky upstream.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Install cargo-geiger
+        run: cargo install --locked cargo-geiger
+
+      - name: cargo geiger --workspace --features hybrid
+        # Output piped to GitHub Actions log; trend analysis happens
+        # manually per-milestone via the CARGO-GEIGER.md snapshot in
+        # .planning/phases/23-.../. Informational only.
+        run: cargo geiger --workspace --all-targets --features hybrid 2>&1 | tee /tmp/geiger.log || true
+
+      - name: Surface geiger summary as workflow notice
+        # Extract the top-line "Functions  Expressions" summary so the
+        # auditor reading the workflow log sees the totals without
+        # scrolling the full geiger output.
+        run: |
+          if [ -f /tmp/geiger.log ]; then
+            SUMMARY=$(tail -20 /tmp/geiger.log | tr -d '\n' || echo 'cargo-geiger output truncated')
+            echo "::notice title=cargo-geiger snapshot::see workflow log for full output"
+          fi
+
+  # Forward-pointer: Phase 25 BUILD-04 will add a `cargo auditable build`
+  # verification job here. The job will:
+  #   1. cargo install --locked cargo-auditable
+  #   2. cargo auditable build --features hybrid --release
+  #   3. Verify the produced sss binary embeds the dep manifest (via
+  #      `cargo auditable extract` or `auditable-extract --binary target/...`)
+  # Phase 25 also wires SBOM (CycloneDX) generation. The stub below is a
+  # no-op gate that documents the intent; Phase 25 replaces it with the
+  # substantive verification.
+  auditable-stub:
+    name: "cargo-auditable embed (Phase 25 placeholder) / linux-x86_64"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Phase 25 BUILD-04 placeholder
+        run: |
+          echo "::notice title=Phase 25 forward-pointer::cargo auditable build verification + CycloneDX SBOM generation lands in Phase 25 BUILD-03/BUILD-04. This job is a placeholder."

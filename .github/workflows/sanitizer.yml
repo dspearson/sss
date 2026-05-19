@@ -185,4 +185,52 @@ jobs:
       # halt_on_error=1: exit non-zero on first finding so CI fails
       # loudly (matches asan job abort_on_error=1 intent).
       TSAN_OPTIONS: "suppressions=${{ github.workspace }}/tsan-suppressions.txt:halt_on_error=1"
-    steps: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain with rust-src
+        # Identical to asan job — both jobs need rust-src for -Zbuild-std,
+        # neither needs the miri component. Pinned nightly-2026-04-15 matches
+        # miri.yml so a single bump PR updates both workflows.
+        run: |
+          rustup toolchain install nightly-2026-04-15 --component rust-src --profile minimal
+          rustup run nightly-2026-04-15 rustc --version
+
+      - name: Install libsodium-dev + llvm + pkg-config
+        # Identical to asan job — TSan instrumentation also needs
+        # llvm-symbolizer for readable stack traces, and libsodium-dev for
+        # the FFI surface the agent + stress paths exercise.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev pkg-config llvm
+
+      - name: Verify tsan-suppressions.txt exists (Plan 23-02 deliverable)
+        # Makes the cross-plan dependency on Plan 23-02 visible in the
+        # workflow output — if the suppressions file goes missing later
+        # (rename, accidental delete, branch divergence), the TSan run fails
+        # LOUDLY with a clear message rather than silently running TSan with
+        # no suppressions and burying the operator in libsodium inline-asm
+        # false-positive noise.
+        run: |
+          test -f tsan-suppressions.txt || { echo "ERROR: tsan-suppressions.txt missing — Plan 23-02 deliverable"; exit 1; }
+          head -20 tsan-suppressions.txt
+
+      # MEMSAFE-04 primary acceptance: TSan on `soak_agent` + `stress_render`
+      # only. Scope-not-shotgun by design — running TSan on the full hybrid
+      # suite would conflate libsodium-internal inline-asm false positives
+      # (suppressed per-line in tsan-suppressions.txt with `# Why:` rationale)
+      # with our-code findings on the agent + stress concurrency paths,
+      # defeating the audit-readiness signal that MEMSAFE-04 is meant to deliver.
+      #
+      # `--features hybrid,slow-tests` is REQUIRED — both test binaries declare
+      # `required-features = ["hybrid", "slow-tests"]` in Cargo.toml's [[test]]
+      # blocks (lines 113-120). Without `slow-tests` the tests are not compiled.
+      # `--test soak_agent --test stress_render` flags scope TSan to exactly
+      # these two test binaries (the agent + stress concurrency paths).
+      #
+      # Load-bearing flags identical to asan job: `-Zbuild-std` prevents
+      # libsodium-sys build-script instrumentation; `--target x86_64-unknown-linux-gnu`
+      # prevents RUSTFLAGS leaking to build scripts / proc macros;
+      # `--no-fail-fast` lets TSan surface ALL findings in one workflow run.
+      - name: TSan — soak_agent + stress_render --features hybrid,slow-tests
+        run: cargo +nightly-2026-04-15 test --features hybrid,slow-tests --target x86_64-unknown-linux-gnu -Zbuild-std --test soak_agent --test stress_render --no-fail-fast

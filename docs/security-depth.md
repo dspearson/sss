@@ -7,34 +7,103 @@ answers *what* sss encrypts and with which primitives, this document answers
 *how* the codebase is kept honest against memory-safety bugs, supply-chain
 drift, build reproducibility, and audit traceability.
 
-This document is finalised in **Phase 27 AUDIT-03** as the single landing
-page an external auditor reads first. v2.3 Phases 22–27 each fill in one
-subsection. Sections marked *(placeholder — Phase N)* below are stubs to be
-expanded in the named phase.
+This document is the single landing page an external auditor reads
+first. v2.3 Phases 22–27 each filled in one subsection; this Phase 27
+revision (AUDIT-03) is the consolidated auditor-entry-point pass.
 
 ---
 
 ## Introduction
 
-*(placeholder — Phase 27 AUDIT-03)*
+sss is a Rust CLI that seals secrets into git-trackable envelopes. The
+cryptographic spec lives in [`docs/security-model.md`](./security-model.md);
+the implementation lives across the modular `src/` tree plus the
+vendored `vendor/rust-9p/` subtree plus the git-rev pinned trelis
+crates (the v2.3 hybrid PQ-classic signature surface).
 
-The auditor-facing narrative tying together static analysis, dynamic analysis,
-sanitizer coverage, supply-chain hygiene, reproducible builds, and the
-release-artefact audit packet. Will reference each subsection below as a
-chapter heading in the final audit hand-off.
+This document threads together six audit-relevant dimensions:
+
+1. **Static analysis** — clippy strictness floor + cherry-picked
+   restriction lints + SAFETY-comment + `// Why:` regression gates;
+   Phase 21 baseline carried forward through every subsequent phase.
+2. **Memory safety (pure Rust)** — miri runs against the safe-Rust
+   surface (cfg-stubbed at 17 FFI sites per Phase 22) on a weekly
+   Sunday cron; 5 test cases covering the `ptr::read_volatile`
+   zeroisation paths in `src/crypto/hybrid.rs`.
+3. **Memory safety (FFI)** — AddressSanitizer + ThreadSanitizer on the
+   FFI surface that miri can't reach; weekly Saturday cron with
+   nightly-pinned toolchain. tsan-suppressions curated empty (will
+   populate on first cron run).
+4. **Supply chain** — `cargo-deny` strictness (multiple-versions=deny
+   + 25-entry curated skip list with 30-day refresh SLA + unsound=all
+   + 2 expiring RUSTSEC ignores), `cargo-vet` attestation (Mozilla +
+   Google imports + `[policy.<crate>]` blocks for trelis-* + rust-9p);
+   weekly Friday cron + PR trigger. 294 exemptions remain — escalated
+   to v2.4 hand-author campaign + Bytecode Alliance import revisit.
+5. **Reproducible builds** — Cargo.lock committed (v2.3 reversal of
+   prior policy), build-reproducible.sh wrapper with four determinism
+   env-vars; empirical 2-host run (arm64-builder + macos-builder) scheduled for
+   next release-cut.
+6. **Release-artefact integrity** — cargo-auditable embed + CycloneDX
+   SBOMs (6 per release matrix cell) + cosign keyless signing
+   (GitHub OIDC + Fulcio + Rekor) + offline-fallback Ed25519 keypair
+   with distinct domain-separation bytes.
+
+Each subsection below covers one dimension with concrete file pointers
++ scope qualifiers + known coverage gaps. The "§ References" section
+at the bottom links every audit-relevant doc in the repo.
 
 ---
 
 ## Static Analysis Posture
 
-*(placeholder — extends Phase 21 STATIC-* coverage)*
+The v2.3 static-analysis surface is layered: a clippy strictness floor
+at the workspace level + cherry-picked restriction lints for
+audit-critical patterns + per-file gate scripts for the `// Why:` +
+`// SAFETY:` + `mem::forget` conventions.
 
-Phase 21 landed the workspace clippy strictness floor (pedantic group + a
-short cherry-pick of restriction lints; see
-[`docs/CLIPPY-POLICY.md`](./CLIPPY-POLICY.md) for the policy of record). Phase
-27 will summarise the static-analysis posture across the matrix and link the
-clippy gate, the panic-surface deny, and the SAFETY-comment regression
-scripts (`scripts/check-safety-comments.sh`, `scripts/check-allow-why.sh`).
+**Workspace clippy contract** (`Cargo.toml` `[lints.clippy]`,
+Phase 21):
+
+- `pedantic = "warn"` (priority -1) — baseline strictness floor.
+- Pedantic-noise suppressions (4 only): `module_name_repetitions`,
+  `missing_errors_doc`, `missing_panics_doc`, `unnecessary_wraps`.
+- Panic-surface deny: `unwrap_used = "deny"`, `expect_used = "deny"`,
+  `panic = "deny"` (test-code exempt via `#![cfg_attr(test, allow(...))]`).
+- Unsafe-block discipline: `undocumented_unsafe_blocks = "deny"`,
+  `missing_safety_doc = "deny"`.
+- Zeroisation hygiene: `mem_forget = "deny"`.
+- Cast-surface anchors: `cast_possible_truncation` + `cast_sign_loss`
+  at warn (already pedantic, surfaced as named anchors).
+
+The full policy + rationale lives in
+[`docs/CLIPPY-POLICY.md`](./CLIPPY-POLICY.md). CI gates via
+`cargo clippy --workspace --all-targets ${{ matrix.cargo_features }} -- -D warnings`
+in `.github/workflows/ci-matrix.yml`.
+
+**`#[forbid(unsafe_code)]`** on the askpass binaries
+(`src/bin/sss-askpass-tty.rs` + `src/bin/sss-askpass-gui.rs`) makes
+any `unsafe { }` block in those files a compile error.
+
+**Regression scripts:**
+
+- [`scripts/check-allow-why.sh`](../scripts/check-allow-why.sh) —
+  asserts every `#[allow]` carries a `// Why:` rationale comment.
+- [`scripts/check-safety-comments.sh`](../scripts/check-safety-comments.sh)
+  — asserts every production `unsafe { }` block has a `// SAFETY:`
+  comment within 3 lines above.
+- [`scripts/check-mem-forget.sh`](../scripts/check-mem-forget.sh) —
+  Phase 23 belt-and-braces gate complementing the compile-time
+  `mem_forget = "deny"` clippy.
+
+The scripts run as informational steps in `ci-matrix.yml`
+(`check-mem-forget.sh` is hard-gated; the other two are informational
+in v2.3 with v2.4 promotion to gates on the roadmap).
+
+**Phase 21 closeout state** documented in
+`.planning/phases/21-lint-strictness-floor-policy-gates/21-PHASE-SUMMARY.md`:
+295 → 0 clippy errors landed under `-D warnings` across the 6-cell
+release matrix.
 
 ---
 
@@ -431,13 +500,90 @@ single-source-of-truth for non-crates.io deps:
 
 ## Audit Packet
 
-*(placeholder — Phase 27 AUDIT-03)*
+Each tagged release ships an audit packet — a self-contained bundle
+of every artefact a third-party auditor needs to verify the v2.3
+claims without re-running the toolchain.
 
-Phase 27 will assemble the audit packet that ships alongside each tagged
-release: SBOM, signed release artefacts, threat model, security model,
-this document (`security-depth.md`), the SAFETY/Why-comment regression
-reports, and the cargo-vet imports. This subsection will be the index
-page an external auditor reads first when commissioned to review sss.
+**Per-release artefacts** (uploaded to the distribution endpoint +
+linked from `latest.json`):
+
+- 6 CycloneDX SBOMs (`sss-<platform>-<arm>.cdx.json`) — one per
+  matrix cell (3 platforms × 2 feature arms). trelis-* + fips204 +
+  ed448-goldilocks-plus appear in `-hybrid.cdx.json` only.
+- cargo-auditable embed inside each binary — verify with
+  `cargo audit bin sss`. cargo-audit reads the embedded manifest +
+  cross-references RUSTSEC advisories at audit time.
+- cosign keyless signature per archive (`.tar.gz.sig` + `.tar.gz.pem`)
+  — verify with `cosign verify-blob --certificate <cert> --signature <sig> ...`
+  per the procedure in [`docs/RELEASE.md § Verification`](RELEASE.md).
+  Logged to the Rekor public transparency log.
+- SLSA Level 2 provenance per cell (`.intoto.jsonl`) — cosign
+  attest-blob output documenting the build environment.
+- SHA-256 checksums per archive (`.sha256`).
+
+**Per-milestone audit-readiness package** (in the repo at v2.3 close):
+
+- This document ([`docs/security-depth.md`](./security-depth.md)) —
+  defence-in-depth posture across six dimensions (you're reading it).
+- [`docs/security-model.md`](./security-model.md) — full cryptographic
+  threat model with the `Constant-Time Considerations` section per
+  D-V23-03 (Phase 23 MEMSAFE-06).
+- [`docs/CRYPTOGRAPHY.md`](./CRYPTOGRAPHY.md) — primitive-level
+  implementation reference with the trelis pin rationale.
+- [`docs/CLIPPY-POLICY.md`](./CLIPPY-POLICY.md) — clippy strictness
+  contract.
+- [`docs/SUPPLY-CHAIN.md`](./SUPPLY-CHAIN.md) — supply-chain policy
+  of record (cargo-deny / cargo-vet / supply-chain.yml gate suite).
+- [`docs/vendoring-policy.md`](./vendoring-policy.md) — non-crates.io
+  dep policy (vendor/rust-9p + trelis git-rev + libsodium linked).
+- [`docs/RELEASE.md`](./RELEASE.md) — release pipeline + supply-chain
+  artefacts + reproducible-build verification commands.
+- [`docs/TESTING.md`](./TESTING.md) — test taxonomy + the
+  visibility-audit gate + the slow-tests + soak-tests + stress-tests
+  + miri-smoke layout.
+- [`docs/release-keys/README.md`](./release-keys/README.md) — offline
+  Ed25519 release-signing keypair policy.
+
+**Per-milestone planning archive** (preserved per D-V23-06 no-scrub):
+
+- `.planning/REQUIREMENTS.md` — 28 REQs across 6 categories with
+  locked policy decisions D-V23-01..06.
+- `.planning/ROADMAP.md` — phase-by-phase progression with completed
+  checkboxes + deferral notes.
+- `.planning/STATE.md` — frontmatter-tracked completion state.
+- `.planning/phases/2[1-7]-*/2[1-7]-PHASE-SUMMARY.md` — one phase
+  summary per phase (7 files); each documents REQ coverage, live
+  gate state, deviations from PLAN.md, and cross-phase notes.
+- `.planning/phases/2[1-3]-*/2[1-3]-NN-SUMMARY.md` — per-plan
+  summaries for Phases 21-23 (formal PLAN.md ceremony era).
+- `.planning/milestones/v2.{0,1,2,3}-phases/*/deferred-items.md` —
+  preserved historical deferred items (no scrubbing during cleanup).
+
+**Reproducible-build evidence:**
+
+- [`Cargo.lock`](../Cargo.lock) — committed at v2.3 (D-V23-01).
+- [`scripts/release/build-reproducible.sh`](../scripts/release/build-reproducible.sh)
+  — deterministic build wrapper.
+- `.planning/phases/26-reproducible-builds-vendoring-policy/REPRODUCIBLE-BUILD-TRANSCRIPT.md`
+  — 2-host empirical-verification procedure + (post first
+  release-cut) the SHA-256 transcript.
+
+**CI gate workflows** (`.github/workflows/`):
+
+- `ci-matrix.yml` — per-push clippy gate + build matrix + 3 informational
+  scripts.
+- `miri.yml` — weekly Sunday 03:00 UTC, pinned nightly, miri-smoke tests.
+- `sanitizer.yml` — weekly Saturday 03:00 UTC, pinned nightly, ASan +
+  TSan scoped jobs.
+- `supply-chain.yml` — weekly Friday 03:00 UTC + PR trigger + 5 jobs
+  (cargo-deny gate + cargo-vet gate + trelis-pin grep + cargo-geiger
+  advisory + cargo-auditable + SBOM verification).
+- `release.yml` — manual-dispatch + tag-triggered with cosign keyless
+  signing per matrix cell.
+
+The v2.3 milestone close (`milestone/quality-security` branch merge to
+master) is the audit-readiness boundary — every artefact above is on
+disk + version-controlled at that point.
 
 ---
 

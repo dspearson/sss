@@ -91,5 +91,12 @@ jobs:
         # `-A clippy::...` or `-W clippy::...` overrides — the block IS
         # the policy. Rationale: docs/CLIPPY-POLICY.md.
         run: cargo clippy --workspace --all-targets ${{ matrix.cargo_features }} -- -D warnings
+      - name: mem::forget invariant gate
+        # Phase 23 / MEMSAFE-05 belt-and-braces gate. Complements
+        # `clippy::mem_forget = "deny"` from Cargo.toml [lints.clippy] —
+        # catches macro-expanded mem::forget that may escape clippy. Every
+        # mem::forget in src/ must carry a `// Why:` rationale (line above
+        # or trailing on same line). Rationale: docs/security-depth.md.
+        run: bash scripts/check-mem-forget.sh
       - name: Run tests
         run: cargo test ${{ matrix.cargo_features }}

@@ -367,13 +367,65 @@ for rust-9p). The full vendoring policy lands in Phase 26 SUPPLY-06
 
 ## Reproducible Builds
 
-*(placeholder — Phase 26 REPRO-01/02)*
+The Phase 26 reproducible-build story has four pieces: a committed
+`Cargo.lock` (D-V23-01), a deterministic build wrapper, an empirical
+2-host diff transcript, and a vendoring policy doc.
 
-Phase 26 will land reproducible-build guarantees for the release artefacts
-(rpm, deb, apk, macOS pkg). This subsection will document the build
-environment pinning, the `SOURCE_DATE_EPOCH` discipline, and the
-byte-comparison process for verifying that two independent builders
-produce byte-identical artefacts.
+**Cargo.lock committed (BUILD-01).** Prior to v2.3, `Cargo.lock` was
+gitignored on the rationale that sss is a binary crate where the lock
+isn't strictly required. v2.3 reverses this for reproducibility: the
+lock pins exact dep versions across all build hosts.
+`.gitignore` no longer ignores `Cargo.lock`; CI runs `cargo build
+--locked` and the committed lock matches the resolved state. Bumps
+happen via deliberate `cargo update -p <crate>` + commit per
+`docs/SUPPLY-CHAIN.md` policy.
+
+**Deterministic build wrapper (BUILD-02).**
+[`scripts/release/build-reproducible.sh`](../scripts/release/build-reproducible.sh)
+wraps `cargo build --release --locked` with four determinism env-vars
+from the April 2026 reproducible-builds.org Rust report:
+
+1. `SOURCE_DATE_EPOCH` — defaulted to the committer date of `HEAD`;
+   honoured by `rustc` + `libsodium-sys` build scripts.
+2. `RUSTFLAGS --remap-path-prefix` — strips absolute repo path + cargo
+   registry path + rustup toolchain path from embedded source-location
+   strings. Stable alternative to `[profile.release].trim-paths` which
+   is still cargo-unstable on cargo 1.93.
+3. `CARGO_BUILD_JOBS=1` — serial compilation eliminates some
+   non-deterministic LLVM IR-merge orderings.
+4. `LC_ALL=C.UTF-8` + `TZ=UTC` — locale + timezone pinning for build
+   scripts that emit locale-specific strings.
+
+`cargo --locked` is the load-bearing flag for cross-host determinism;
+it refuses to resolve any version not pinned by `Cargo.lock`.
+
+**2-host diff transcript (BUILD-05).** The empirical reproducibility
+verification runs the wrapper on two non-x86 release hosts
+(`arm64-builder` Linux aarch64 + `macos-builder` macOS arm64) and compares the
+resulting binary SHA-256s. The transcript lives at
+`.planning/phases/26-reproducible-builds-vendoring-policy/REPRODUCIBLE-BUILD-TRANSCRIPT.md`
+and is preserved per D-V23-06 no-scrub. Per-cell comparisons
+(Linux↔Linux, macOS↔macOS) are expected to be byte-identical;
+cross-OS comparisons (Linux↔macOS) are expected to diverge on
+platform-specific ELF/Mach-O metadata and are NOT part of the
+reproducibility claim.
+
+The first empirical 2-host run is scheduled for the next release-cut
+after `milestone/quality-security` merges to master; the wrapper
+script + procedure ship with Phase 26 close.
+
+**Vendoring policy (SUPPLY-06).**
+[`docs/vendoring-policy.md`](vendoring-policy.md) is the
+single-source-of-truth for non-crates.io deps:
+
+- `vendor/rust-9p/` (path-dep) — refresh expectation, current frozen
+  state, planned v2.5 review.
+- `trelis-hybrid` + `trelis-primitives` (git-rev pinned at
+  `5374dff...`) — refresh trigger (AUDIT-01 close), drift gate
+  (supply-chain.yml `trelis-pin` job).
+- `libsodium` (linked-dynamic + static per release artefact) —
+  system-library scope, outside cargo-vet trust path.
+- Should-we-vendor-X? decision framework for future deps.
 
 ---
 

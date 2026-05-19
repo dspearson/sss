@@ -1,8 +1,10 @@
 # Rust build artifacts
 /target/
-Cargo.lock
 /build
 *.rpm
+# Phase 26 / BUILD-01 (D-V23-01): Cargo.lock IS committed for reproducible
+# builds. Bumps happen via deliberate `cargo update -p <crate>` + commit.
+# See docs/SUPPLY-CHAIN.md and docs/RELEASE.md § Reproducible Build.
 
 # IDE files
 .vscode/

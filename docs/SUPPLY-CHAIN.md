@@ -44,6 +44,22 @@ trigger.
   Ed448 + ML-DSA-65). Public key in `docs/release-keys/`; private key
   offline (HSM or air-gapped USB).
 
+## Cargo.lock Policy (Phase 26 / BUILD-01)
+
+As of v2.3, `Cargo.lock` IS committed to git (D-V23-01). Prior to v2.3
+the lock was gitignored on the rationale that sss is a binary crate
+where the lock isn't strictly required; v2.3 reverses this for
+reproducible-build verification (BUILD-05 2-host diff). Bumps happen
+via deliberate `cargo update -p <crate>` + commit; CI uses
+`cargo build --locked` so any drift between the committed lock and a
+resolved state fails the build.
+
+See [`docs/vendoring-policy.md`](vendoring-policy.md) for the
+companion policy on non-crates.io deps (vendored rust-9p, git-rev
+pinned trelis-*, linked-dynamic libsodium) and
+[`docs/RELEASE.md § Reproducible Build`](RELEASE.md) for the build
+wrapper script (`scripts/release/build-reproducible.sh`).
+
 ## cargo-deny Configuration
 
 The policy is `deny.toml` at repo root. Single source of truth for

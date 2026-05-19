@@ -238,6 +238,50 @@ Refresh procedure: drop new sources into `vendor/rust-9p/`, run
 commit the change as a single atomic commit. There is no upstream
 pin to bump — the project owns the vendored copy.
 
+## Reproducible Build (Phase 26)
+
+Phase 26 ships reproducible-build guarantees: the same git commit +
+`Cargo.lock` should produce byte-identical binaries when built on
+different hosts within the same target cell.
+
+**Wrapper script:**
+[`scripts/release/build-reproducible.sh`](../scripts/release/build-reproducible.sh).
+Wraps `cargo build --release --locked` with four determinism env-vars
+(SOURCE_DATE_EPOCH, RUSTFLAGS `--remap-path-prefix`, CARGO_BUILD_JOBS=1,
+LC_ALL=C.UTF-8 + TZ=UTC).
+
+**Cargo.lock policy:** committed to git as of v2.3 (D-V23-01). Bumps
+happen via deliberate `cargo update -p <crate>` + commit. CI uses
+`cargo build --locked` so any drift between the committed lock and a
+resolved state fails the build.
+
+**Verification (2-host diff per BUILD-05):**
+
+```bash
+# On arm64-builder (Linux aarch64):
+ssh arm64-builder 'cd sss && git fetch && git checkout <COMMIT> && \
+  bash scripts/release/build-reproducible.sh --features hybrid && \
+  sha256sum target/release/sss'
+
+# On mac (macOS arm64):
+ssh macos-builder 'cd sss && git fetch && git checkout <COMMIT> && \
+  bash scripts/release/build-reproducible.sh --features hybrid && \
+  sha256sum target/release/sss'
+
+# Compare locally — identical SHA-256 within the same target cell
+# (Linux↔Linux, macOS↔macOS) is the acceptance criterion.
+```
+
+Per-cell results are appended to
+`.planning/phases/26-reproducible-builds-vendoring-policy/REPRODUCIBLE-BUILD-TRANSCRIPT.md`
+each release cycle. Cross-OS (Linux↔macOS) divergences are expected
+on platform-specific ELF/Mach-O metadata and are NOT part of the
+reproducibility claim.
+
+See also [`docs/vendoring-policy.md`](vendoring-policy.md) for the
+non-crates.io dep policy (vendored rust-9p, git-rev pinned trelis-*,
+linked-dynamic libsodium).
+
 ## Supply-Chain Artefacts (Phase 25)
 
 Each release ships with three supply-chain artefacts alongside the binary:

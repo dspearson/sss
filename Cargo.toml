@@ -176,3 +176,11 @@ mem_forget = "deny"
 # duplication; lints are already pedantic members at warn).
 cast_possible_truncation = { level = "warn", priority = -1 }
 cast_sign_loss = { level = "warn", priority = -1 }
+
+# Phase 26 / BUILD-02 — reproducible-build determinism.
+# NOTE: `[profile.release] trim-paths = "all"` is still cargo-unstable as
+# of cargo 1.93.1 (gated behind `cargo-features = ["profile-trim-paths"]`
+# + nightly). For v2.3 we use `--remap-path-prefix` via RUSTFLAGS in
+# scripts/release/build-reproducible.sh instead — stable, equivalent
+# effect on the resulting binary. The Cargo profile trim-paths option
+# will be adopted in v2.4 once it stabilises.

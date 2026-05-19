@@ -631,6 +631,7 @@ See [docs/TESTING.md](docs/TESTING.md) for the full four-tier testing guide (def
 | [docs/IGNORE_PATTERNS.md](docs/IGNORE_PATTERNS.md) | Ignore pattern syntax and behaviour |
 | [docs/CLIPPY-POLICY.md](docs/CLIPPY-POLICY.md) | Clippy strictness contract: enabled lints, `// Why:` requirement, evolution workflow |
 | [docs/SUPPLY-CHAIN.md](docs/SUPPLY-CHAIN.md) | Supply-chain policy: cargo-deny strictness, cargo-vet adoption, vendored deps, trelis pin invariant, evolution workflow |
+| [docs/vendoring-policy.md](docs/vendoring-policy.md) | Vendoring policy: when to vendor / git-rev pin / link-dynamic, refresh cadence per non-crates.io dep |
 | [docs/security-depth.md](docs/security-depth.md) | Defence-in-depth posture: miri coverage scope, sanitizer coverage, supply chain, reproducible builds, audit packet |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Protocol specification |
 | [SECURITY.md](SECURITY.md) | Security policy and vulnerability disclosure |

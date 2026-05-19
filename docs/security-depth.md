@@ -191,15 +191,128 @@ universal coverage.
 
 ## Sanitizer Coverage
 
-*(placeholder — Phase 23 MEMSAFE-03/04)*
+AddressSanitizer (ASan) + ThreadSanitizer (TSan) provide the dynamic-analysis
+counterpart to miri: where miri runs against the **pure-Rust** unsafe surface
+behind cfg-stubs (§ Miri Coverage above), the sanitizers run against the
+**real FFI** boundary — libsodium / libc / trelis — that miri cannot
+interpret. The two together compose the sss memory-safety story.
 
-Phase 23 will land an AddressSanitizer (and optionally ThreadSanitizer)
-GitHub Actions workflow mirroring the shape of `.github/workflows/miri.yml`.
-The sanitizer runner exercises the FFI boundary (libsodium + libc + trelis)
-under realistic workloads — the surface miri cannot interpret. This
-subsection will document the same shape as § Miri Coverage above: what
-ASan runs against, what it does not, the refresh cadence, and the cross-
-reference back to miri for the pure-Rust paths.
+### What ASan runs against
+
+The `asan` job in [`.github/workflows/sanitizer.yml`](../.github/workflows/sanitizer.yml)
+runs `cargo test --workspace --features hybrid --target
+x86_64-unknown-linux-gnu -Zbuild-std` under
+`RUSTFLAGS=-Zsanitizer=address`. The `-Zbuild-std` flag is load-bearing —
+without it the libsodium-sys build script gets instrumented and the build
+breaks. A second invocation runs without `--features hybrid` to exercise the
+classic-only FFI surface (X25519 / XChaCha20-Poly1305 / Argon2id).
+
+The job catches use-after-free, heap-buffer-overflow, stack-buffer-overflow,
+double-free, and uninitialised-read on every libsodium / libc / trelis call
+exercised by the test suite. `ASAN_OPTIONS=detect_stack_use_after_return=1:check_initialization_order=1`
+extends the default detection set.
+
+### What TSan runs against
+
+The `tsan` job runs the same toolchain with
+`RUSTFLAGS=-Zsanitizer=thread` scoped to the concurrency-bearing tests:
+`tests/soak_agent.rs` and `tests/stress_render.rs` (the `slow-tests`
+feature-gated runners exercising `sss-agent` IPC and parallel render
+workloads).
+
+Curated suppressions live in [`tsan-suppressions.txt`](../tsan-suppressions.txt)
+at the repo root with a strict policy header. Initial commit ships **empty**
+(no suppressions yet); the file becomes a committed audit artefact once the
+first cron-triggered TSan run surfaces real findings — each suppression
+landing in its own commit with a `# Why:` rationale citing the upstream
+issue or library behaviour.
+
+### What sanitizers do NOT cover
+
+- **macOS / aarch64** — Linux-x86_64 only per **D-SAN-1**. The build-host
+  complexity of running sanitizers on Apple Silicon is out of scope for
+  v2.3; revisit in v2.4.
+- **rebuilt libsodium under sanitizer instrumentation** — out of scope for
+  v2.3. Default position is curated TSan suppressions instead, with the
+  trade-off explicit: false positives on libsodium inline-asm are managed by
+  the suppressions file, not by re-instrumenting the C dependency.
+- **memory sanitizer (`-Zsanitizer=memory`)** — would require recompiling
+  all C deps with MSan; deferred to v2.4 alongside the rebuild-libsodium
+  decision.
+
+### Substitute relationship with miri
+
+| Surface                                | Coverage in v2.3        |
+|----------------------------------------|-------------------------|
+| Pure-Rust unsafe (ptr::read_volatile, ManuallyDrop, raw-ptr) | miri (Phase 22)         |
+| libsodium FFI (X25519, AEAD, KDF)      | ASan (this section)     |
+| libc FFI (env / fd / mmap)             | ASan (this section)     |
+| trelis FFI (X448 / sntrup761 / Ed448)  | ASan (this section)     |
+| Multi-threaded races (agent IPC + stress) | TSan (this section)     |
+
+Where miri's cfg-stubs in `src/crypto/*.rs`, `src/kdf.rs`, `src/commands/{keys,process}.rs`
+elide the real FFI call, the sanitizer job exercises that exact call site
+without stubs. There is **no FFI hole** in the joint coverage.
+
+### Zeroisation 2nd-pass
+
+Phase 23 refreshed the v2.1 Phase 8 22-site zeroisation audit against the
+v2.2-era source tree. The walk is recorded in
+[`.planning/phases/23-sanitizers-asan-tsan-zeroisation-second-pass/ZEROISATION-AUDIT.md`](../.planning/phases/23-sanitizers-asan-tsan-zeroisation-second-pass/ZEROISATION-AUDIT.md):
+
+- **v2.1 baseline:** 22 sites in `src/crypto/`, `src/kdf.rs`, `src/secure_memory.rs`.
+- **v2.2 additions:** 12 new sites covering the signed-envelope sig
+  keypair material (Ed448 secret half 57 B; ML-DSA-65 secret half 4032 B)
+  and the canonical-encoded envelope payload buffer.
+- **v2.3 final count:** 34 sites.
+
+Three Drop-tests in
+[`tests/zeroisation_drop_tests.rs`](../tests/zeroisation_drop_tests.rs)
+exercise the v2.2 additions via the `ManuallyDrop<Zeroizing<[u8; N]>>`
+pattern with raw-ptr `ptr::read_volatile` after drop — the same shape miri
+validates in § Miri Coverage above.
+
+### `mem::forget` grep gate (belt-and-braces)
+
+Phase 21's `[lints.clippy]` block already denies `clippy::mem_forget` at
+compile time. Phase 23 adds a complementary runtime gate via
+[`scripts/check-mem-forget.sh`](../scripts/check-mem-forget.sh), invoked per
+matrix cell in `.github/workflows/ci-matrix.yml`. Every `mem::forget` in
+`src/` must carry a `// Why:` rationale (line above, trailing on the call
+line, or `/* Why: */` block comment above); `tests/` is exempt. Current
+state: 2 sites in `src/fuse/fs.rs` (file-fd ownership transfer via
+`File::from_raw_fd` — both have trailing rationale comments). The gate is
+belt-and-braces because clippy may miss macro-expanded forms.
+
+### Refresh cadence
+
+The sanitizer workflow runs **weekly on Saturday 03:00 UTC** (offset from
+the miri Sunday cron to spread runner load), with a pinned nightly
+toolchain (`nightly-2026-04-15`, matching `.github/workflows/miri.yml`).
+The pinned-nightly refresh policy is shared with miri: bump only when
+both pinned-nightly users (miri + sanitizer) validate cleanly against the
+new pin.
+
+---
+
+## cargo-geiger Coverage
+
+[cargo-geiger](https://github.com/geiger-rs/cargo-geiger) walks the
+workspace + dep graph and counts `unsafe` blocks per crate. It produces a
+quantitative answer to the auditor question "how much unsafe surface does
+sss depend on transitively?" — useful as a **trend signal** rather than a
+gate.
+
+Per **MEMSAFE-07** the output is **informational only** (not a CI gate):
+the snapshot lives at
+[`.planning/phases/23-sanitizers-asan-tsan-zeroisation-second-pass/CARGO-GEIGER.md`](../.planning/phases/23-sanitizers-asan-tsan-zeroisation-second-pass/CARGO-GEIGER.md)
+and is refreshed manually per milestone. v2.4 may move the snapshot into
+CI for per-release publication; v2.3 keeps it as a manual cadence to
+avoid the cargo-geiger setup-time + flakiness penalty in the matrix.
+
+The snapshot file documents: date, commit SHA, cargo-geiger version,
+workspace total unsafe-block count (production + test), and the top-10
+dep crates by unsafe-block count.
 
 ---
 

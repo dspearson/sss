@@ -1,0 +1,236 @@
+# Sanitizers — weekly memory + concurrency safety detection on the FFI surface (MEMSAFE-03 + MEMSAFE-04)
+#
+# Purpose
+# -------
+# Catch UB / memory-safety / data-race violations on the 22 production FFI
+# sites (libsodium + libc + trelis) that miri (Phase 22) cannot reach because
+# miri cannot execute foreign code. AddressSanitizer covers the full hybrid
+# test suite — every libsodium and trelis FFI call exercised under cargo test
+# runs with -Zsanitizer=address instrumentation. ThreadSanitizer is scoped to
+# the `soak_agent` + `stress_render` test binaries which exercise the agent +
+# stress concurrency paths; running TSan on the full hybrid suite would
+# conflate libsodium-internal false positives with our-code findings and
+# defeat the audit-readiness signal.
+#
+# Decision references
+# -------------------
+# - D-SAN-1 (CONTEXT.md §Locked Policy Decisions): linux-x86_64 only.
+#   macOS / linux-aarch64 sanitizer coverage is deferred to v2.4 once
+#   build-host complexity drops; current sanitizer toolchain coverage is
+#   strongest on linux-x86_64.
+# - CONTEXT.md weekly cron lock: Saturday 03:00 UTC. miri.yml runs Sunday
+#   03:00 UTC; sanitizer.yml is offset to Saturday so the two scheduled-only
+#   workflows do not collide on the GitHub-hosted runner queue.
+# - Pinned nightly: `nightly-2026-04-15` — same pin as miri.yml so a single
+#   bump PR updates both. Sanitizers require nightly for -Zsanitizer=address
+#   and -Zsanitizer=thread plus -Zbuild-std (AddressSanitizer / ThreadSanitizer
+#   per Rust Unstable Book §Sanitizers).
+# - MEMSAFE-03 acceptance: ASan on `cargo test --workspace --features hybrid`
+#   exits clean (or surfaces a real finding to fix).
+# - MEMSAFE-04 acceptance: TSan on `soak_agent` + `stress_render` with curated
+#   tsan-suppressions.txt for libsodium inline-asm false positives.
+#
+# Scope
+# -----
+# linux-x86_64 only (`ubuntu-24.04` matches ci-matrix.yml + miri.yml).
+# Two jobs, both Linux-x86_64:
+#   - asan: ASan on `cargo test --workspace --features hybrid` (MEMSAFE-03),
+#     plus a secondary default-features pass covering the classic-arm
+#     libsodium FFI surface.
+#   - tsan: TSan scoped to `soak_agent` + `stress_render` only (MEMSAFE-04),
+#     with `TSAN_OPTIONS=suppressions=...` pointing at the curated
+#     `tsan-suppressions.txt` (Plan 23-02 deliverable; sibling plan in
+#     this same Phase 23 wave).
+# macOS / aarch64 deferred per D-SAN-1.
+#
+# Refresh cadence
+# ---------------
+# Same per-milestone deliberate-bump policy as miri.yml — the
+# `nightly-2026-04-15` pin is bumped deliberately per milestone, never
+# silently floated to "latest nightly". When the upstream sanitizer
+# runtime or rustc introduces a breaking change, the cron run starts
+# failing and the maintainer notices via the GitHub Actions email digest;
+# the bump PR validates the new pin against this same workflow before
+# merging. Sharing the pin with miri.yml means a single bump PR updates
+# both scheduled-only workflows in lockstep.
+#
+# Cross-references
+# ----------------
+# - tsan-suppressions.txt (Plan 23-02 — initial empty file with policy
+#   header; populates after the first TSan run surfaces libsodium
+#   inline-asm false positives, with `# Why:` rationale per suppression).
+# - .github/workflows/miri.yml (Phase 22 / Plan 22-03 — sister
+#   scheduled-only workflow; sanitizer.yml mirrors its shape with
+#   sanitizer-specific RUSTFLAGS / TSAN_OPTIONS / target swap).
+# - docs/security-depth.md § Sanitizer Coverage (Plan 23-05 — auditor
+#   entry point documenting what AddressSanitizer + ThreadSanitizer cover
+#   vs what miri covers; the honest scope statement lives there).
+# - .github/workflows/ci-matrix.yml — per-push regression net that runs
+#   on stable rust across the 3-platform × 2-feature-arm grid. Sanitizers
+#   are a separate scheduled-only workflow because nightly-toolchain
+#   churn and ~3-5x slowdown would be too noisy on every push.
+# - .planning/phases/21-... QUAL-01 lint policy (Phase 21) — clippy
+#   strictness lives in Cargo.toml [lints.clippy]; sanitizer.yml does
+#   NOT override or duplicate that policy. The clippy gate is the
+#   ci-matrix.yml concern.
+# - .planning/phases/22-miri-on-safe-wrappers/22-01-SUMMARY.md — the
+#   22 cfg-stubbed FFI sites that miri avoids; sanitizer.yml runs
+#   WITHOUT `--cfg miri`, so the real FFI paths execute under ASan.
+
+name: Sanitizers
+
+on:
+  # Scheduled-only — weekly Saturday 03:00 UTC. miri.yml runs Sunday
+  # 03:00 UTC (CONTEXT.md cron lock); sanitizer.yml takes Saturday so the
+  # two scheduled-only workflows do not collide on the runner queue.
+  # No `push:` or `pull_request:` triggers; ASan workspace runs ~3-5x
+  # slower than plain `cargo test` and would be too noisy on every push.
+  schedule:
+    - cron: "0 3 * * 6"
+  # Manual trigger for iterating on the workflow itself or for re-running
+  # after a known-fix lands without waiting up to 7 days for the next cron.
+  # Mirrors miri.yml convention.
+  workflow_dispatch:
+
+# No `permissions:` block — defaults to read-only repo access (matches
+# miri.yml + ci-matrix.yml convention). Sanitizer jobs never need to
+# push, comment, or mutate state.
+
+jobs:
+  asan:
+    name: "asan / linux-x86_64"
+    # Linux-x86_64 only per D-SAN-1 (macOS / linux-aarch64 deferred to v2.4).
+    runs-on: ubuntu-24.04
+    # ASan instrumentation adds ~3-5x runtime over plain `cargo test`;
+    # the full workspace hybrid suite is the upper bound. 60 min envelope
+    # absorbs unscheduled CI runner contention without false-negative
+    # truncation. Weekly cadence absorbs the occasional re-run.
+    timeout-minutes: 60
+    env:
+      # -Zsanitizer=address: AddressSanitizer instrumentation (Rust
+      # Unstable Book §Sanitizers). Catches heap/stack OOB, UAF, leaks.
+      # -Cdebug-assertions=on: enable debug_assert!() under the
+      # sanitized build so debug-only invariants get checked too.
+      RUSTFLAGS: "-Zsanitizer=address -Cdebug-assertions=on"
+      # detect_stack_use_after_return=1: catches dangling references
+      # to stack frames (load-bearing on the FFI surface that passes
+      # &mut [u8] buffers into libsodium).
+      # check_initialization_order=1: catches static-initialiser order
+      # fiasco between FFI bindings.
+      # abort_on_error=1: exit non-zero on first finding so CI fails
+      # loudly rather than swallowing the signal in test output.
+      ASAN_OPTIONS: "detect_stack_use_after_return=1:check_initialization_order=1:abort_on_error=1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain with rust-src
+        # Pinned nightly per CONTEXT D-V23-05 + milestone-research lock 2026-05-17.
+        # nightly-2026-04-15 = same pin as miri.yml (toolchain consistency across
+        # the two scheduled-only workflows). rust-src is REQUIRED for -Zbuild-std
+        # below; no `miri` component needed (this is the sanitizer workflow).
+        # `--profile minimal` keeps the toolchain attack surface small.
+        run: |
+          rustup toolchain install nightly-2026-04-15 --component rust-src --profile minimal
+          rustup run nightly-2026-04-15 rustc --version
+
+      - name: Install libsodium-dev + llvm + pkg-config
+        # libsodium-dev: the classic suite's AEAD + Argon2id backing library;
+        # needed for both the hybrid and default-features ASan test passes.
+        # llvm: provides `llvm-symbolizer` — without it, ASan stack traces in
+        # the workflow log are address-only and useless for triage.
+        # pkg-config: libsodium-sys build script uses pkg-config to locate
+        # libsodium headers + library on the runner.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev pkg-config llvm
+
+      # MEMSAFE-03 primary acceptance: ASan on `cargo test --workspace --features hybrid`.
+      # `-Zbuild-std` is LOAD-BEARING — without it, libsodium-sys build scripts
+      # get instrumented and the build breaks (CONTEXT.md decision §2).
+      # `--target x86_64-unknown-linux-gnu` is REQUIRED per Rust Unstable Book
+      # §Sanitizers — without an explicit target, RUSTFLAGS applies to build
+      # scripts and procedural macros, breaking libsodium-sys compilation.
+      # `--no-fail-fast` lets ASan continue past a single test failure so the
+      # operator sees ALL sanitizer findings in one workflow run (bulk-fix signal).
+      - name: ASan — workspace test --features hybrid
+        run: cargo +nightly-2026-04-15 test --workspace --features hybrid --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
+
+      # MEMSAFE-03 secondary acceptance (CONTEXT.md Claude's Discretion §4):
+      # ASan on the default-features (classic-only, no hybrid) workspace test
+      # suite. Covers the libsodium FFI surface used by the classic crypto path
+      # without trelis being compiled in. Smaller surface than the hybrid pass
+      # above but covers the v1.x-era code that older repos still exercise.
+      # Load-bearing flags identical to the hybrid pass.
+      - name: ASan — workspace test (default features, no hybrid)
+        run: cargo +nightly-2026-04-15 test --workspace --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
+
+  tsan:
+    name: "tsan / linux-x86_64"
+    # Linux-x86_64 only per D-SAN-1 (matches asan job).
+    runs-on: ubuntu-24.04
+    # TSan is scoped to two test binaries (soak_agent + stress_render)
+    # so wall-clock is bounded. 30 min envelope mirrors miri.yml's bound.
+    timeout-minutes: 30
+    env:
+      # -Zsanitizer=thread: ThreadSanitizer instrumentation. Catches
+      # data races on multi-threaded code paths; libsodium-internal
+      # inline-asm false positives are suppressed via tsan-suppressions.txt.
+      # -Cdebug-assertions=on: enable debug_assert!() under the
+      # sanitized build (matches asan job rationale).
+      RUSTFLAGS: "-Zsanitizer=thread -Cdebug-assertions=on"
+      # suppressions=...: points at the curated tsan-suppressions.txt
+      # (Plan 23-02 deliverable). ${{ github.workspace }} expands to
+      # the runner-side absolute path of the checkout root — canonical
+      # GitHub Actions idiom for runner-side file references.
+      # halt_on_error=1: exit non-zero on first finding so CI fails
+      # loudly (matches asan job abort_on_error=1 intent).
+      TSAN_OPTIONS: "suppressions=${{ github.workspace }}/tsan-suppressions.txt:halt_on_error=1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain with rust-src
+        # Identical to asan job — both jobs need rust-src for -Zbuild-std,
+        # neither needs the miri component. Pinned nightly-2026-04-15 matches
+        # miri.yml so a single bump PR updates both workflows.
+        run: |
+          rustup toolchain install nightly-2026-04-15 --component rust-src --profile minimal
+          rustup run nightly-2026-04-15 rustc --version
+
+      - name: Install libsodium-dev + llvm + pkg-config
+        # Identical to asan job — TSan instrumentation also needs
+        # llvm-symbolizer for readable stack traces, and libsodium-dev for
+        # the FFI surface the agent + stress paths exercise.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev pkg-config llvm
+
+      - name: Verify tsan-suppressions.txt exists (Plan 23-02 deliverable)
+        # Makes the cross-plan dependency on Plan 23-02 visible in the
+        # workflow output — if the suppressions file goes missing later
+        # (rename, accidental delete, branch divergence), the TSan run fails
+        # LOUDLY with a clear message rather than silently running TSan with
+        # no suppressions and burying the operator in libsodium inline-asm
+        # false-positive noise.
+        run: |
+          test -f tsan-suppressions.txt || { echo "ERROR: tsan-suppressions.txt missing — Plan 23-02 deliverable"; exit 1; }
+          head -20 tsan-suppressions.txt
+
+      # MEMSAFE-04 primary acceptance: TSan on `soak_agent` + `stress_render`
+      # only. Scope-not-shotgun by design — running TSan on the full hybrid
+      # suite would conflate libsodium-internal inline-asm false positives
+      # (suppressed per-line in tsan-suppressions.txt with `# Why:` rationale)
+      # with our-code findings on the agent + stress concurrency paths,
+      # defeating the audit-readiness signal that MEMSAFE-04 is meant to deliver.
+      #
+      # `--features hybrid,slow-tests` is REQUIRED — both test binaries declare
+      # `required-features = ["hybrid", "slow-tests"]` in Cargo.toml's [[test]]
+      # blocks (lines 113-120). Without `slow-tests` the tests are not compiled.
+      # `--test soak_agent --test stress_render` flags scope TSan to exactly
+      # these two test binaries (the agent + stress concurrency paths).
+      #
+      # Load-bearing flags identical to asan job: `-Zbuild-std` prevents
+      # libsodium-sys build-script instrumentation; `--target x86_64-unknown-linux-gnu`
+      # prevents RUSTFLAGS leaking to build scripts / proc macros;
+      # `--no-fail-fast` lets TSan surface ALL findings in one workflow run.
+      - name: TSan — soak_agent + stress_render --features hybrid,slow-tests
+        run: cargo +nightly-2026-04-15 test --features hybrid,slow-tests --target x86_64-unknown-linux-gnu -Zbuild-std --test soak_agent --test stress_render --no-fail-fast

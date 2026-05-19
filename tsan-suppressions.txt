@@ -1,0 +1,107 @@
+# TSan (ThreadSanitizer) suppressions for sss
+#
+# ============================================================================
+# File Purpose
+# ============================================================================
+# This file is read by ThreadSanitizer (TSan) at runtime when TSAN_OPTIONS
+# contains `suppressions=<this-file>`. The wiring lives in
+# `.github/workflows/sanitizer.yml` (Plan 23-01) under the `tsan` job's `env:`
+# block, which sets:
+#
+#     TSAN_OPTIONS=suppressions=${{ github.workspace }}/tsan-suppressions.txt
+#
+# This file is a COMMITTED AUDIT ARTEFACT — every suppression here is part of
+# reviewable git history. Plan reference: Phase 23 / MEMSAFE-04 acceptance
+# criterion (see `.planning/REQUIREMENTS.md`).
+#
+# Each non-comment line is a suppression matched at TSan runtime against any
+# frame in a stack trace.
+#
+# ============================================================================
+# Policy
+# ============================================================================
+#
+# P1: Every suppression line MUST carry a `# Why:` comment ON THE LINE
+#     IMMEDIATELY ABOVE the suppression itself.
+#     Why: Mirrors `scripts/check-allow-why.sh` (Phase 21 Plan 21-04) — every
+#     audit artefact should self-document. The convention applied to `#[allow]`
+#     in v2.1 Plan 11-04 (`// Why:` adjacency) carries over to this file.
+#
+# P2: The `# Why:` MUST name (a) the upstream issue / library / behaviour
+#     pattern triggering the false positive AND (b) why this is a false
+#     positive and not a real bug we should fix.
+#     Why: Example: `# Why: libsodium inline asm in
+#     crypto_box_curve25519xsalsa20poly1305_ref::box (upstream tracking:
+#     https://github.com/jedisct1/libsodium/issues/N) — TSan cannot reason
+#     about inline-asm fences.` Both halves are load-bearing for an auditor.
+#
+# P3: NO shotgun broad-pattern suppressions. Prefer specific function-level
+#     patterns over broad library patterns.
+#     Why: Bad: `race:libsodium*`. Good: `race:crypto_secretbox_easy`. The
+#     narrower pattern surfaces NEW races in the same library — which is the
+#     entire point of running TSan. `race:libsodium*` is a graveyard pattern.
+#
+# P4: One suppression per atomic git commit. Convention:
+#     `chore(23-02): tsan-suppress <symbol> — <one-line-why>` with the full
+#     rationale in the file's comment.
+#     Why: Makes `git blame` on `tsan-suppressions.txt` the audit trail — one
+#     blame = one upstream issue + one rationale.
+#
+# P5: Suppressions reviewed before every milestone close-out. The Phase 23
+#     PHASE-SUMMARY (and every subsequent phase summary that touches
+#     `sanitizer.yml`) MUST enumerate the suppressions list and re-justify
+#     each entry.
+#     Why: A suppression that survives multiple milestones without
+#     justification refresh is a red flag — either the upstream issue is
+#     dead and the suppression should be removed, or the rationale was
+#     wrong and we are hiding a real bug.
+#
+# P6: Suppression format reference: `<category>:<symbol-pattern>` where
+#     categories are `race`, `race_top`, `thread`, `mutex`, `signal`,
+#     `deadlock`, `called_from_lib`.
+#     Why: See https://github.com/google/sanitizers/wiki/threadsanitizersuppressions
+#     for the canonical syntax. A malformed line is silently ignored by TSan
+#     (not a parse error) — so an inadvertent typo gives the impression of
+#     coverage where there is none.
+#
+# P7: If a suppression can be removed (upstream fix landed, code refactored,
+#     surface no longer exists), REMOVE IT — keep the file lean. A milestone
+#     summary that documents removals is as valuable as one that documents
+#     additions.
+#     Why: A growing suppressions file with no shrinkage is a code-smell that
+#     suggests the discipline has degraded into rubber-stamping.
+#
+# ============================================================================
+# Initial State
+# ============================================================================
+#
+# This file is INTENTIONALLY EMPTY of suppressions at first commit (Plan 23-02
+# deliverable, per `.planning/phases/23-.../23-CONTEXT.md` decision §1.3:
+# "Initial commit lands EMPTY (with file-top `# Why:` header explaining the
+# policy)").
+#
+# The first `.github/workflows/sanitizer.yml` cron run (Saturday 03:00 UTC) or
+# `workflow_dispatch` trigger surfaces real false positives. First TSan run is
+# expected to surface libsodium inline-asm false positives (per
+# ARCHITECTURE.md §2.3: "ThreadSanitizer does not support atomic fences nor
+# synchronization performed using inline assembly code"). When that surfaces,
+# follow Policy P1-P6 above to add the first suppression entry.
+#
+# Until then, this file is the "we have set up the discipline, we have not
+# yet had to use it" honest scope-statement.
+#
+# ============================================================================
+# Audit-Trail Footer
+# ============================================================================
+#
+# Plan:       Phase 23 / 23-02 / MEMSAFE-04
+# Workflow:   `.github/workflows/sanitizer.yml` (Plan 23-01)
+# X-ref:      `docs/security-depth.md § Sanitizer Coverage` (Plan 23-05)
+#             explains what TSan covers vs what miri / ASan cover.
+# Sibling:    `scripts/check-allow-why.sh` (Phase 21 Plan 21-04) — the
+#             `# Why:` adjacency rule mirrors the v2.1 Plan 11-04 `// Why:`
+#             rationale convention applied to `#[allow]`.
+#
+# ============================================================================
+# Suppressions (none yet — see "Initial State" above)
+# ============================================================================

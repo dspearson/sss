@@ -4,6 +4,12 @@ version = "2.0.1"
 edition = "2024"
 license = "ISC"
 authors = ["Dominic Pearson <dsp@technoanimal.net>"]
+# Not published to crates.io — release artefacts are distributed via GitHub
+# releases + Registry. SUPPLY-01 (Phase 24): marks sss as non-public so
+# cargo-deny's `allow-wildcard-paths` applies to the rust-9p vendored path
+# dep + trelis git-rev deps. Reproducible-build verification (Phase 26)
+# uses these path/git pins directly.
+publish = false
 
 [features]
 default = []

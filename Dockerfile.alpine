@@ -24,8 +24,11 @@ RUN mkdir -p .cargo && cat > .cargo/config.toml <<EOF
 linker = "gcc"
 EOF
 
+# Phase 25 BUILD-04: cargo-auditable embeds the dep manifest in release binaries.
+RUN cargo install --locked cargo-auditable
+
 # Build for native musl target (Alpine's default) with hybrid PQC support
-RUN cargo build --release --features fuse,hybrid
+RUN cargo auditable build --release --features fuse,hybrid
 
 # Create minimal runtime image
 FROM alpine:latest

@@ -36,7 +36,14 @@ fi
 # Build release binary with FUSE support
 echo \"==> Building release binary for ARM64 Linux...\"
 source \$HOME/.cargo/env
-cargo build --release --features fuse
+
+# Phase 25 BUILD-04: install cargo-auditable if missing then auditable-build.
+# Embeds the dep manifest in the produced sss binary so cargo audit bin works.
+if ! command -v cargo-auditable &> /dev/null; then
+    echo \"==> Installing cargo-auditable...\"
+    cargo install --locked cargo-auditable
+fi
+cargo auditable build --release --features fuse
 
 echo \"\"
 echo \"==> Build successful!\"

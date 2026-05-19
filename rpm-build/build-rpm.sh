@@ -206,6 +206,10 @@ RUN dnf install -y \\
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:\${PATH}"
 
+# Phase 25 BUILD-04: cargo-auditable embeds the dep manifest in release binaries.
+# sss.spec's %build invokes \`cargo auditable build\`.
+RUN cargo install --locked cargo-auditable
+
 # Setup build environment
 RUN rpmdev-setuptree
 

@@ -42,8 +42,10 @@ Features:
 %setup -q
 
 %build
-# Build in release mode with FUSE and hybrid PQC key support
-cargo build --release --features fuse,hybrid
+# Build in release mode with FUSE and hybrid PQC key support.
+# Phase 25 BUILD-04: cargo-auditable embeds the dep manifest in the binary
+# (rpm-build/Dockerfile.* installs cargo-auditable before invoking rpmbuild).
+cargo auditable build --release --features fuse,hybrid
 
 %install
 # Create necessary directories

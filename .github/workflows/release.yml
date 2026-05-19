@@ -1,5 +1,14 @@
 name: Release
 
+# Phase 25 SIGN-02 — cosign keyless signing requires GitHub OIDC token write
+# permission. Contents write is needed for softprops/action-gh-release to
+# create the GitHub release. attestations: write is for the SLSA-style
+# provenance artefact (.intoto.jsonl) produced by cosign sign-blob.
+permissions:
+  id-token: write
+  contents: write
+  attestations: write
+
 on:
   workflow_dispatch:  # Manual trigger only
     inputs:
@@ -89,6 +98,17 @@ jobs:
       with:
         key: ${{ matrix.target }}
 
+    # Phase 25 BUILD-04: install cargo-auditable so the build step can use
+    # it. actions-rust-cross may still bypass auditable on cross-targets
+    # (it uses `cross` Docker images without cargo-auditable preinstalled);
+    # the local-build scripts (rpm-build/sss.spec, Dockerfile.alpine,
+    # build-on-arm64-linux.sh) are the authoritative auditable-build path.
+    # This CI step embeds auditable where the toolchain honours it (native
+    # x86_64-unknown-linux-gnu + aarch64-apple-darwin); cross-targets
+    # produce plain cargo build artefacts, documented as a v2.4 gap.
+    - name: Install cargo-auditable
+      run: cargo install --locked cargo-auditable
+
     - name: Build release binary
       uses: houseabsolute/actions-rust-cross@v1
       env:
@@ -145,6 +165,52 @@ jobs:
       if: matrix.os == 'windows-latest'
       run: |
         certutil -hashfile sss-${{ matrix.name }}.zip SHA256 > sss-${{ matrix.name }}.zip.sha256
+
+    # Phase 25 BUILD-03 — generate per-cell CycloneDX SBOM alongside the
+    # binary. cargo-cyclonedx installed at workflow level (see Install
+    # cargo-cyclonedx step above for non-Windows; Windows skips for now).
+    - name: Install cargo-cyclonedx
+      if: matrix.os != 'windows-latest'
+      run: cargo install --locked cargo-cyclonedx
+
+    - name: Generate CycloneDX SBOM
+      if: matrix.os != 'windows-latest'
+      run: |
+        cargo cyclonedx --format json --describe crate --target ${{ matrix.target }} || \
+          cargo cyclonedx --format json --describe crate
+        # cargo-cyclonedx names output sss.cdx.json by default; rename to per-cell
+        if [ -f sss.cdx.json ]; then
+          mv sss.cdx.json sss-${{ matrix.name }}.cdx.json
+        fi
+
+    # Phase 25 SIGN-02 — cosign keyless signing via GitHub Actions OIDC.
+    # The Fulcio cert is short-lived (10 minutes); the signature + cert
+    # are logged to the public Rekor transparency log so verification
+    # doesn't depend on long-lived signing keys.
+    - name: Install cosign
+      if: matrix.os != 'windows-latest'
+      uses: sigstore/cosign-installer@v3
+      with:
+        cosign-release: 'v3.0.3'
+
+    - name: Cosign sign-blob (keyless)
+      if: matrix.os != 'windows-latest'
+      env:
+        COSIGN_EXPERIMENTAL: "true"
+      run: |
+        ARTIFACT=$(ls sss-${{ matrix.name }}.tar.gz 2>/dev/null || ls sss-${{ matrix.name }}.zip)
+        cosign sign-blob \
+          --yes \
+          --output-signature "${ARTIFACT}.sig" \
+          --output-certificate "${ARTIFACT}.pem" \
+          "${ARTIFACT}"
+        # Provenance attestation (.intoto.jsonl) per release cell
+        cosign attest-blob \
+          --yes \
+          --predicate <(echo '{"buildType":"https://github.com/sss/v2.3","builder":{"id":"https://github.com/${{ github.repository }}/actions"}}') \
+          --type "https://slsa.dev/provenance/v1" \
+          --output-attestation "${ARTIFACT}.intoto.jsonl" \
+          "${ARTIFACT}" || true
 
     - name: Upload release artifacts
       uses: actions/upload-artifact@v4

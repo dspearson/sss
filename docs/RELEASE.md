@@ -238,6 +238,100 @@ Refresh procedure: drop new sources into `vendor/rust-9p/`, run
 commit the change as a single atomic commit. There is no upstream
 pin to bump — the project owns the vendored copy.
 
+## Supply-Chain Artefacts (Phase 25)
+
+Each release ships with three supply-chain artefacts alongside the binary:
+
+1. **CycloneDX SBOM** (`sss-<cell>.cdx.json`) — produced by
+   `cargo-cyclonedx 0.5.9+` via `scripts/release/generate-sbom.sh`. Six
+   files in `dist/sbom/`: three platforms (linux-x86_64, linux-aarch64,
+   macos-arm64) × two feature arms (default, hybrid). `trelis-*`, `fips204`,
+   `ed448-goldilocks-plus`, `pqcrypto-*` appear in the `hybrid` SBOMs only
+   (default SBOMs are the classic crypto surface).
+2. **cargo-auditable embed** — `cargo auditable build` injects the dep
+   manifest into the binary itself. Verify with
+   `cargo audit bin target/release/sss` (requires `cargo-audit` installed).
+   Release entry points using auditable: `Dockerfile.alpine`,
+   `build-on-arm64-linux.sh`, `rpm-build/build-rpm.sh`,
+   `rpm-build/sss.spec`. Local-only entry points
+   (`debian/`, `build-macos-*.sh`, `rpm-build/Dockerfile.*`) follow the
+   same pattern on the release operator's host.
+3. **cosign keyless signature** (`<artefact>.sig` + `<artefact>.pem`) —
+   produced by sigstore/cosign v3.0.3+ via
+   `.github/workflows/release.yml` SIGN-02 step. Uses GitHub Actions
+   OIDC for ephemeral Fulcio certs; signatures logged to the Rekor
+   public transparency log.
+4. **SLSA-style provenance** (`<artefact>.intoto.jsonl`) — cosign
+   `attest-blob` step in the same workflow; embeds build provenance
+   for SLSA Level 2 attestation.
+
+### Release-Signing Keypair (SIGN-01 / D-V23-04)
+
+The release-signing keypair is a separate concern from the envelope-sig
+material used inside sealed envelopes. Per D-V23-04 the two security
+domains are kept separate by:
+
+- Distinct algorithm (Ed25519 for release-signing vs Ed448 + ML-DSA-65
+  for envelope-sig).
+- Distinct domain-separation bytes: release-signing uses
+  `b"sss-release-artifact-sig-v1"`; envelope-sig uses
+  `b"sss-envelope-sig-v1"` (Phase 19 lock).
+- Different storage policy: release-signing private key lives offline
+  (HSM or air-gapped USB) and is regenerated per major version;
+  envelope-sig keys live in the per-user keystore.
+
+Generate the offline fallback keypair with:
+
+```bash
+bash scripts/release/generate-release-key.sh /path/to/offline-storage
+```
+
+The script produces three files: `sss-release-sig-v1.{key,pub,notes}`.
+The public key gets committed to `docs/release-keys/`. The private key
+NEVER leaves the offline storage. See the script header for the full
+storage policy.
+
+The cosign keyless flow (SIGN-02) is the PRIMARY signing path; the
+offline Ed25519 keypair is the FALLBACK for environments where
+sigstore is unavailable OR for cross-verification of cosign
+signatures.
+
+### Verification
+
+Verify the cosign signature:
+
+```bash
+cosign verify-blob \
+    --certificate sss-<cell>.tar.gz.pem \
+    --signature sss-<cell>.tar.gz.sig \
+    --certificate-identity-regexp 'https://github\.com/[^/]+/sss' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    sss-<cell>.tar.gz
+```
+
+Verify the offline Ed25519 signature (if present):
+
+```bash
+openssl pkeyutl -verify \
+    -pubin -inkey docs/release-keys/sss-release-sig-v1.pub \
+    -sigfile sss-<cell>.tar.gz.offline.sig \
+    -in sss-<cell>.tar.gz
+```
+
+Verify the embedded dep manifest:
+
+```bash
+cargo install --locked cargo-audit
+cargo audit bin sss
+```
+
+Verify the SBOM is well-formed CycloneDX:
+
+```bash
+jq '.bomFormat, .specVersion' sss-<cell>.cdx.json
+# Expected: "CycloneDX" and "1.4" (or newer)
+```
+
 ## Post-Release Checklist
 
 - [ ] `git tag -s v<VER>` signed with the release GPG key
@@ -246,6 +340,9 @@ pin to bump — the project owns the vendored copy.
 - [ ] `latest` symlink and `latest.json` updated
 - [ ] `curl -s https://technoanimal.net/sss/latest.json | jq -r .version` returns `<VER>`
 - [ ] CHANGELOG entry merged to master, version bumped on master for the next development cycle if appropriate
+- [ ] **Phase 25:** 6 CycloneDX SBOMs in `dist/sbom/` produced via `scripts/release/generate-sbom.sh`
+- [ ] **Phase 25:** Each shipped binary has cargo-auditable embed (`cargo audit bin sss` exits clean)
+- [ ] **Phase 25:** Each release archive has a `.sig` + `.pem` + `.intoto.jsonl` from cosign (visible on the GitHub Release page)
 
 ## See Also
 

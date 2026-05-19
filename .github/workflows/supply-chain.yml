@@ -285,20 +285,72 @@ jobs:
             echo "::notice title=cargo-geiger snapshot::see workflow log for full output"
           fi
 
-  # Forward-pointer: Phase 25 BUILD-04 will add a `cargo auditable build`
-  # verification job here. The job will:
-  #   1. cargo install --locked cargo-auditable
-  #   2. cargo auditable build --features hybrid --release
-  #   3. Verify the produced sss binary embeds the dep manifest (via
-  #      `cargo auditable extract` or `auditable-extract --binary target/...`)
-  # Phase 25 also wires SBOM (CycloneDX) generation. The stub below is a
-  # no-op gate that documents the intent; Phase 25 replaces it with the
-  # substantive verification.
-  auditable-stub:
-    name: "cargo-auditable embed (Phase 25 placeholder) / linux-x86_64"
+  # Phase 25 BUILD-04 + BUILD-03 — verify cargo-auditable embed + SBOM
+  # generation work end-to-end. cargo-auditable is the runtime dep-manifest
+  # embed; cargo-cyclonedx is the per-cell CycloneDX SBOM generator.
+  auditable:
+    name: "cargo-auditable + SBOM (BUILD-03 + BUILD-04) / linux-x86_64"
     runs-on: ubuntu-24.04
-    timeout-minutes: 1
+    timeout-minutes: 30
     steps:
-      - name: Phase 25 BUILD-04 placeholder
+      - uses: actions/checkout@v4
+
+      - name: Install pinned stable toolchain
         run: |
-          echo "::notice title=Phase 25 forward-pointer::cargo auditable build verification + CycloneDX SBOM generation lands in Phase 25 BUILD-03/BUILD-04. This job is a placeholder."
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+
+      - name: Install libsodium-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev pkg-config
+
+      - name: Install cargo-auditable + cargo-cyclonedx + cargo-audit
+        run: |
+          cargo install --locked cargo-auditable
+          cargo install --locked cargo-cyclonedx
+          cargo install --locked cargo-audit
+
+      - name: cargo auditable build --features hybrid
+        # Build with auditable so the binary embeds the dep manifest.
+        run: cargo auditable build --release --features hybrid
+
+      - name: Verify cargo-auditable embed
+        # cargo audit bin reads the embedded manifest from the binary.
+        # Exits clean if the manifest is present and no advisories apply.
+        run: cargo audit bin target/release/sss
+
+      - name: Generate CycloneDX SBOMs (6 cells)
+        # Plan 25-02 scripts/release/generate-sbom.sh — produces 6 files
+        # in dist/sbom/ across the 3 platforms × 2 feature arms matrix.
+        # Verifies the script runs end-to-end + the produced SBOMs are
+        # valid CycloneDX JSON.
+        run: bash scripts/release/generate-sbom.sh
+
+      - name: Verify SBOM count + structure
+        run: |
+          set -euo pipefail
+          COUNT=$(ls dist/sbom/sss-*.cdx.json 2>/dev/null | wc -l)
+          if [ "$COUNT" != "6" ]; then
+            echo "::error title=SBOM count mismatch::expected 6, got $COUNT"
+            exit 1
+          fi
+          for f in dist/sbom/sss-*.cdx.json; do
+            BOMFORMAT=$(jq -r '.bomFormat' "$f")
+            if [ "$BOMFORMAT" != "CycloneDX" ]; then
+              echo "::error title=SBOM format::$f bomFormat=$BOMFORMAT (expected CycloneDX)"
+              exit 1
+            fi
+          done
+          # trelis MUST appear in hybrid SBOMs (Phase 25 BUILD-03 acceptance)
+          if ! jq -e '.components[] | select(.name == "trelis-hybrid")' dist/sbom/sss-linux-x86_64-hybrid.cdx.json > /dev/null; then
+            echo "::error title=trelis missing::trelis-hybrid not in hybrid SBOM"
+            exit 1
+          fi
+          # trelis MUST NOT appear in default SBOMs (proves feature-arm coverage)
+          if jq -e '.components[] | select(.name == "trelis-hybrid")' dist/sbom/sss-linux-x86_64-default.cdx.json > /dev/null 2>&1; then
+            echo "::error title=trelis leak::trelis-hybrid present in default SBOM (feature isolation broken)"
+            exit 1
+          fi
+          echo "::notice title=SBOM verification::6 CycloneDX SBOMs produced; trelis isolation OK"

@@ -44,6 +44,9 @@ sss-master/
 /dist/
 # Release staging directories (e.g. release-2.0.1/) — generated locally, not committed
 release-*/
+# Phase 25 SIGN-01 exception: docs/release-keys/ holds committed PUBLIC keys
+# for release-artefact signing verification (private keys never live here).
+!docs/release-keys/
 
 # GSD workflow metadata (local planning artefacts, not for distribution)
 /.planning/

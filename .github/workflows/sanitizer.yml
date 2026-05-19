@@ -1,0 +1,146 @@
+# Sanitizers — weekly memory + concurrency safety detection on the FFI surface (MEMSAFE-03 + MEMSAFE-04)
+#
+# Purpose
+# -------
+# Catch UB / memory-safety / data-race violations on the 22 production FFI
+# sites (libsodium + libc + trelis) that miri (Phase 22) cannot reach because
+# miri cannot execute foreign code. AddressSanitizer covers the full hybrid
+# test suite — every libsodium and trelis FFI call exercised under cargo test
+# runs with -Zsanitizer=address instrumentation. ThreadSanitizer is scoped to
+# the `soak_agent` + `stress_render` test binaries which exercise the agent +
+# stress concurrency paths; running TSan on the full hybrid suite would
+# conflate libsodium-internal false positives with our-code findings and
+# defeat the audit-readiness signal.
+#
+# Decision references
+# -------------------
+# - D-SAN-1 (CONTEXT.md §Locked Policy Decisions): linux-x86_64 only.
+#   macOS / linux-aarch64 sanitizer coverage is deferred to v2.4 once
+#   build-host complexity drops; current sanitizer toolchain coverage is
+#   strongest on linux-x86_64.
+# - CONTEXT.md weekly cron lock: Saturday 03:00 UTC. miri.yml runs Sunday
+#   03:00 UTC; sanitizer.yml is offset to Saturday so the two scheduled-only
+#   workflows do not collide on the GitHub-hosted runner queue.
+# - Pinned nightly: `nightly-2026-04-15` — same pin as miri.yml so a single
+#   bump PR updates both. Sanitizers require nightly for -Zsanitizer=address
+#   and -Zsanitizer=thread plus -Zbuild-std (AddressSanitizer / ThreadSanitizer
+#   per Rust Unstable Book §Sanitizers).
+# - MEMSAFE-03 acceptance: ASan on `cargo test --workspace --features hybrid`
+#   exits clean (or surfaces a real finding to fix).
+# - MEMSAFE-04 acceptance: TSan on `soak_agent` + `stress_render` with curated
+#   tsan-suppressions.txt for libsodium inline-asm false positives.
+#
+# Scope
+# -----
+# linux-x86_64 only (`ubuntu-24.04` matches ci-matrix.yml + miri.yml).
+# Two jobs, both Linux-x86_64:
+#   - asan: ASan on `cargo test --workspace --features hybrid` (MEMSAFE-03),
+#     plus a secondary default-features pass covering the classic-arm
+#     libsodium FFI surface.
+#   - tsan: TSan scoped to `soak_agent` + `stress_render` only (MEMSAFE-04),
+#     with `TSAN_OPTIONS=suppressions=...` pointing at the curated
+#     `tsan-suppressions.txt` (Plan 23-02 deliverable; sibling plan in
+#     this same Phase 23 wave).
+# macOS / aarch64 deferred per D-SAN-1.
+#
+# Refresh cadence
+# ---------------
+# Same per-milestone deliberate-bump policy as miri.yml — the
+# `nightly-2026-04-15` pin is bumped deliberately per milestone, never
+# silently floated to "latest nightly". When the upstream sanitizer
+# runtime or rustc introduces a breaking change, the cron run starts
+# failing and the maintainer notices via the GitHub Actions email digest;
+# the bump PR validates the new pin against this same workflow before
+# merging. Sharing the pin with miri.yml means a single bump PR updates
+# both scheduled-only workflows in lockstep.
+#
+# Cross-references
+# ----------------
+# - tsan-suppressions.txt (Plan 23-02 — initial empty file with policy
+#   header; populates after the first TSan run surfaces libsodium
+#   inline-asm false positives, with `# Why:` rationale per suppression).
+# - .github/workflows/miri.yml (Phase 22 / Plan 22-03 — sister
+#   scheduled-only workflow; sanitizer.yml mirrors its shape with
+#   sanitizer-specific RUSTFLAGS / TSAN_OPTIONS / target swap).
+# - docs/security-depth.md § Sanitizer Coverage (Plan 23-05 — auditor
+#   entry point documenting what AddressSanitizer + ThreadSanitizer cover
+#   vs what miri covers; the honest scope statement lives there).
+# - .github/workflows/ci-matrix.yml — per-push regression net that runs
+#   on stable rust across the 3-platform × 2-feature-arm grid. Sanitizers
+#   are a separate scheduled-only workflow because nightly-toolchain
+#   churn and ~3-5x slowdown would be too noisy on every push.
+# - .planning/phases/21-... QUAL-01 lint policy (Phase 21) — clippy
+#   strictness lives in Cargo.toml [lints.clippy]; sanitizer.yml does
+#   NOT override or duplicate that policy. The clippy gate is the
+#   ci-matrix.yml concern.
+# - .planning/phases/22-miri-on-safe-wrappers/22-01-SUMMARY.md — the
+#   22 cfg-stubbed FFI sites that miri avoids; sanitizer.yml runs
+#   WITHOUT `--cfg miri`, so the real FFI paths execute under ASan.
+
+name: Sanitizers
+
+on:
+  # Scheduled-only — weekly Saturday 03:00 UTC. miri.yml runs Sunday
+  # 03:00 UTC (CONTEXT.md cron lock); sanitizer.yml takes Saturday so the
+  # two scheduled-only workflows do not collide on the runner queue.
+  # No `push:` or `pull_request:` triggers; ASan workspace runs ~3-5x
+  # slower than plain `cargo test` and would be too noisy on every push.
+  schedule:
+    - cron: "0 3 * * 6"
+  # Manual trigger for iterating on the workflow itself or for re-running
+  # after a known-fix lands without waiting up to 7 days for the next cron.
+  # Mirrors miri.yml convention.
+  workflow_dispatch:
+
+# No `permissions:` block — defaults to read-only repo access (matches
+# miri.yml + ci-matrix.yml convention). Sanitizer jobs never need to
+# push, comment, or mutate state.
+
+jobs:
+  asan:
+    name: "asan / linux-x86_64"
+    # Linux-x86_64 only per D-SAN-1 (macOS / linux-aarch64 deferred to v2.4).
+    runs-on: ubuntu-24.04
+    # ASan instrumentation adds ~3-5x runtime over plain `cargo test`;
+    # the full workspace hybrid suite is the upper bound. 60 min envelope
+    # absorbs unscheduled CI runner contention without false-negative
+    # truncation. Weekly cadence absorbs the occasional re-run.
+    timeout-minutes: 60
+    env:
+      # -Zsanitizer=address: AddressSanitizer instrumentation (Rust
+      # Unstable Book §Sanitizers). Catches heap/stack OOB, UAF, leaks.
+      # -Cdebug-assertions=on: enable debug_assert!() under the
+      # sanitized build so debug-only invariants get checked too.
+      RUSTFLAGS: "-Zsanitizer=address -Cdebug-assertions=on"
+      # detect_stack_use_after_return=1: catches dangling references
+      # to stack frames (load-bearing on the FFI surface that passes
+      # &mut [u8] buffers into libsodium).
+      # check_initialization_order=1: catches static-initialiser order
+      # fiasco between FFI bindings.
+      # abort_on_error=1: exit non-zero on first finding so CI fails
+      # loudly rather than swallowing the signal in test output.
+      ASAN_OPTIONS: "detect_stack_use_after_return=1:check_initialization_order=1:abort_on_error=1"
+    steps: []
+
+  tsan:
+    name: "tsan / linux-x86_64"
+    # Linux-x86_64 only per D-SAN-1 (matches asan job).
+    runs-on: ubuntu-24.04
+    # TSan is scoped to two test binaries (soak_agent + stress_render)
+    # so wall-clock is bounded. 30 min envelope mirrors miri.yml's bound.
+    timeout-minutes: 30
+    env:
+      # -Zsanitizer=thread: ThreadSanitizer instrumentation. Catches
+      # data races on multi-threaded code paths; libsodium-internal
+      # inline-asm false positives are suppressed via tsan-suppressions.txt.
+      # -Cdebug-assertions=on: enable debug_assert!() under the
+      # sanitized build (matches asan job rationale).
+      RUSTFLAGS: "-Zsanitizer=thread -Cdebug-assertions=on"
+      # suppressions=...: points at the curated tsan-suppressions.txt
+      # (Plan 23-02 deliverable). ${{ github.workspace }} expands to
+      # the runner-side absolute path of the checkout root — canonical
+      # GitHub Actions idiom for runner-side file references.
+      # halt_on_error=1: exit non-zero on first finding so CI fails
+      # loudly (matches asan job abort_on_error=1 intent).
+      TSAN_OPTIONS: "suppressions=${{ github.workspace }}/tsan-suppressions.txt:halt_on_error=1"
+    steps: []

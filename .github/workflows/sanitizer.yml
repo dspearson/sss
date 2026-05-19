@@ -120,7 +120,49 @@ jobs:
       # abort_on_error=1: exit non-zero on first finding so CI fails
       # loudly rather than swallowing the signal in test output.
       ASAN_OPTIONS: "detect_stack_use_after_return=1:check_initialization_order=1:abort_on_error=1"
-    steps: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned nightly toolchain with rust-src
+        # Pinned nightly per CONTEXT D-V23-05 + milestone-research lock 2026-05-17.
+        # nightly-2026-04-15 = same pin as miri.yml (toolchain consistency across
+        # the two scheduled-only workflows). rust-src is REQUIRED for -Zbuild-std
+        # below; no `miri` component needed (this is the sanitizer workflow).
+        # `--profile minimal` keeps the toolchain attack surface small.
+        run: |
+          rustup toolchain install nightly-2026-04-15 --component rust-src --profile minimal
+          rustup run nightly-2026-04-15 rustc --version
+
+      - name: Install libsodium-dev + llvm + pkg-config
+        # libsodium-dev: the classic suite's AEAD + Argon2id backing library;
+        # needed for both the hybrid and default-features ASan test passes.
+        # llvm: provides `llvm-symbolizer` — without it, ASan stack traces in
+        # the workflow log are address-only and useless for triage.
+        # pkg-config: libsodium-sys build script uses pkg-config to locate
+        # libsodium headers + library on the runner.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsodium-dev pkg-config llvm
+
+      # MEMSAFE-03 primary acceptance: ASan on `cargo test --workspace --features hybrid`.
+      # `-Zbuild-std` is LOAD-BEARING — without it, libsodium-sys build scripts
+      # get instrumented and the build breaks (CONTEXT.md decision §2).
+      # `--target x86_64-unknown-linux-gnu` is REQUIRED per Rust Unstable Book
+      # §Sanitizers — without an explicit target, RUSTFLAGS applies to build
+      # scripts and procedural macros, breaking libsodium-sys compilation.
+      # `--no-fail-fast` lets ASan continue past a single test failure so the
+      # operator sees ALL sanitizer findings in one workflow run (bulk-fix signal).
+      - name: ASan — workspace test --features hybrid
+        run: cargo +nightly-2026-04-15 test --workspace --features hybrid --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
+
+      # MEMSAFE-03 secondary acceptance (CONTEXT.md Claude's Discretion §4):
+      # ASan on the default-features (classic-only, no hybrid) workspace test
+      # suite. Covers the libsodium FFI surface used by the classic crypto path
+      # without trelis being compiled in. Smaller surface than the hybrid pass
+      # above but covers the v1.x-era code that older repos still exercise.
+      # Load-bearing flags identical to the hybrid pass.
+      - name: ASan — workspace test (default features, no hybrid)
+        run: cargo +nightly-2026-04-15 test --workspace --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
 
   tsan:
     name: "tsan / linux-x86_64"

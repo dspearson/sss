@@ -318,13 +318,50 @@ dep crates by unsafe-block count.
 
 ## Supply Chain
 
-*(placeholder — Phase 24 SUPPLY-01/02/03)*
+The Phase 24 supply-chain story is a tiered enforcement surface:
+`cargo-deny` gates duplicate-version drift + advisories;
+`cargo-vet` attests per-dep review status; `.github/workflows/supply-chain.yml`
+runs both as a weekly Friday 03:00 UTC cron + workflow_dispatch +
+path-filtered pull_request job.
 
-Phase 24 will land `cargo-deny` tightening, `cargo-vet` adoption, and the
-SBOM (CycloneDX) generation pipeline. This subsection will document the
-audit trail from `Cargo.lock` → `cargo vet certify` → SBOM → release
-artefact, with explicit handling of the vendored `trelis` git pin and the
-`vendor/rust-9p` tree.
+**Policy-of-record:** [`docs/SUPPLY-CHAIN.md`](SUPPLY-CHAIN.md) — six
+sections covering cargo-deny configuration (multiple-versions = "deny"
+with 30-day skip-refresh SLA per D-DENY-1, unsound = "all" with two
+expiring RUSTSEC ignores), cargo-vet configuration (Mozilla + Google
+imports per D-VET-1 with explicit non-import of Bytecode Alliance until
+v2.4, `[policy.<crate>]` notes for trelis-* + rust-9p with AUDIT-01 /
+EXPERIMENTAL / `vendor/rust-9p` substrings retained per D-V23-06 no-scrub,
+the 294-exemption deferral to Phase 27 AUDIT-03 + v2.4 hand-author
+campaign), vendored-dep summary (forward-pointer to Phase 26 SUPPLY-06),
+trelis pin policy (live-discovered grep-count invariant: 10 occurrences
+across Cargo.toml + docs/security-model.md + docs/CRYPTOGRAPHY.md +
+supply-chain/config.toml), and the evolution workflow.
+
+**Enforcement surfaces:**
+
+- [`deny.toml`](../deny.toml) — cargo-deny configuration.
+- [`supply-chain/config.toml`](../supply-chain/config.toml) +
+  [`supply-chain/audits.toml`](../supply-chain/audits.toml) +
+  [`supply-chain/imports.lock`](../supply-chain/imports.lock) — cargo-vet
+  store (community-default location; deviates from earlier `.cargo/`
+  planning).
+- [`.github/workflows/supply-chain.yml`](../.github/workflows/supply-chain.yml)
+  — weekly Friday cron + PR trigger; five jobs: deny (GATE), vet (GATE),
+  trelis-pin (GATE), geiger (advisory, continue-on-error), auditable-stub
+  (Phase 25 BUILD-04 forward-pointer).
+
+**SBOM + cargo-auditable embed deferred to Phase 25** — supply-chain.yml
+has a placeholder slot. Phase 25 BUILD-03 (CycloneDX SBOM generation) +
+BUILD-04 (cargo-auditable embed verification) will replace the
+placeholder with substantive verification steps.
+
+**Vendored dep coverage** — trelis-hybrid + trelis-primitives (git-rev
+pinned) and rust-9p (vendored path-dep) are first-party from cargo-vet's
+perspective; their `[policy.<crate>]` entries in
+`supply-chain/config.toml` carry the audit-defensible notes (AUDIT-01
+external-audit tracking for trelis; Phase 26 SUPPLY-06 forward-pointer
+for rust-9p). The full vendoring policy lands in Phase 26 SUPPLY-06
+(`docs/vendoring-policy.md`).
 
 ---
 

@@ -35,12 +35,6 @@ unsound = "all"
 # use `ignore` per-advisory if a notice-level RUSTSEC needs to be silenced.
 ignore = [
     # Format: "RUSTSEC-YYYY-NNNNN", # rationale; expires: YYYY-MM-DD
-    # Why: fuser 0.14 has an uninitialised-memory-read in libfuse session
-    # creation (fix in fuser >=0.16.0). Bump deferred to Phase 25 (SBOM +
-    # release-artefact work touches the FUSE binary surface anyway) so the
-    # API migration lands alongside that work. Tracked in v2.3 audit
-    # closeout (Phase 27 AUDIT-03). Expires: 2026-08-19.
-    "RUSTSEC-2021-0154",
     # Why: rand 0.9.2 is unsound only when a custom log::Log implementation
     # is registered AND that logger calls rand::rng()/TryRng at trace level
     # (Stacked Borrows violation per @lopopolo). sss does not register a
@@ -123,10 +117,11 @@ skip = [
     # task. (Refresh by 2026-06-19)
     { crate = "bitflags@1.3.2", reason = "nix 0.26 transitive via vendored rust-9p" },
 
-    # Why: nix 0.26.4 from rust-9p (9P protocol); nix 0.30.1 from ctrlc.
-    # Both consumers stable; bumping rust-9p's nix is a Phase 26 vendoring
-    # task. (Refresh by 2026-06-19)
+    # Why: nix 0.26.4 from rust-9p (9P protocol); nix 0.29.0 from fuser 0.16;
+    # nix 0.30.1 from ctrlc. Three-way split; bumping rust-9p's nix is a
+    # Phase 26 vendoring task. (Refresh by 2026-06-19)
     { crate = "nix@0.26.4", reason = "vendored rust-9p uses older nix line" },
+    { crate = "nix@0.29.0", reason = "fuser 0.16 transitive (landed with Phase 29 fuser bump)" },
 
     # Why: num-traits 0.1.43 from enum_primitive 0.1 (vendored rust-9p
     # transitive); 0.2.19 from anything-modern. The 0.1 line is essentially
@@ -142,13 +137,6 @@ skip = [
     # getrandom 0.2/0.3 wasi targets. Same split-driver as r-efi.
     # (Refresh by 2026-06-19)
     { crate = "wit-bindgen@0.46.0", reason = "getrandom 0.2/0.3 wasi-target glue" },
-
-    # Why: zerocopy 0.7 from fuser 0.14; 0.8 from criterion dev-dep
-    # (ciborium) + ppv-lite86 (rand_chacha). fuser bump is deferred to
-    # Phase 25 (per RUSTSEC-2021-0154 ignore note); zerocopy split clears
-    # naturally when fuser bumps. (Refresh by 2026-06-19)
-    { crate = "zerocopy@0.7.35", reason = "fuser 0.14 transitive (bumps to 0.8 when fuser >=0.16 lands)" },
-    { crate = "zerocopy-derive@0.7.35", reason = "mechanical follow-on of zerocopy split" },
 
     # ─── Windows transitives (cross-platform crates) ───
     # Why: Windows transitives via dirs-sys (directories/dirs), rpassword,

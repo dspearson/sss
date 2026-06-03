@@ -1930,7 +1930,8 @@ impl Filesystem for SssFS {
     }
 
     /// Get file attributes by inode
-    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&mut self, _req: &Request<'_>, ino: u64, fh: Option<u64>, reply: ReplyAttr) {
+        let _ = fh; // SssFS tracks handles internally; fh from kernel not needed
         let _start = Instant::now();
         fuse_debug!("getattr ino={}", ino);
         // Handle synthetic .overlay directory

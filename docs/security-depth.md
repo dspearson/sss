@@ -599,3 +599,4 @@ disk + version-controlled at that point.
   (5 tests, 7 unsafe blocks)
 - [`.github/workflows/miri.yml`](../.github/workflows/miri.yml) — weekly
   miri runner pinned to `nightly-2026-04-15`
+- [docs/SECURITY-PROPERTIES.md](./SECURITY-PROPERTIES.md) — auditor-checkable replay-resistance matrix + trust-anchor diagram

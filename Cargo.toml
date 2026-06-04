@@ -143,6 +143,21 @@ name = "envelope_signature_negative_paths"
 path = "tests/envelope_signature_negative_paths.rs"
 required-features = ["hybrid"]
 
+# Phase 30-01 (TEST-14) — Known-Answer Tests for crypto primitives.
+# Default arm: XChaCha20-Poly1305 secretbox regression freeze + gap documentation.
+# No required-features: libsodium-sys is always available.
+[[test]]
+name = "crypto_kat"
+path = "tests/crypto_kat.rs"
+
+# Phase 30-01 (TEST-14) — Known-Answer Tests for hybrid primitives.
+# Hybrid arm: X448 RFC 7748 §6.2, Ed448 RFC 8032 §7.4, ML-DSA-65 NIST ACVP.
+# Belt-and-braces gating: required-features AND #![cfg(feature = "hybrid")] in source.
+[[test]]
+name = "hybrid_kat"
+path = "tests/hybrid_kat.rs"
+required-features = ["hybrid"]
+
 # ----------------------------------------------------------------------
 # Workspace clippy strictness contract (Phase 21 / QUAL-01).
 # Single source-of-truth lint policy per locked decision D-V23-02.

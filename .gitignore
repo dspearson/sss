@@ -63,6 +63,11 @@ release-*/
 # (sandbox keeps ~/.cargo/bin read-only; tools live here for the audit run)
 /.gsd-tools/
 
+# Phase 30 / MUTATE-01 — cargo-mutants scratch output (transient; outcomes.json
+# is the data source for docs/MUTANTS-BASELINE.md, the run tree is not committed)
+/mutants.out/
+/mutants.out*.json
+
 # Claude Flow generated files
 .claude/settings.local.json
 .mcp.json

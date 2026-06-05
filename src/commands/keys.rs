@@ -122,6 +122,15 @@ fn handle_keys_generate_command_with_prompt(
             let keypair = KeyPair::generate()?;
             let key_id = keystore.store_keypair(&keypair, password_option.as_deref())?;
 
+            // Sign-on-write: store_keypair writes a format_version=1 (unsigned)
+            // entry, which the signed-keypair load gate (and the agent) refuse,
+            // forcing a manual `sss keys upgrade`. Immediately upgrade it in
+            // place to a signed v2 entry via that same path so a freshly
+            // generated classic keypair is usable straight away. The hybrid/both
+            // arms already emit v2; this brings classic into line.
+            #[cfg(feature = "hybrid")]
+            keystore.upgrade_keypair_in_place(&key_id, password_option.as_deref())?;
+
             println!("Generated new keypair: {key_id}");
             println!("Public key: {}", keypair.public_key().to_base64());
 

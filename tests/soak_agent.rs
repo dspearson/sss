@@ -82,6 +82,18 @@ fn run_sss(home: &Path, project_dir: &Path, args: &[&str]) {
     assert!(status.success(), "sss {args:?} failed: {status:?}");
 }
 
+/// `keys generate` writes one `<uuid>.toml` plus a `current` symlink to it.
+/// Resolve the symlink to recover the UUID for `sss keys upgrade`.
+fn current_keypair_uuid(home: &Path) -> String {
+    let link = home.join(".config").join("sss").join("keys").join("current");
+    let target = std::fs::read_link(&link).expect("current keypair symlink after keygen");
+    Path::new(&target)
+        .file_stem()
+        .expect("keypair filename stem")
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn write_permissive_agent_policy(home: &Path) {
     // Default agent-policy denies all requests (require_confirmation=true,
     // default_action=deny). The soak loop runs non-interactively so the
@@ -108,7 +120,14 @@ fn setup_sealed_key(home: &Path) -> (PathBuf, String, String) {
         &project_dir,
         &["keys", "generate", "--suite", "classic", "--no-password"],
     );
-    run_sss(home, &project_dir, &["init", &username]);
+    // `keys generate --suite classic` writes a format_version=1 (unsigned)
+    // entry; the load path (and the agent) require a signed v2 entry, so run
+    // the intended in-place migration before use.
+    let key_uuid = current_keypair_uuid(home);
+    run_sss(home, &project_dir, &["keys", "upgrade", &key_uuid]);
+    // Seal the repo key with the CLASSIC key so the classic-only agent can
+    // unseal it — plain `init` now defaults to --crypto hybrid (v2.2).
+    run_sss(home, &project_dir, &["init", "--crypto", "classic", &username]);
 
     let toml_path = project_dir.join(".sss.toml");
     let toml_text = std::fs::read_to_string(&toml_path)

@@ -134,8 +134,8 @@ fn test_zeroizing_secret_bytes_wrapper_under_miri() {
     // miri (Tree Borrows). `&raw const wrapped` is a fresh raw borrow of the
     // still-live stack storage (sole-field newtype layout → array at offset 0)
     // without dereferencing the dropped inner value.
-    // SAFETY: storage is still live; we read the bytes Zeroizing just overwrote.
     let post_drop_ptr: *const u8 = (&raw const wrapped).cast::<u8>();
+    // SAFETY: storage is still live; we read the bytes Zeroizing just overwrote.
     let post_drop = unsafe { ptr::read_volatile(post_drop_ptr) };
     assert_eq!(
         post_drop, 0x00,

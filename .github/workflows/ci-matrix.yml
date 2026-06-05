@@ -80,10 +80,24 @@ jobs:
             cargo_features: "--features hybrid"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to the local dev toolchain (1.93.1) so "green locally" == "green
+      # in CI". Floating `@stable` drifted to 1.96 and surfaced lints the local
+      # toolchain never saw — the v2.4 first-run breakage. Bump in lockstep with
+      # the local toolchain; miri/sanitizer pin nightly-2026-04-15 by the same rule.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.1"
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.platform }}-${{ matrix.feature_arm }}
+      # libsodium for libsodium-sys. Present on the ubuntu images; macOS runners
+      # have no system libsodium and ci-matrix had no install step, so the macos
+      # cells failed to build. UNVERIFIED locally (no macOS host) — confirm when
+      # CI is re-enabled on runners.
+      - name: Install libsodium (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libsodium pkg-config
       - name: Build tests
         run: cargo build --tests ${{ matrix.cargo_features }}
       - name: Clippy gate

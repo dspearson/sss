@@ -49,12 +49,10 @@
 name: Miri
 
 on:
-  # Scheduled-only — weekly Sunday 03:00 UTC (CONTEXT.md cron lock).
-  # No `push:` or `pull_request:` triggers; cost-bounded by design.
-  schedule:
-    - cron: "0 3 * * 0"
-  # Manual trigger for iterating on the workflow itself or for re-running
-  # after a known-fix lands (avoids waiting up to 7 days for the next cron).
+  # Automatic triggers (push / pull_request / schedule) disabled — manual
+  # workflow_dispatch only. Run the equivalent checks locally to verify
+  # before pushing; preserves the free GitHub Actions allocation until
+  # self-hosted runners are available.
   workflow_dispatch:
 
 # No `permissions:` block — defaults to read-only repo access (matches

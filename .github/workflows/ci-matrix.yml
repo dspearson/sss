@@ -40,9 +40,10 @@
 name: CI Matrix
 
 on:
-  push:
-    branches: [master]
-  pull_request:
+  # Automatic triggers (push / pull_request / schedule) disabled — manual
+  # workflow_dispatch only. Run the equivalent checks locally to verify
+  # before pushing; preserves the free GitHub Actions allocation until
+  # self-hosted runners are available.
   workflow_dispatch:
 
 jobs:

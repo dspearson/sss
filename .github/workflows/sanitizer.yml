@@ -80,16 +80,10 @@
 name: Sanitizers
 
 on:
-  # Scheduled-only — weekly Saturday 03:00 UTC. miri.yml runs Sunday
-  # 03:00 UTC (CONTEXT.md cron lock); sanitizer.yml takes Saturday so the
-  # two scheduled-only workflows do not collide on the runner queue.
-  # No `push:` or `pull_request:` triggers; ASan workspace runs ~3-5x
-  # slower than plain `cargo test` and would be too noisy on every push.
-  schedule:
-    - cron: "0 3 * * 6"
-  # Manual trigger for iterating on the workflow itself or for re-running
-  # after a known-fix lands without waiting up to 7 days for the next cron.
-  # Mirrors miri.yml convention.
+  # Automatic triggers (push / pull_request / schedule) disabled — manual
+  # workflow_dispatch only. Run the equivalent checks locally to verify
+  # before pushing; preserves the free GitHub Actions allocation until
+  # self-hosted runners are available.
   workflow_dispatch:
 
 # No `permissions:` block — defaults to read-only repo access (matches

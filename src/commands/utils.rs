@@ -113,29 +113,37 @@ pub fn get_keypair_with_optional_password(
     prompt: &str,
 ) -> Result<KeyPair> {
     // First try without password
-    if let Ok(keypair) = keystore.get_current_keypair(None) {
-        return Ok(keypair);
-    }
+    let first_err = match keystore.get_current_keypair(None) {
+        Ok(keypair) => return Ok(keypair),
+        Err(e) => e,
+    };
 
-    // Check if key is password protected
-    if !keystore.is_current_key_password_protected()? {
-        // Key exists but couldn't be loaded and isn't password protected
-        return Err(anyhow!(ERR_NO_KEYPAIR));
-    }
-
-    // Key is password protected, prompt for password
-    let password = password::read_password(prompt)?;
-
-    if password.is_empty() {
-        // User pressed Enter, try again without password
-        keystore
-            .get_current_keypair(None)
-            .map_err(|_| anyhow!(ERR_NO_KEYPAIR_INIT))
-    } else {
-        // User provided a password
-        keystore
-            .get_current_keypair(Some(password.as_str()?))
-            .map_err(|_| anyhow!(ERR_INCORRECT_PASSPHRASE))
+    // Distinguish "no keypair at all" from "a keypair is present but could not
+    // be loaded" (e.g. an unsigned legacy `format_version = 1` entry the
+    // signed-keypair gate refuses). Returning the generic ERR_NO_KEYPAIR in the
+    // latter case actively misdirects — it tells the user to generate a keypair
+    // they already have. Surface the real cause instead.
+    match keystore.is_current_key_password_protected() {
+        // Key exists, not password protected, but the load still failed —
+        // surface why (unsigned-legacy, parse error, etc.).
+        Ok(false) => Err(first_err),
+        // Key is password protected — prompt for the password.
+        Ok(true) => {
+            let password = password::read_password(prompt)?;
+            if password.is_empty() {
+                // User pressed Enter, try again without password.
+                keystore
+                    .get_current_keypair(None)
+                    .map_err(|_| anyhow!(ERR_NO_KEYPAIR_INIT))
+            } else {
+                // User provided a password.
+                keystore
+                    .get_current_keypair(Some(password.as_str()?))
+                    .map_err(|_| anyhow!(ERR_INCORRECT_PASSPHRASE))
+            }
+        }
+        // No current key id resolvable at all — genuinely no keypair.
+        Err(_) => Err(anyhow!(ERR_NO_KEYPAIR)),
     }
 }
 

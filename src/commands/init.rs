@@ -35,12 +35,13 @@ pub fn handle_init(main_matches: &ArgMatches, matches: &ArgMatches) -> Result<()
             println!("Using existing keypair for project initialization");
             keypair
         }
-        Err(_) => {
-            return Err(anyhow!(
-                "No keypair found.\n\
-                Generate a keypair first with: sss keys generate\n\
-                Or for passwordless keys: sss keys generate --no-password"
-            ));
+        Err(e) => {
+            // Surface the real cause from get_keypair_with_optional_password
+            // (now accurate: a genuine "No keypair found", or the actionable
+            // "unsigned legacy format — run `sss keys upgrade`") rather than
+            // substituting a generic message that misdirects when a keypair IS
+            // present but unloadable.
+            return Err(e);
         }
     };
 

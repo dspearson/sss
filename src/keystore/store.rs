@@ -689,7 +689,7 @@ impl Keystore {
         }
 
         // Sort by creation time (most recent first)
-        keys.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
+        keys.sort_by_key(|b| std::cmp::Reverse(b.1.created_at));
 
         Ok(keys)
     }

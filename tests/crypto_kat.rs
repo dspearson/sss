@@ -14,7 +14,7 @@
 //!
 //! * The libsodium test suite (`test/default/secretbox_easy.c`) tests only
 //!   `crypto_secretbox_easy` (the default XSalsa20-Poly1305 variant), **not** the
-//!   XChaCha20 variant.  No `secretbox_xchacha20.c` test file exists in the libsodium
+//!   `XChaCha20` variant.  No `secretbox_xchacha20.c` test file exists in the libsodium
 //!   source tree.
 //!
 //! * The IETF draft-irtf-cfrg-xchacha-03 §A.1 vector applies to
@@ -49,7 +49,7 @@ const MAC_SIZE: usize = 16;   // crypto_secretbox_xchacha20poly1305_MACBYTES
 // below and recording the output.  These bytes are the ground-truth for
 // regression detection.
 
-/// Fixed 32-byte key used for all crypto_kat secretbox tests.
+/// Fixed 32-byte key used for all `crypto_kat` secretbox tests.
 const KAT_KEY: [u8; KEY_SIZE] = [
     0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
     0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -69,7 +69,7 @@ const KAT_PLAINTEXT: &[u8] =
     b"known-answer-test for sss crypto_secretbox_xchacha20poly1305_easy";
 
 /// Frozen expected ciphertext (MAC prepended, as per secretbox wire format).
-/// Length = KAT_PLAINTEXT.len() + MAC_SIZE = 65 + 16 = 81 bytes.
+/// Length = `KAT_PLAINTEXT.len()` + `MAC_SIZE` = 65 + 16 = 81 bytes.
 /// Generated once at test-write time; asserted on every run.
 const KAT_EXPECTED_CIPHERTEXT: [u8; 81] = [
     0x17, 0xa8, 0x1d, 0x0f, 0x2e, 0x9b, 0xa5, 0x83,

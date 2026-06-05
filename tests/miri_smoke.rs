@@ -50,6 +50,14 @@ use sss::scanner::FileScanner;
 // ===========================================================================
 
 #[test]
+#[cfg_attr(
+    miri,
+    ignore = "HybridKeyPair::generate() reaches the sntrup761 KEM C FFI \
+              (PQCLEAN_SNTRUP761_CLEAN_crypto_kem_keypair, inside trelis -> \
+              pqcrypto-ntruprime) which miri cannot execute. The Zeroizing<..> \
+              drop-zeroisation at HYBRID_SECRET_KEY_SIZE scale is covered under \
+              miri by test_zeroizing_secret_bytes_wrapper_under_miri (Test 2)."
+)]
 fn test_hybrid_keypair_zeroises_under_miri() {
     // PQCRYPTO-04 — exercise the HybridKeyPair drop chain (which contains a
     // Zeroizing<[u8; HYBRID_SECRET_KEY_SIZE]> on the secret_bytes field) under
@@ -121,9 +129,14 @@ fn test_zeroizing_secret_bytes_wrapper_under_miri() {
     // raw_ptr); the inner value is a valid Zeroizing<[u8; N]>.
     unsafe { ManuallyDrop::drop(&mut wrapped) };
 
-    // SAFETY: the storage is still live (ManuallyDrop did not release it);
-    // we are reading the bytes Zeroizing just overwrote.
-    let post_drop = unsafe { ptr::read_volatile(raw_ptr) };
+    // Re-derive the pointer AFTER the drop: `ManuallyDrop::drop` took `&mut
+    // wrapped`, invalidating the pre-drop `raw_ptr`'s provenance under newer
+    // miri (Tree Borrows). `&raw const wrapped` is a fresh raw borrow of the
+    // still-live stack storage (sole-field newtype layout → array at offset 0)
+    // without dereferencing the dropped inner value.
+    // SAFETY: storage is still live; we read the bytes Zeroizing just overwrote.
+    let post_drop_ptr: *const u8 = (&raw const wrapped).cast::<u8>();
+    let post_drop = unsafe { ptr::read_volatile(post_drop_ptr) };
     assert_eq!(
         post_drop, 0x00,
         "Zeroizing<[u8; HYBRID_SECRET_KEY_SIZE]> wrapper failed to zeroise on drop. \
@@ -170,11 +183,21 @@ fn test_hybrid_aead_key_zeroises_under_miri() {
     // after this call; the inner value is a valid Zeroizing<[u8; 32]>.
     unsafe { ManuallyDrop::drop(&mut wrapped) };
 
+    // Re-derive the observation pointer AFTER the drop. ManuallyDrop::drop took
+    // `&mut wrapped`, which under newer miri's Tree Borrows invalidates the
+    // provenance of the pre-drop `raw_ptr` (captured via the shared `as_ptr()`),
+    // so reading through `raw_ptr` here is a use of an invalidated pointer.
+    // `&raw const wrapped` is a fresh raw borrow of the still-live stack storage
+    // — ManuallyDrop leaves the 32 bytes intact (zeroised by Zeroizing's drop)
+    // and the sole-field newtype layout puts the array at offset 0 — without
+    // dereferencing the dropped inner value.
+    let post_drop_ptr: *const u8 = (&raw const wrapped).cast::<u8>();
+
     // Every byte of the derived key must be zero after Zeroizing's drop.
     let all_zero_post_drop = (0..32).all(|i| {
-        // SAFETY: raw_ptr still points into live stack storage (ManuallyDrop
-        // leaves it intact); raw_ptr.add(i) is bounded by (0..32) against 32 bytes.
-        let byte = unsafe { ptr::read_volatile(raw_ptr.add(i)) };
+        // SAFETY: post_drop_ptr points into live stack storage; .add(i) is
+        // bounded by (0..32) against the 32-byte allocation.
+        let byte = unsafe { ptr::read_volatile(post_drop_ptr.add(i)) };
         byte == 0
     });
     assert!(

@@ -10,7 +10,7 @@
 
 //! Known-answer tests (KAT) for hybrid primitives — `--features hybrid` arm.
 //!
-//! Belt-and-braces feature gating (mirroring tests/keystore_signature_negative_paths.rs):
+//! Belt-and-braces feature gating (mirroring `tests/keystore_signature_negative_paths.rs)`:
 //! - Source-level `#![cfg(feature = "hybrid")]` (below) AND
 //! - `Cargo.toml [[test]] required-features = ["hybrid"]`
 //!
@@ -421,8 +421,8 @@ const PROD_ED448_SEED: [u8; 57] = [
     0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39,
 ];
 
-/// Expected verifying key for PROD_ED448_SEED.
-/// Generated at test-write time by Ed448Standard::generate_from_seed + verifying_key_to_bytes.
+/// Expected verifying key for `PROD_ED448_SEED`.
+/// Generated at test-write time by `Ed448Standard::generate_from_seed` + `verifying_key_to_bytes`.
 const PROD_ED448_VK: [u8; 57] = [
     0xda, 0x91, 0x8b, 0xa3, 0xe5, 0x7f, 0xdc, 0xa0,
     0x32, 0x6f, 0x46, 0xc7, 0xec, 0x84, 0x3b, 0xa8,
@@ -456,7 +456,7 @@ const PROD_ED448_MESSAGE: &[u8] = b"sss-kat-production-context-test-payload-v1";
 
 /// Ed448 production-context known-answer test.
 ///
-/// Drives Ed448Standard::sign_with_context / verify_with_context with the actual
+/// Drives `Ed448Standard::sign_with_context` / `verify_with_context` with the actual
 /// sss keystore domain-separation context, then proves that the wrong context
 /// (empty string) causes verification to fail.
 #[test]
@@ -552,8 +552,8 @@ const MLDSA65_KAT_MESSAGE: &[u8] = b"sss-kat-mldsa65-roundtrip-payload-v1";
 /// ML-DSA-65 seeded sign/verify roundtrip KAT (CONTINGENCY MODE).
 ///
 /// The ACVP internalProjection sigVer vectors cannot be verified via the public
-/// MlDsa65Fips204::verify() API due to context-framing mismatch (see section header).
-/// This test exercises the production sign_with_context / verify_with_context path.
+/// `MlDsa65Fips204::verify()` API due to context-framing mismatch (see section header).
+/// This test exercises the production `sign_with_context` / `verify_with_context` path.
 #[test]
 fn kat_mldsa65_nist_seeded_roundtrip() {
     // Step 1: deterministic keypair from fixed seed (same production entry point)
@@ -594,12 +594,12 @@ fn kat_mldsa65_nist_seeded_roundtrip() {
 /// ML-DSA-65 ACVP provenance anchor + production-context sub-test.
 ///
 /// Vendors the NIST ACVP ML-DSA-65 sigVer group pk (1952 bytes) for auditor
-/// cross-referencing.  The pk is parsed via verifying_key_from_bytes to confirm
+/// cross-referencing.  The pk is parsed via `verifying_key_from_bytes` to confirm
 /// structural validity.  The sigVer passing vectors (tcId 20, 21) are cited in
-/// the comment but are not passed to verify() — see section header for rationale.
+/// the comment but are not passed to `verify()` — see section header for rationale.
 ///
 /// Includes a production-context sub-test with a distinct payload to confirm
-/// the production sign/verify path works with KEYSTORE_SIG_CONTEXT.
+/// the production sign/verify path works with `KEYSTORE_SIG_CONTEXT`.
 #[test]
 fn kat_mldsa65_acvp_provenance_and_production_context() {
     // Source: NIST ACVP ML-DSA-sigVer-FIPS204/internalProjection.json

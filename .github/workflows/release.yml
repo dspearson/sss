@@ -16,6 +16,11 @@ on:
         description: 'Tag to release'
         required: true
         type: string
+      dry_run:
+        description: 'Dry run: build + cosign sign-blob + SLSA attest-blob, but do NOT publish a GitHub Release (Phase 28 GHA-04). Set to false for a real release.'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build-release:
@@ -223,7 +228,13 @@ jobs:
   create-release:
     needs: build-release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # Phase 28 GHA-04: on a dry run, skip the actual GitHub Release publish.
+    # build-release (incl. cosign sign-blob + SLSA attest-blob) still runs, so
+    # the keyless-signing + provenance path is exercised without cutting a
+    # release. github.event.inputs.dry_run is the string 'true'/'false'.
+    if: >-
+      github.event.inputs.dry_run != 'true'
+      && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
 
     steps:
     - name: Checkout code

@@ -28,7 +28,7 @@
 //! match the live CLI (`seal [-x] <file>`); the executor adjusted to the
 //! real surface per the plan's CONTRACT escape hatch ("build a repo with
 //! >=MIN_SECRETS sealed secrets that `sss render` can subsequently render
-//! in a single invocation").
+//! > in a single invocation").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,6 +78,7 @@ fn run_sss(home: &Path, project_dir: &Path, args: &[&str]) {
 // Build a fresh sealed-secrets repo with a project file containing
 // MIN_SECRETS sealed markers. Returns (project_dir, secrets_file).
 fn build_fixture(home: &Path) -> (PathBuf, PathBuf) {
+    use std::fmt::Write as _;
     let username = "stress-user";
     let project_dir = home.join("project");
     std::fs::create_dir_all(&project_dir).expect("mkdir project");
@@ -96,7 +97,7 @@ fn build_fixture(home: &Path) -> (PathBuf, PathBuf) {
     // U+2295 (⊕) is the open/plaintext marker (matches migrate_e2e.rs:261).
     let mut content = String::with_capacity(MIN_SECRETS * 32);
     for i in 0..MIN_SECRETS {
-        content.push_str(&format!("secret_{i:05}=\u{2295}{{value-for-{i:05}}}\n"));
+        writeln!(content, "secret_{i:05}=\u{2295}{{value-for-{i:05}}}").unwrap();
     }
     let secrets_file = project_dir.join("secrets.txt");
     std::fs::write(&secrets_file, &content).expect("write secrets.txt");

@@ -9,16 +9,16 @@
 //! classic` plus `sss init <username>` (which writes `.sss.toml` with
 //! `users[*].sealed_key`), spawns `sss-agent --foreground` as a child process
 //! in a per-test tempdir HOME, then drives 10 000 `unseal_repository_key`
-//! calls against the single sealed_key. Samples `/proc/<pid>/status` VmRSS
+//! calls against the single `sealed_key`. Samples `/proc/<pid>/status` `VmRSS`
 //! at start (post 30 s warmup) and end, asserts RSS growth <= 10 MB AND
 //! total runtime >= 10 minutes, then SIGTERM-s the agent and confirms a
 //! clean exit.
 //!
-//! Suite choice: Classic. Plan 17-03 explicitly authorises Suite::Classic at
+//! Suite choice: Classic. Plan 17-03 explicitly authorises `Suite::Classic` at
 //! the unseal call site (lines 359-362). The agent's startup `load_keypair`
-//! returns `KeyPair::Classic` unconditionally (keystore.rs::decrypt_stored_keypair
+//! returns `KeyPair::Classic` unconditionally (`keystore.rs::decrypt_stored_keypair`
 //! always wraps as Classic; the agent has no analogue of the client's
-//! load_hybrid_keypair branch in config.rs:307-314), so even a hybrid-sealed
+//! `load_hybrid_keypair` branch in config.rs:307-314), so even a hybrid-sealed
 //! key would not be unsealable by the agent today. Exercising the soak hot
 //! path under Classic still validates the bounded-RSS guarantee under
 //! sustained load — that is the property TEST-13 part-A is gating on.
@@ -142,7 +142,9 @@ fn shutdown_agent(mut child: Child) {
     // shut down cleanly. std::process::Child::kill sends SIGKILL on Unix
     // which the agent cannot trap — use libc::kill explicitly so the
     // graceful-shutdown handler runs.
-    let pid = child.id() as libc::pid_t;
+    let pid = libc::pid_t::try_from(child.id()).expect("agent pid fits in pid_t");
+    // SAFETY: libc::kill is an FFI call with no memory-safety preconditions;
+    // `pid` is the live spawned agent and SIGTERM is a valid signal number.
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
@@ -150,7 +152,7 @@ fn shutdown_agent(mut child: Child) {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let signal_ok = status.signal().map(|s| s == 15).unwrap_or(false);
+                let signal_ok = status.signal().is_some_and(|s| s == 15);
                 assert!(
                     status.success() || signal_ok,
                     "sss-agent exited with non-success non-SIGTERM status: {status:?}"
@@ -177,7 +179,7 @@ fn wait_for_socket(socket_path: &Path) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    panic!("agent socket did not appear within 10 s: {socket_path:?}");
+    panic!("agent socket did not appear within 10 s: {}", socket_path.display());
 }
 
 #[test]
@@ -255,11 +257,21 @@ fn soak_agent_unseals_for_at_least_10_minutes_with_bounded_rss() {
         "soak unseal-call count too low: did {calls_done}, want >={UNSEAL_CALLS}"
     );
     let growth = rss_final.saturating_sub(rss_initial);
-    assert!(
-        growth <= MAX_RSS_GROWTH_BYTES,
-        "RSS growth exceeded budget: initial={rss_initial}, final={rss_final}, growth={growth}, budget={MAX_RSS_GROWTH_BYTES} ({}MB)",
-        MAX_RSS_GROWTH_BYTES / 1024 / 1024
-    );
+    // ThreadSanitizer/AddressSanitizer shadow memory inflates RSS several-fold,
+    // so the bounded-RSS budget cannot hold under a sanitizer. The RSS property
+    // is validated in the normal (non-sanitized) soak run; under a sanitizer the
+    // soak still exercises 10 min of liveness + race/UB detection, which is the
+    // point of running it there (MEMSAFE-04). `cfg(sanitize)` is nightly-only,
+    // so detect the sanitizer at runtime via the options env var it sets.
+    let under_sanitizer =
+        std::env::var_os("TSAN_OPTIONS").is_some() || std::env::var_os("ASAN_OPTIONS").is_some();
+    if !under_sanitizer {
+        assert!(
+            growth <= MAX_RSS_GROWTH_BYTES,
+            "RSS growth exceeded budget: initial={rss_initial}, final={rss_final}, growth={growth}, budget={MAX_RSS_GROWTH_BYTES} ({}MB)",
+            MAX_RSS_GROWTH_BYTES / 1024 / 1024
+        );
+    }
 
     eprintln!(
         "soak: unseal_calls={calls_done}, duration={total_elapsed}s, rss_initial={rss_initial}, rss_final={rss_final}, growth={growth}"

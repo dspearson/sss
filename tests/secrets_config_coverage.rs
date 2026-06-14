@@ -154,7 +154,9 @@ fn test_interpolation_missing_key_preserves_marker() -> Result<()> {
 
     let content = "Hello \u{22b2}{MISSING_KEY} world";
     let mut cache = SecretsCache::new();
-    let result = interpolate_secrets(content, &test_file, project_root, &mut cache, &StdFileSystemOps)?;
+    // keep_unresolved=true: this test validates seal/open/mount semantics where a
+    // missing marker must be preserved verbatim (not treated as exit-3).
+    let result = interpolate_secrets(content, &test_file, project_root, &mut cache, &StdFileSystemOps, true)?;
 
     // The missing marker must be preserved in the output (not silently dropped).
     assert!(

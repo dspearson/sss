@@ -755,6 +755,124 @@ mod tests {
         Ok(())
     }
 
+    // ---- REM-05 content-regression test: guards the embedded pre-commit hook ----
+
+    /// Assert that the embedded pre-commit hook has no shell-quoted filename interpolation
+    /// and carries the NUL-delimited read and the corrected seal arg order.
+    ///
+    /// `PRE_COMMIT_HOOK` is module-private; this in-source test block reaches it via `use super::*`.
+    /// The external `tests/hooks_command_tests.rs` cannot reference it (private const).
+    #[test]
+    fn test_pre_commit_hook_is_shell_injection_resistant() {
+        // Must NOT contain shell-quoted $file interpolation (the injection pattern).
+        assert!(
+            !PRE_COMMIT_HOOK.contains("'$file'"),
+            "pre-commit hook must not shell-quote $file (injection risk); use LIST-form system/open instead"
+        );
+
+        // Must NOT contain backtick capture of filename-bearing git commands.
+        assert!(
+            !PRE_COMMIT_HOOK.contains("`git diff"),
+            "pre-commit hook must not use backtick `git diff; use open(-|, LIST) instead"
+        );
+        assert!(
+            !PRE_COMMIT_HOOK.contains("`git show"),
+            "pre-commit hook must not use backtick `git show; use open(-|, LIST) instead"
+        );
+
+        // Must contain the NUL-delimited read flag and the corresponding split.
+        assert!(
+            PRE_COMMIT_HOOK.contains("-z"),
+            "pre-commit hook must use git diff -z (NUL-delimited) for staged-file read"
+        );
+        assert!(
+            PRE_COMMIT_HOOK.contains("split(/\\0/"),
+            "pre-commit hook must split on NUL bytes (split(/\\0/)) after -z read"
+        );
+
+        // Must contain the corrected seal arg order: flag '-x' precedes the '--' separator.
+        // FORM-B: system('sss','--non-interactive','seal','-x','--',$file)
+        // FORM-A: seal -- $file -x  — FAILS against clap (clap treats -x after -- as positional).
+        assert!(
+            PRE_COMMIT_HOOK.contains("'seal', '-x', '--'"),
+            "pre-commit hook must use seal arg order '-x' before '--' (FORM-B); \
+             FORM-A 'seal -- $file -x' fails clap argument parsing"
+        );
+    }
+
+    // ---- REM-08 + REM-07 regression tests ----
+
+    /// Assert that all three embedded hooks carry the advisory flock guard and reference
+    /// the shared sss-hook.lock lock file.  Locks in against a future hook edit that drops
+    /// the flock guard — that would trip this test before it could silently ship to users.
+    ///
+    /// `PRE_COMMIT_HOOK`, `POST_MERGE_HOOK`, `POST_CHECKOUT_HOOK` are module-private consts;
+    /// this in-source test block reaches them via `use super::*`.
+    #[test]
+    fn test_all_hooks_have_flock_guard() {
+        // All three hooks must mention flock (REM-08 — advisory concurrency serialisation).
+        assert!(
+            PRE_COMMIT_HOOK.contains("flock"),
+            "pre-commit hook must contain a flock guard (REM-08)"
+        );
+        assert!(
+            POST_MERGE_HOOK.contains("flock"),
+            "post-merge hook must contain a flock guard (REM-08)"
+        );
+        assert!(
+            POST_CHECKOUT_HOOK.contains("flock"),
+            "post-checkout hook must contain a flock guard (REM-08)"
+        );
+
+        // Bash hooks use the flock(1) utility with file-descriptor redirect (-x FD).
+        assert!(
+            POST_MERGE_HOOK.contains("flock -x"),
+            "post-merge hook must use flock -x <fd> pattern (REM-08)"
+        );
+        assert!(
+            POST_CHECKOUT_HOOK.contains("flock -x"),
+            "post-checkout hook must use flock -x <fd> pattern (REM-08)"
+        );
+
+        // All three hooks must reference the shared lock file name so they serialise
+        // against each other (same lock file = mutual exclusion across hook types).
+        assert!(
+            PRE_COMMIT_HOOK.contains("sss-hook.lock"),
+            "pre-commit hook must reference sss-hook.lock (REM-08)"
+        );
+        assert!(
+            POST_MERGE_HOOK.contains("sss-hook.lock"),
+            "post-merge hook must reference sss-hook.lock (REM-08)"
+        );
+        assert!(
+            POST_CHECKOUT_HOOK.contains("sss-hook.lock"),
+            "post-checkout hook must reference sss-hook.lock (REM-08)"
+        );
+    }
+
+    /// Assert that the embedded pre-commit hook carries the strengthened `FORCE_COMMIT` warning
+    /// text (REM-07 / accept-with-rationale).  Locks in against a future hook edit that reverts
+    /// the warning to the original single-line form or removes the --no-verify mention.
+    ///
+    /// The accepted disposition keeps the bypass functional — we do NOT assert exit 1 is absent
+    /// from the else branch.  We only assert the warning names the plaintext-secret risk and
+    /// surfaces the preferred alternative.
+    #[test]
+    fn test_force_commit_warning_is_strengthened() {
+        // The warning must explicitly name the plaintext-secret risk (REM-07).
+        assert!(
+            PRE_COMMIT_HOOK.to_lowercase().contains("plaintext secret"),
+            "pre-commit FORCE_COMMIT warning must name the plaintext-secret risk (REM-07); \
+             got no 'plaintext secret' phrase"
+        );
+
+        // The else branch must surface git commit --no-verify as the preferred alternative.
+        assert!(
+            PRE_COMMIT_HOOK.contains("no-verify"),
+            "pre-commit hook must mention 'no-verify' as the preferred bypass alternative (REM-07)"
+        );
+    }
+
     // show_hook coverage — error path on unknown hook name.
 
     #[test]

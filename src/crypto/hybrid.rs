@@ -714,4 +714,59 @@ mod tests {
              Every seal/open call would leak 32 bytes of key material into the heap."
         );
     }
+
+    // ─── KAT: HYBRID_KEM_CONTEXT + derive_key output freeze (REM-27 / CRY-17) ──
+    //
+    // These two tests machine-enforce stability of the context string and the BLAKE3
+    // KDF output.  A silent HYBRID_KEM_CONTEXT rename or a trelis version change that
+    // alters the KDF output would make all existing hybrid-sealed repository keys
+    // permanently unreadable.  Either change must fail CI before it can reach production.
+    //
+    // Model: keystore_sig_context_byte_exact (src/keystore/sig.rs:288)
+    //        kat_xchacha20poly1305_secretbox_regression_freeze (tests/crypto_kat.rs:115)
+
+    /// Byte-exact drift-detector for `HYBRID_KEM_CONTEXT`.
+    ///
+    /// A future rename of this constant MUST update both this test AND the migration
+    /// plan referenced in the doc-comment at `src/constants.rs:80-83`.
+    #[test]
+    fn kat_hybrid_kem_context_byte_exact() {
+        assert_eq!(
+            crate::constants::HYBRID_KEM_CONTEXT.as_bytes(),
+            b"sss-hybrid-kem-v1",
+            "HYBRID_KEM_CONTEXT byte representation changed — \
+             update the migration plan first (src/constants.rs:80-83)"
+        );
+    }
+
+    // Frozen output of trelis_primitives::derive_key("sss-hybrid-kem-v1", &[0u8; 32])
+    // Generated 2026-06-09 at trelis SHA 5374dff482ba94a94695794b5e4554f908eb0d4d.
+    // Regenerate ONLY after preparing a hybrid-keystore migration plan.
+    const KAT_DERIVE_KEY_INPUT: [u8; 32] = [0u8; 32];
+    const KAT_DERIVE_KEY_OUTPUT: [u8; 32] = [
+        0xb2, 0xf8, 0xcf, 0xb0, 0x05, 0xe6, 0xe5, 0xe8,
+        0x7c, 0xac, 0xcb, 0x9f, 0x8f, 0x2f, 0x7a, 0x79,
+        0xd7, 0xa8, 0x67, 0x1e, 0x8d, 0xba, 0xe4, 0x79,
+        0xfa, 0x89, 0xc4, 0xf4, 0x35, 0x7b, 0x8b, 0x1a,
+    ];
+
+    /// Frozen-output KAT: pins `trelis_primitives::derive_key` to a known byte sequence.
+    ///
+    /// A trelis version bump or a context-string edit that changes the KDF output
+    /// fails here before it can make any existing hybrid-sealed repository key
+    /// unreadable.
+    #[test]
+    fn kat_hybrid_kem_derive_key_output_frozen() {
+        let out = trelis_primitives::derive_key(
+            crate::constants::HYBRID_KEM_CONTEXT,
+            &KAT_DERIVE_KEY_INPUT,
+        );
+        assert_eq!(
+            out,
+            KAT_DERIVE_KEY_OUTPUT,
+            "derive_key output changed — trelis version bump or HYBRID_KEM_CONTEXT \
+             change detected; all hybrid-sealed repository keys would become unreadable. \
+             Regenerate the frozen constant ONLY after a migration plan is in place."
+        );
+    }
 }

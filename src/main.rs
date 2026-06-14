@@ -9,7 +9,7 @@ use std::env;
 use sss::commands::{
     handle_agent, handle_edit, handle_hooks, handle_init, handle_keygen_deprecated, handle_keys,
     handle_migrate, handle_open, handle_project, handle_render, handle_seal, handle_settings,
-    handle_status, handle_users,
+    handle_status, handle_users, handle_vault,
 };
 #[cfg(feature = "hybrid")]
 use sss::commands::handle_envelope;
@@ -61,6 +61,24 @@ fn add_fuse_commands(app: Command) -> Command {
                 Arg::new("no-allow-root")
                     .long("no-allow-root")
                     .help("Disable the default AllowRoot mount option (by default, root can access the mount even when mounted by a non-root user, so 'sudo' just works)")
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("no-vault")
+                    .long("no-vault")
+                    .help("Mount without Vault resolution; ⊳{} refs left as literal markers (skips auth and sig-verify)")
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("vault-lazy")
+                    .long("vault-lazy")
+                    .help("Defer Vault auth to first read; a first-read auth failure returns EIO for that file only")
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("keep-unresolved")
+                    .long("keep-unresolved")
+                    .help("On per-ref Vault miss, serve the ⊳{} marker verbatim instead of EIO (whole-op failures still EIO)")
                     .action(clap::ArgAction::SetTrue),
             ),
     )
@@ -733,6 +751,75 @@ fn create_cli_app() -> Command {
                         )
                         .subcommand(Command::new("show").about("Show configured secrets filename"))
                         .subcommand(Command::new("clear").about("Clear custom secrets filename (use default 'secrets')")),
+                )
+                .subcommand(
+                    Command::new("vault")
+                        .about("Manage Vault resolver configuration (re-signs envelope to format_version=3)")
+                        .subcommand(
+                            Command::new("set-address")
+                                .about("Set the Vault server address (https:// only) and re-sign the envelope")
+                                .arg(
+                                    Arg::new("address")
+                                        .help("Vault server URL (must use https:// scheme, e.g. https://vault.example.com:8200)")
+                                        .required(true),
+                                ),
+                        )
+                        .subcommand(
+                            Command::new("add-binding")
+                                .about("Insert or overwrite a named Vault KV binding and re-sign the envelope")
+                                .arg(
+                                    Arg::new("name")
+                                        .help("Binding name (used as the binding: prefix in ⊳{binding:path} references)")
+                                        .required(true),
+                                )
+                                .arg(
+                                    Arg::new("mount")
+                                        .long("mount")
+                                        .value_name("MOUNT")
+                                        .help("KV engine mount path (e.g. 'secret' or 'kv')"),
+                                )
+                                .arg(
+                                    Arg::new("default-field")
+                                        .long("default-field")
+                                        .value_name("FIELD")
+                                        .help("Default field name when #field is omitted in a vault reference"),
+                                )
+                                .arg(
+                                    Arg::new("kv-version")
+                                        .long("kv-version")
+                                        .value_name("VERSION")
+                                        .help("KV engine version (1 or 2; default 2)"),
+                                ),
+                        )
+                        .subcommand(
+                            Command::new("set-auth")
+                                .about("Set Vault authentication configuration and re-sign the envelope")
+                                .arg(
+                                    Arg::new("method")
+                                        .long("method")
+                                        .value_name("METHOD")
+                                        .help("Authentication method (e.g. 'approle')")
+                                        .required(true),
+                                )
+                                .arg(
+                                    Arg::new("role-id")
+                                        .long("role-id")
+                                        .value_name("ROLE_ID")
+                                        .help("AppRole role_id (not a secret — safe in git)"),
+                                )
+                                .arg(
+                                    Arg::new("secret-id-secret")
+                                        .long("secret-id-secret")
+                                        .value_name("SECRET_NAME")
+                                        .help("Name of the .secrets entry holding the AppRole secret_id"),
+                                )
+                                .arg(
+                                    Arg::new("token-secret")
+                                        .long("token-secret")
+                                        .value_name("SECRET_NAME")
+                                        .help("Name of the .secrets entry holding a static Vault token"),
+                                ),
+                        ),
                 ),
         )
         .subcommand(
@@ -807,6 +894,37 @@ fn create_cli_app() -> Command {
                         .help("Recursively render all files in the project")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("file"),
+                )
+                .arg(
+                    Arg::new("allow-unsigned")
+                        .long("allow-unsigned")
+                        .help("Permit [vault] config on unsigned (format_version=1) repos; \
+                               tls_ca_secret is mandatory (VCFG-05 opt-in)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("FILE")
+                        .help("Write rendered output atomically to FILE instead of stdout (VFAIL-06)")
+                        .conflicts_with("in-place"),
+                )
+                .arg(
+                    Arg::new("keep-unresolved")
+                        .long("keep-unresolved")
+                        .help("Leave unresolved ⊲{}/⊳{} markers in place and exit 0 instead of \
+                               exit 3 (does NOT suppress exit 4)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    Arg::new("allow-deref-inplace")
+                        .long("allow-deref-inplace")
+                        .help("Permit `render --in-place` to dereference ⊳{} Vault refs and write \
+                               the resolved secret into the file. Default: ⊳{} markers are PRESERVED \
+                               in-place so a live Vault secret is never baked onto disk (VREF-04)")
+                        .action(clap::ArgAction::SetTrue)
+                        .requires("in-place"),
                 ),
         )
         .subcommand(
@@ -816,6 +934,57 @@ fn create_cli_app() -> Command {
                     Arg::new("file")
                         .help("File to edit")
                         .required(true),
+                ),
+        )
+        .subcommand(
+            Command::new("vault")
+                .about("Interact with a live HashiCorp Vault for ⊳{} reference resolution")
+                .subcommand_required(false)
+                .arg(
+                    Arg::new("allow-unsigned")
+                        .long("allow-unsigned")
+                        .help("Permit [vault] config on unsigned (format_version=1) repos; \
+                               tls_ca_secret is mandatory (VCFG-05 opt-in)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .subcommand(
+                    Command::new("status")
+                        .about("Print vault config, auth method, and token TTL (no credentials shown)"),
+                )
+                .subcommand(
+                    Command::new("login")
+                        .about("Authenticate to Vault and report token TTL (no token printed)"),
+                )
+                .subcommand(
+                    Command::new("get")
+                        .about("Resolve a single ⊳{ref} and print its value to stdout (VCLI-02)")
+                        .arg(
+                            Arg::new("ref")
+                                .help("Vault reference, e.g. kv:secret/app#password")
+                                .required(true),
+                        ),
+                )
+                .subcommand(
+                    Command::new("lock")
+                        .about("Resolve all ⊳{} references and write .sss.vault.lock atomically"),
+                )
+                .subcommand(
+                    Command::new("update")
+                        .about("Re-resolve ⊳{} references and bump .sss.vault.lock")
+                        .arg(
+                            Arg::new("ref")
+                                .value_name("REF")
+                                .help("Optional canonical reference to update (binding:path#field); omit for all")
+                                .required(false),
+                        ),
+                )
+                .subcommand(
+                    Command::new("verify")
+                        .about("Re-fetch ⊳{} references and verify lockfile digests; non-zero on drift"),
+                )
+                .subcommand(
+                    Command::new("list")
+                        .about("List all ⊳{} references found across the project"),
                 ),
         );
 
@@ -878,6 +1047,7 @@ fn main() -> Result<()> {
         Some(("hooks", sub_matches)) => handle_hooks(&matches, sub_matches),
         Some(("settings", sub_matches)) => handle_settings(&matches, sub_matches),
         Some(("project", sub_matches)) => handle_project(&matches, sub_matches),
+        Some(("vault", sub_matches)) => handle_vault(&matches, sub_matches),
         Some(("agent", sub_matches)) => handle_agent(sub_matches),
         Some(("status", _)) => handle_status(&matches),
         Some(("seal", sub_matches)) => handle_seal(&matches, sub_matches),

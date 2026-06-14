@@ -36,7 +36,13 @@ impl FileScanner {
         // on any successful build. HARDEN-01 / 08-01.
         #[allow(clippy::expect_used)]
         let pattern_regex =
-            Regex::new(r"(?:⊕|o\+|⊠)\{[^}]*\}").expect("Failed to compile SSS pattern regex");
+            // Includes vault markers ⊳ and > so that files containing only vault
+            // references are discovered during project-wide scans.  File-discovery
+            // awareness does NOT cause vault markers to be encrypted or decrypted —
+            // classify_prefix in processor/core.rs routes them to the pass-through
+            // arm.  The > alternative uses >\{ (brace-anchored) to avoid matching
+            // standalone '>' operators in source files.
+            Regex::new(r"(?:⊕|o\+|⊠|⊳|>)\{[^}]*\}").expect("Failed to compile SSS pattern regex");
 
         let mut ignored_dirs = HashSet::new();
         ignored_dirs.insert(".git".to_string());

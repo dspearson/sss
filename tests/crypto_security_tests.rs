@@ -189,6 +189,7 @@ fn test_keypair_generation_randomness() {
 }
 
 #[test]
+#[cfg(not(miri))] // Salt::new() is stubbed to all-zero under miri (FFI randombytes_buf no-op)
 fn test_salt_generation_randomness() {
     // Verify that salt generation produces unique salts
     let mut salts = HashSet::new();

@@ -113,37 +113,29 @@ pub fn get_keypair_with_optional_password(
     prompt: &str,
 ) -> Result<KeyPair> {
     // First try without password
-    let first_err = match keystore.get_current_keypair(None) {
-        Ok(keypair) => return Ok(keypair),
-        Err(e) => e,
-    };
+    if let Ok(keypair) = keystore.get_current_keypair(None) {
+        return Ok(keypair);
+    }
 
-    // Distinguish "no keypair at all" from "a keypair is present but could not
-    // be loaded" (e.g. an unsigned legacy `format_version = 1` entry the
-    // signed-keypair gate refuses). Returning the generic ERR_NO_KEYPAIR in the
-    // latter case actively misdirects — it tells the user to generate a keypair
-    // they already have. Surface the real cause instead.
-    match keystore.is_current_key_password_protected() {
-        // Key exists, not password protected, but the load still failed —
-        // surface why (unsigned-legacy, parse error, etc.).
-        Ok(false) => Err(first_err),
-        // Key is password protected — prompt for the password.
-        Ok(true) => {
-            let password = password::read_password(prompt)?;
-            if password.is_empty() {
-                // User pressed Enter, try again without password.
-                keystore
-                    .get_current_keypair(None)
-                    .map_err(|_| anyhow!(ERR_NO_KEYPAIR_INIT))
-            } else {
-                // User provided a password.
-                keystore
-                    .get_current_keypair(Some(password.as_str()?))
-                    .map_err(|_| anyhow!(ERR_INCORRECT_PASSPHRASE))
-            }
-        }
-        // No current key id resolvable at all — genuinely no keypair.
-        Err(_) => Err(anyhow!(ERR_NO_KEYPAIR)),
+    // Check if key is password protected
+    if !keystore.is_current_key_password_protected()? {
+        // Key exists but couldn't be loaded and isn't password protected
+        return Err(anyhow!(ERR_NO_KEYPAIR));
+    }
+
+    // Key is password protected, prompt for password
+    let password = password::read_password(prompt)?;
+
+    if password.is_empty() {
+        // User pressed Enter, try again without password
+        keystore
+            .get_current_keypair(None)
+            .map_err(|_| anyhow!(ERR_NO_KEYPAIR_INIT))
+    } else {
+        // User provided a password
+        keystore
+            .get_current_keypair(Some(password.as_str()?))
+            .map_err(|_| anyhow!(ERR_INCORRECT_PASSPHRASE))
     }
 }
 
@@ -189,6 +181,14 @@ pub fn load_project_config_or_fail() -> Result<ProjectConfig> {
         .map_err(|_| anyhow!(ERR_NO_PROJECT_CONFIG))
 }
 
+/// Like `load_project_config_or_fail` but with explicit `allow_unsigned_vault_config`.
+///
+/// Used by vault and render commands that expose `--allow-unsigned` (VCFG-05 opt-in).
+pub fn load_project_config_or_fail_opts(allow_unsigned_vault_config: bool) -> Result<ProjectConfig> {
+    ProjectConfig::load_from_file_with_opts(CONFIG_FILE_NAME, allow_unsigned_vault_config, false)
+        .map_err(|e| anyhow!("{e}\n(hint: {ERR_NO_PROJECT_CONFIG})"))
+}
+
 /// Create processor from project config in current directory
 ///
 /// This is a common pattern across multiple commands:
@@ -198,9 +198,18 @@ pub fn load_project_config_or_fail() -> Result<ProjectConfig> {
 ///
 /// Returns the config, processor, and project root path for commands that need them.
 pub fn create_processor_from_project_config() -> Result<(ProjectConfig, Processor, PathBuf)> {
+    create_processor_from_project_config_opts(false)
+}
+
+/// Like `create_processor_from_project_config` but with explicit `allow_unsigned_vault_config`.
+///
+/// Used by render and vault commands that expose `--allow-unsigned` (VCFG-05 opt-in).
+pub fn create_processor_from_project_config_opts(
+    allow_unsigned_vault_config: bool,
+) -> Result<(ProjectConfig, Processor, PathBuf)> {
     let config_path = config::get_project_config_path()?;
     let (config, repository_key, project_root) =
-        config::load_project_config_with_repository_key(&config_path)?;
+        config::load_project_config_with_repository_key_opts(&config_path, allow_unsigned_vault_config)?;
     let secrets_filename = config.get_secrets_filename().to_string();
     let processor = Processor::new_with_context_and_secrets_filename(
         repository_key,

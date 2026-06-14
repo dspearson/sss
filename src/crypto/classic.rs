@@ -135,10 +135,9 @@ impl RepositoryKey {
         Ok(Self(key))
     }
 
-    /// Direct-copy 32-byte array accessor. Used by the hybrid suite's AEAD
-    /// seal path (which wants the raw key bytes as the plaintext) without
-    /// going through the `to_base64` allocation.
-    #[cfg(feature = "hybrid")]
+    /// Direct-copy 32-byte array accessor. Used by the classic and hybrid
+    /// suite seal paths (which want the raw key bytes as the plaintext)
+    /// without going through the `to_base64` allocation (REM-24/CRY-03).
     #[must_use]
     pub(crate) fn to_bytes(&self) -> [u8; SYMMETRIC_KEY_SIZE] {
         self.0
@@ -290,6 +289,14 @@ impl SecretKey {
     pub fn to_base64(&self) -> String {
         use base64::prelude::*;
         BASE64_STANDARD.encode(self.0)
+    }
+
+    /// Expose the raw 32-byte scalar for read-only operations (e.g. public-key
+    /// re-derivation via `crypto_scalarmult_base`). Crate-internal only; never
+    /// returned across the public API boundary.
+    #[must_use]
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -489,7 +496,10 @@ pub fn seal_repository_key(
     ensure_sodium_init();
     use base64::prelude::*;
 
-    let repo_key_bytes = repo_key.to_base64().into_bytes();
+    // REM-24 (CRY-03): wrap the 32 raw key bytes directly, matching the hybrid
+    // suite's seal path. Previously this wrapped the 44-byte base64 string; the
+    // open path size-detects to keep legacy 44-byte sealed keys opening.
+    let repo_key_bytes = repo_key.to_bytes();
     let mut sealed = vec![0u8; repo_key_bytes.len() + SEALED_BOX_OVERHEAD];
 
     // `sealed` is sized to fit `repo_key_bytes.len() + SEALED_BOX_OVERHEAD`, which is
@@ -590,9 +600,27 @@ pub fn open_repository_key(sealed_key: &str, user_keypair: &KeyPair) -> Result<R
         let _ret: i32 = 0;
     }
 
-    let repo_key_b64 = error_helpers::utf8_from_bytes(opened, "opened key")?;
-
-    RepositoryKey::from_base64(&repo_key_b64)
+    // REM-24 (CRY-03): size-detect after MAC verification to support both the new
+    // 32-byte raw format and the legacy 44-byte base64 format. This check is safe
+    // because it runs only AFTER crypto_box_seal_open has verified the MAC —
+    // a tampered/corrupted ciphertext fails AEAD authentication above, before
+    // reaching this branch (see research PITFALL 3).
+    if opened.len() == SYMMETRIC_KEY_SIZE {
+        // New format (REM-24): 32 raw key bytes — unwrap directly.
+        RepositoryKey::from_bytes(&opened)
+    } else if opened.len() == 44 {
+        // Legacy format: 44-byte base64 string — decode as before.
+        // Existing .sss.toml sealed_key blobs are re-written in new format
+        // on the next sss rotate / users add|remove / migrate call.
+        let repo_key_b64 = error_helpers::utf8_from_bytes(opened, "opened key")?;
+        RepositoryKey::from_base64(&repo_key_b64)
+    } else {
+        Err(anyhow!(
+            "unexpected sealed key plaintext length: {} (expected {} raw bytes or 44 base64 bytes)",
+            opened.len(),
+            SYMMETRIC_KEY_SIZE
+        ))
+    }
 }
 
 /// Derive a deterministic nonce using `BLAKE2b`
@@ -891,6 +919,91 @@ pub fn decrypt_from_base64(encoded_ciphertext: &str, key: &Key) -> Result<String
 
     let plaintext_bytes = decrypt(&ciphertext, key)?;
     String::from_utf8(plaintext_bytes)
+        .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {e}"))
+}
+
+/// Decrypt base64-encoded deterministic-nonce ciphertext and verify nonce lineage.
+///
+/// After AEAD-opening the ciphertext block, re-derives the nonce from the same
+/// inputs that `encrypt_to_base64_deterministic` used at seal time:
+///
+/// ```text
+/// derive_nonce(project_timestamp, file_path, recovered_plaintext, key)
+/// ```
+///
+/// and asserts the result equals the stored nonce (bytes `[0..SYMMETRIC_NONCE_SIZE]`).
+/// If they differ the block was either sealed for a different file path or a different
+/// project, and is rejected with a nonce-lineage error.
+///
+/// Backward-compatible: a legitimately-sealed file re-derives to its stored nonce
+/// exactly — the assertion passes and the plaintext is returned.
+///
+/// # Security note
+/// The error message names only `file_path`; it never includes key bytes, the
+/// recovered plaintext, or either nonce value (ASVS V7 requirement).
+pub(crate) fn decrypt_from_base64_with_context(
+    encoded_ciphertext: &str,
+    key: &Key,
+    project_timestamp: &str,
+    file_path: &str,
+) -> Result<String> {
+    use base64::prelude::*;
+
+    // --- Validation (mirror decrypt_from_base64 guards exactly) ---
+
+    // (1) Length guard — reject DoS-sized inputs before any allocation.
+    if encoded_ciphertext.len() > crate::constants::MAX_BASE64_CIPHERTEXT_LENGTH {
+        return Err(anyhow!(
+            "Base64 encoded ciphertext too long: {} characters (max: {})",
+            encoded_ciphertext.len(),
+            crate::constants::MAX_BASE64_CIPHERTEXT_LENGTH
+        ));
+    }
+
+    // (2) Character-set guard — reject non-Base64 bytes.
+    if !encoded_ciphertext
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=')
+    {
+        return Err(anyhow!("Invalid characters in Base64 encoded ciphertext"));
+    }
+
+    // (3) Decode.
+    let ciphertext = BASE64_STANDARD
+        .decode(encoded_ciphertext)
+        .map_err(|e| anyhow!("Failed to decode base64 ciphertext: {e}"))?;
+
+    // (4) Minimum-length guard (nonce prefix + MAC).
+    if ciphertext.len() < SYMMETRIC_NONCE_SIZE + SYMMETRIC_MAC_SIZE {
+        return Err(anyhow!("Ciphertext too short for nonce-lineage check"));
+    }
+
+    // (5) Capture stored nonce (the prefix that `decrypt` reads internally).
+    // SAFETY: slice length checked in (4): ciphertext.len() >= SYMMETRIC_NONCE_SIZE + SYMMETRIC_MAC_SIZE.
+    let stored_nonce: [u8; SYMMETRIC_NONCE_SIZE] = ciphertext[..SYMMETRIC_NONCE_SIZE]
+        .try_into()
+        .map_err(|_| anyhow!("nonce prefix extraction failed (length checked)"))?;
+
+    // (6) AEAD-open — MAC verification happens here; a tampered or corrupted
+    //     block fails before the nonce re-derivation step.
+    let recovered = decrypt(&ciphertext, key)?;
+
+    // (7) Re-derive the nonce from the current context.  For a legitimate file
+    //     this produces exactly the same nonce that was stored at seal time.
+    let expected_nonce = derive_nonce(project_timestamp, file_path, &recovered, key)?;
+
+    // (8) Assert nonce lineage.  A block swapped from path A to path B yields a
+    //     mismatch here even though it AEAD-verified in step (6), because the
+    //     MAC covers only nonce‖ciphertext — the context (path) is external.
+    if stored_nonce != expected_nonce {
+        return Err(anyhow!(
+            "nonce lineage mismatch for '{file_path}': stored nonce does not match \
+             re-derived nonce — possible cross-context ciphertext swap"
+        ));
+    }
+
+    // (9) Convert recovered bytes to UTF-8.
+    String::from_utf8(recovered)
         .map_err(|e| anyhow!("Decrypted data is not valid UTF-8: {e}"))
 }
 
@@ -1647,5 +1760,156 @@ mod classic_suite_tests {
         let b64 = BASE64_STANDARD.encode([0u8; 32]);
         let err = PublicKey::decode_base64_for_suite(&b64, Suite::Hybrid).unwrap_err();
         assert!(err.to_string().contains("hybrid suite requires the `hybrid` feature"));
+    }
+
+    // -------------------------------------------------------------------------
+    // REM-24 (CRY-03) tests — classic sealed_key raw-byte format
+    // -------------------------------------------------------------------------
+
+    /// Round-trip: seal wraps 32 raw bytes; open returns a key equal by `to_bytes()`.
+    #[test]
+    fn test_seal_repo_key_raw_bytes() {
+        let repo_key = RepositoryKey::new();
+        let kp = KeyPair::generate().unwrap();
+
+        let sealed = seal_repository_key(&repo_key, &kp.public_key()).unwrap();
+        let recovered = open_repository_key(&sealed, &kp).unwrap();
+
+        assert_eq!(
+            repo_key.to_bytes(),
+            recovered.to_bytes(),
+            "round-trip raw-byte identity: sealed/opened key must match original"
+        );
+    }
+
+    /// Backward compat: a sealed key produced with the legacy 44-byte base64
+    /// plaintext still opens correctly via size-detect in `open_repository_key`.
+    #[test]
+    fn test_seal_repo_key_legacy_44b_still_opens() {
+        use base64::prelude::*;
+
+        let repo_key = RepositoryKey::new();
+        let kp = KeyPair::generate().unwrap();
+
+        // Reproduce the pre-REM-24 seal body: base64-string plaintext (44 bytes).
+        let legacy_plaintext = repo_key.to_base64().into_bytes();
+        assert_eq!(legacy_plaintext.len(), 44, "legacy base64 must be 44 bytes");
+
+        let pub_key = kp.public_key();
+        let pk_bytes = match &pub_key {
+            PublicKey::Classic(b) => *b,
+            #[cfg(feature = "hybrid")]
+            PublicKey::Hybrid(_) => panic!("test fixture used wrong key type"),
+        };
+
+        ensure_sodium_init();
+        let mut sealed_raw = vec![0u8; legacy_plaintext.len() + SEALED_BOX_OVERHEAD];
+        #[cfg(not(miri))]
+        // SAFETY: libsodium init via ensure_sodium_init(); `sealed_raw` is sized to
+        // `legacy_plaintext.len() + SEALED_BOX_OVERHEAD`; pointers are valid and non-null.
+        unsafe {
+            let ret = sodium::crypto_box_seal(
+                sealed_raw.as_mut_ptr(),
+                legacy_plaintext.as_ptr(),
+                legacy_plaintext.len() as u64,
+                pk_bytes.as_ptr(),
+            );
+            assert_eq!(ret, 0, "crypto_box_seal for legacy fixture must succeed");
+        }
+        #[cfg(miri)]
+        {
+            // Under miri the sealed blob is all-zeros; the size-detect branch will
+            // pick the legacy-44B arm and call from_base64 on zero-bytes, which fails
+            // the base64 decode — that is fine; we only test the non-miri crypto path.
+            return;
+        }
+        let legacy_sealed = BASE64_STANDARD.encode(sealed_raw);
+
+        // The new open_repository_key must open the legacy-format sealed key.
+        let recovered = open_repository_key(&legacy_sealed, &kp).unwrap();
+        assert_eq!(
+            repo_key.to_bytes(),
+            recovered.to_bytes(),
+            "legacy 44-byte sealed key must still open to the correct raw bytes"
+        );
+    }
+
+    /// `ClassicSuite` delegation: `seal_repo_key`/`open_repo_key` go through the trait
+    /// and produce the same raw-byte result as the free functions (production path).
+    #[test]
+    fn test_classic_suite_seal_open_raw_bytes() {
+        use crate::crypto::suite::CryptoSuite;
+
+        let suite = ClassicSuite;
+        let repo_key = RepositoryKey::new();
+        let kp = KeyPair::generate().unwrap();
+
+        let sealed = suite.seal_repo_key(&repo_key, &kp.public_key()).unwrap();
+        let recovered = suite.open_repo_key(&sealed, &kp).unwrap();
+
+        assert_eq!(
+            repo_key.to_bytes(),
+            recovered.to_bytes(),
+            "ClassicSuite delegation must round-trip via raw 32-byte format"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // REM-22: decrypt_from_base64_with_context — nonce-lineage tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_decrypt_from_base64_with_context_legitimate_roundtrip() {
+        // A ciphertext sealed for a given (key, ts, path) must be openable
+        // by decrypt_from_base64_with_context with the SAME (key, ts, path).
+        let key = Key::new();
+        let ts = "2025-01-01T00:00:00Z";
+        let path = "./config.yml";
+        let plaintext = "my deterministic secret";
+
+        let ct = encrypt_to_base64_deterministic(plaintext, &key, ts, path).unwrap();
+        let recovered = decrypt_from_base64_with_context(&ct, &key, ts, path).unwrap();
+        assert_eq!(recovered, plaintext, "legitimate round-trip must succeed");
+    }
+
+    #[test]
+    fn test_decrypt_from_base64_with_context_cross_path_swap_rejected() {
+        // A ciphertext sealed for path A must be REJECTED when opened under path B.
+        // This is the load-bearing swap-rejection test for REM-22 (CRY-02).
+        let key = Key::new();
+        let ts = "2025-01-01T00:00:00Z";
+        let path_a = "./config/production.yml";
+        let path_b = "./config/staging.yml";
+        let plaintext = "cross-path-test-secret";
+
+        let ct = encrypt_to_base64_deterministic(plaintext, &key, ts, path_a).unwrap();
+
+        // Opening under path_b (where the ciphertext was NOT sealed for) must fail.
+        let err = decrypt_from_base64_with_context(&ct, &key, ts, path_b)
+            .expect_err("swap to different path must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonce lineage mismatch") || msg.contains("cross-context"),
+            "error message must indicate lineage mismatch, got: {msg}"
+        );
+        // Security: error must NOT expose key bytes, nonce values, or recovered plaintext.
+        assert!(!msg.contains(plaintext), "error must not leak plaintext");
+    }
+
+    #[test]
+    fn test_decrypt_from_base64_with_context_short_input_errors_early() {
+        // A too-short base64 input must be rejected before any nonce re-derivation.
+        let key = Key::new();
+        // SYMMETRIC_NONCE_SIZE (24) + SYMMETRIC_MAC_SIZE (16) = 40 bytes minimum decoded.
+        // Encode fewer than 40 bytes to produce a too-short ciphertext.
+        use base64::prelude::*;
+        let short = BASE64_STANDARD.encode([0u8; 10]); // 10 bytes decoded — too short
+        let err = decrypt_from_base64_with_context(&short, &key, "2025-01-01T00:00:00Z", "./f.yml")
+            .expect_err("too-short input must fail");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("too short") || msg.contains("short"),
+            "error must mention short input, got: {msg}"
+        );
     }
 }

@@ -331,12 +331,14 @@ fn test_excessive_interpolation_markers() -> Result<()> {
     let mut cache = SecretsCache::new();
 
     // Should handle many markers without issues
+    // keep_unresolved=true: security performance test uses seal/open semantics.
     let result = interpolate_secrets(
         &content_with_markers,
         &test_file,
         project_root,
         &mut cache,
         &StdFileSystemOps,
+        true,
     )?;
 
     // Verify all markers were interpolated

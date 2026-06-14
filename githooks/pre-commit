@@ -9,33 +9,68 @@
 use strict;
 use warnings;
 use Cwd qw(getcwd);
+use Fcntl qw(:flock);
 
 # Check if sss is available
+# IN-01: String-form system() is intentional here — the `> /dev/null 2>&1` shell
+# redirection cannot be expressed in LIST-form. These two calls contain no
+# user-controlled or interpolated data, so there is no injection risk.
 my $sss_available = system('which sss > /dev/null 2>&1') == 0;
 unless ($sss_available) {
     print STDERR "Warning: sss command not found. Skipping file sealing.\n";
     exit 0;
 }
 
-# Check if we're in an sss repository
+# Check if we're in an sss repository (static command, no interpolated data — see IN-01 note above)
 my $in_sss_repo = system('sss --non-interactive status > /dev/null 2>&1') == 0;
 unless ($in_sss_repo) {
     # Not in an sss repository, skip hook entirely
     exit 0;
 }
 
+# REM-08: Advisory flock — prevents concurrent hook invocations from interleaving a partial
+# seal with a render (CON-12). The lock is advisory only; a missing/unwritable path or absent
+# flock support is non-fatal (hook continues). Resolve GIT_DIR via LIST-form open so the path
+# is correct for both regular repos and worktrees (where .git is a file, not a directory).
+my $git_dir_raw = '';
+open(my $gd_fh, '-|', 'git', 'rev-parse', '--git-dir') or ($git_dir_raw = '.git');
+if ($gd_fh) { chomp($git_dir_raw = <$gd_fh> // '.git'); close($gd_fh); }
+$git_dir_raw ||= '.git';
+my $lock_path = "$git_dir_raw/sss-hook.lock";
+my $lock_fh;
+if (open($lock_fh, '>>', $lock_path)) {
+    # WR-03: wrap the blocking LOCK_EX in a 30-second alarm so a stalled lock holder
+    # (e.g. hung passphrase prompt) never blocks git commit indefinitely. On timeout
+    # or any flock failure the hook proceeds fail-open (lock is advisory).
+    eval {
+        local $SIG{ALRM} = sub { die "sss-lock-timeout\n" };
+        alarm 30;
+        flock($lock_fh, LOCK_EX) or warn "sss-hook: flock failed (continuing): $!\n";
+        alarm 0;
+    };
+    if ($@) {
+        alarm 0;
+        warn "sss-hook: flock timed out after 30s (continuing without lock)\n" if $@ eq "sss-lock-timeout\n";
+    }
+}
+# $lock_fh stays open for the lifetime of the script; LOCK_EX released on process exit.
+
 # STEP 1: Seal all staged files
 print STDERR "Normalizing staged files...\n";
 
-my @staged_files = `git diff --cached --name-only --diff-filter=AM`;
-chomp(@staged_files);
+# REM-05: NUL-delimited read via LIST-form open — no shell; handles newlines in filenames.
+my $raw1 = '';
+open(my $git_fh1, '-|', 'git', 'diff', '--cached', '--name-only', '-z', '--diff-filter=AM')
+    or die "Cannot run git diff: $!";
+{ local $/; $raw1 = <$git_fh1>; }
+close($git_fh1);
+my @staged_files = length($raw1) ? split(/\0/, $raw1) : ();
 
 my $sealed_count = 0;
 my $failed_count = 0;
 my @sealed_files = ();
 
 foreach my $file (@staged_files) {
-    chomp $file;
     next unless -f $file;
 
     # Skip binary files
@@ -44,16 +79,20 @@ foreach my $file (@staged_files) {
     # Skip the hook file itself
     next if $file =~ /githooks\/pre-commit$/;
 
-    # Run sss seal on the file (normalizes markers and seals plaintext)
-    my $result = system("sss --non-interactive seal '$file' -x 2>&1");
+    # REM-05: LIST-form system — calls execvp directly, no /bin/sh; '-x' before '--' (clap parses
+    # everything after '--' as positional, so the flag must precede the separator).
+    my $result = system('sss', '--non-interactive', 'seal', '-x', '--', $file);
     if ($result == 0) {
-        # Check if file was actually modified
-        my $changed = `git diff '$file'`;
+        # REM-05: LIST-form pipe capture for git diff — no shell interpolation of $file.
+        my $changed = '';
+        open(my $diff_fh, '-|', 'git', 'diff', '--', $file) or die "Cannot run git diff: $!";
+        { local $/; $changed = <$diff_fh>; }
+        close($diff_fh);
         if ($changed) {
             $sealed_count++;
             push @sealed_files, $file;
-            # Re-add the file to staging since it was modified
-            system("git add '$file'");
+            # REM-05: LIST-form system for git add — no shell interpolation of $file.
+            system('git', 'add', '--', $file);
         }
     } else {
         print STDERR "Error: Failed to seal $file\n";
@@ -76,19 +115,28 @@ if ($failed_count > 0) {
 # STEP 2: Now check for security violations on the sealed versions
 print STDERR "Checking for security violations...\n";
 
-@staged_files = `git diff --cached --name-only --diff-filter=AM`;
-chomp(@staged_files);
+# REM-05: NUL-delimited read via LIST-form open — identical treatment as STEP 1 read above.
+my $raw2 = '';
+open(my $git_fh2, '-|', 'git', 'diff', '--cached', '--name-only', '-z', '--diff-filter=AM')
+    or die "Cannot run git diff: $!";
+{ local $/; $raw2 = <$git_fh2>; }
+close($git_fh2);
+@staged_files = length($raw2) ? split(/\0/, $raw2) : ();
 
 my @security_violations;
 
 foreach my $file (@staged_files) {
-    chomp $file;
     next unless -f $file;
     next if -B $file;  # Skip binary files
 
-    # Get the HEAD version (what's currently committed)
-    my $head_content = `git show HEAD:'$file' 2>/dev/null`;
-    next if $?;  # File doesn't exist in HEAD (new file)
+    # REM-05: LIST-form pipe capture for git show — "HEAD:$file" is Perl interpolation (one git
+    # argument, safe for any filename bytes). close() returns false when git exits non-zero
+    # (file not in HEAD), replacing the old 'next if $?' pattern.
+    my $head_content = '';
+    open(my $show_fh, '-|', 'git', 'show', "HEAD:$file") or do { next; };
+    { local $/; $head_content = <$show_fh>; }
+    my $show_ok = close($show_fh);
+    next unless $show_ok;  # File doesn't exist in HEAD (new file)
 
     # Get the current version (after sealing)
     open(my $fh, '<', $file) or next;
@@ -118,9 +166,15 @@ if (@security_violations) {
 
     # Check for force commit override
     if ($ENV{FORCE_COMMIT} && lc($ENV{FORCE_COMMIT}) eq 'true') {
-        print STDERR "\nWARNING: FORCE_COMMIT=true detected. Allowing commit despite security violations.\n";
+        print STDERR "\nWARNING: FORCE_COMMIT=true is set — bypassing sss security check.\n";
+        print STDERR "WARNING: This commit may contain plaintext secrets in staged files.\n";
+        print STDERR "WARNING: This bypass is intentional for emergency use only. Ensure all\n";
+        print STDERR "WARNING: affected files are re-sealed (sss seal -x <file>) before pushing.\n";
+        print STDERR "WARNING: See docs/usage-guide.md (Git Hooks section) for the full security implications.\n";
     } else {
-        print STDERR "\nTo bypass this check, use: FORCE_COMMIT=true git commit ...\n";
+        print STDERR "\nTo bypass this check (EMERGENCY USE ONLY), use:\n";
+        print STDERR "  FORCE_COMMIT=true git commit ...\n";
+        print STDERR "The preferred bypass is: git commit --no-verify\n";
         exit 1;
     }
 }

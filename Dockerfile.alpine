@@ -1,5 +1,5 @@
 # Alpine-based Dockerfile for building sss with musl + FUSE support
-FROM rust:alpine AS builder
+FROM rust:alpine@sha256:66f48b19d6e88519e2e58bebe0d945779a6a4ca41c2db17db78c9569655b50ac AS builder # rust:alpine
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -31,7 +31,7 @@ RUN cargo install --locked cargo-auditable
 RUN cargo auditable build --release --features fuse,hybrid
 
 # Create minimal runtime image
-FROM alpine:latest
+FROM alpine:latest@sha256:a2d49ea686c2adfe3c992e47dc3b5e7fa6e6b5055609400dc2acaeb241c829f4 # alpine:latest
 
 # Install runtime dependencies (just the FUSE kernel module interface)
 RUN apk add --no-cache fuse3

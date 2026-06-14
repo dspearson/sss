@@ -357,27 +357,30 @@ impl PolicyManager {
         self.config.settings.timeout_seconds
     }
 
-    /// Save configuration to disk
+    /// Save configuration to disk atomically via a same-directory temp file.
+    ///
+    /// `NamedTempFile::new_in` creates the temp file at mode 0600 on Unix by default
+    /// (permissions set before any content is written — no permission window).
+    /// An atomic `rename(2)` publishes the content; a SIGKILL mid-write leaves the
+    /// prior file intact (no torn live file).  Mirrors `src/config.rs::write_atomic`.
     pub fn save(&self) -> Result<()> {
-        let content = toml::to_string_pretty(&self.config)?;
+        use std::io::Write as _;
 
-        // Ensure parent directory exists
-        if let Some(parent) = self.config_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        let content = toml::to_string_pretty(&self.config)
+            .map_err(|e| anyhow!("failed to serialise policy config: {e}"))?;
+        let parent = self
+            .config_path
+            .parent()
+            .ok_or_else(|| anyhow!("policy config path has no parent directory"))?;
+        fs::create_dir_all(parent)?;
 
-        fs::write(&self.config_path, content)?;
-
-        // Set secure permissions on the config file
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&self.config_path)?;
-            let mut perms = metadata.permissions();
-            perms.set_mode(0o600); // Owner read/write only
-            fs::set_permissions(&self.config_path, perms)?;
-        }
-
+        // NamedTempFile::new_in defaults to mode 0600 on Unix — permissions set before content.
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|e| anyhow!("failed to create temp file for policy write: {e}"))?;
+        tmp.write_all(content.as_bytes())
+            .map_err(|e| anyhow!("failed to write policy to temp file: {e}"))?;
+        tmp.persist(&self.config_path)
+            .map_err(|e| anyhow!("atomic policy rename failed: {e}"))?;
         Ok(())
     }
 
@@ -533,5 +536,61 @@ mod tests {
             manager.list_allowed_hosts()[0].hostname,
             "persistent.example.com"
         );
+    }
+
+    /// Verify that `save()` writes atomically via temp+rename:
+    ///
+    /// 1. The resulting file's Unix mode is exactly 0600 (owner-only).
+    ///    `NamedTempFile::new_in` sets 0600 before any content is written —
+    ///    no permission-after-content window.
+    /// 2. A second `save()` overwrites cleanly; the file still round-trips.
+    #[test]
+    #[cfg(unix)]
+    fn test_atomic_save_mode_and_roundtrip() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        // Use a real directory so the same-directory rename works.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("policy.toml");
+
+        // First save — file created fresh.
+        let mut manager = PolicyManager::new(path.clone()).unwrap();
+        manager
+            .add_allowed_host("roundtrip.example.com".to_string(), None)
+            .unwrap();
+        manager.save().unwrap();
+
+        // Mode must be exactly 0600 (no group/other bits).
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "policy file mode {mode:#o} should be 0600 after atomic save"
+        );
+
+        // Round-trip: reload and confirm the host survived.
+        let loaded = PolicyManager::new(path.clone()).unwrap();
+        assert_eq!(loaded.list_allowed_hosts().len(), 1);
+        assert_eq!(
+            loaded.list_allowed_hosts()[0].hostname,
+            "roundtrip.example.com"
+        );
+
+        // Second save (overwrite path) — mode must still be 0600.
+        let mut manager2 = PolicyManager::new(path.clone()).unwrap();
+        manager2
+            .add_allowed_host("second.example.com".to_string(), None)
+            .unwrap();
+        manager2.save().unwrap();
+
+        let mode2 = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode2, 0o600,
+            "policy file mode {mode2:#o} should still be 0600 after second atomic save"
+        );
+
+        // Both hosts round-trip after the second save.
+        let loaded2 = PolicyManager::new(path).unwrap();
+        assert_eq!(loaded2.list_allowed_hosts().len(), 2);
     }
 }

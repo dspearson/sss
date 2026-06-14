@@ -15,8 +15,9 @@ publish = false
 default = []
 fuse = ["dep:fuser", "dep:parking_lot"]
 winfsp = ["dep:winfsp", "dep:parking_lot", "dep:widestring", "dep:winapi"]
-ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:nix", "dep:parking_lot"]
+ninep = ["dep:rs9p", "dep:tokio", "dep:tokio-stream", "dep:async-trait", "dep:parking_lot"]
 hybrid = ["dep:trelis-hybrid", "dep:trelis-primitives"]
+vault = ["dep:ureq"]
 slow-tests = []
 
 [[bin]]
@@ -77,7 +78,40 @@ rs9p = { package = "rust-9p", path = "vendor/rust-9p", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tokio-stream = { version = "0.1", features = ["fs"], optional = true }
 async-trait = { version = "0.1", optional = true }
-nix = { version = "0.26", optional = true }
+nix = { version = "0.26" }
+# REM-26 (CRY-12): debug-level signer identity logging in verify_envelope_signature.
+# Using log (already a transitive dep) instead of tracing to avoid adding three
+# unvetted crates (tracing, tracing-core, tracing-attributes) to the supply chain.
+log = "0.4"
+
+# ----------------------------------------------------------------------
+# Vault HTTP+TLS client (feature = "vault", default OFF).
+# Blocking HTTPS client for HashiCorp Vault KV v2 reads on the synchronous
+# render path (VNET-01..03).
+#
+# Backend: ring rustls (NOT aws-lc-rs) — aws-lc-rs requires nasm on non-x86
+# and breaks Alpine/musl cross-compile; ring builds statically via cc.
+# See .planning/research/STACK.md §1 for the full 12-crate transitive tree.
+#
+# Source: crates.io (pinned in the committed Cargo.lock via cargo-vet — NOT
+# vendored; vendoring is only for non-crates.io deps such as rust-9p/trelis).
+#
+# tokio is NOT pulled in: ureq 3.x is a blocking client by design; the vault
+# feature is independent of the ninep feature. Verified via:
+#   cargo tree --features vault -i tokio  (must report "tokio" not reachable)
+#
+# JSON parsing reuses the existing serde_json dep; the ureq `json` feature is
+# NOT enabled (avoids re-exporting serde/serde_json through ureq).
+#
+# default-features = false DISABLES ureq's `gzip` default (ureq default = ["rustls",
+# "gzip"]); Vault's small JSON responses don't need response compression, so we drop
+# the flate2 / miniz_oxide / adler2 / crc32fast / simd-adler32 sub-tree (5 crates,
+# 19 -> 14 net-new). `rustls` is re-added explicitly. (Supply-chain trim, Phase 47.)
+#
+# rustls and ring are NOT declared directly — they are transitive via ureq.
+# A direct pin would risk version divergence in deny.toml (STACK.md §4).
+# ----------------------------------------------------------------------
+ureq = { version = "3.3.0", default-features = false, features = ["rustls", "rustls-webpki-roots"], optional = true }
 
 # ----------------------------------------------------------------------
 # Hybrid post-quantum KEM deps (feature = "hybrid", default OFF).
@@ -109,6 +143,21 @@ harness = false
 [[bench]]
 name = "fuse_read_latency"
 harness = false
+
+# Phase 40-01 (REM-09) — peer-credential verification unit tests.
+# Exercises verify_peer_credentials + enforce_peer_identity over a real
+# UnixStream::pair() socketpair.  No feature gate required: nix is now
+# a non-optional dependency.
+[[test]]
+name = "agent_peer_cred"
+path = "tests/agent_peer_cred.rs"
+
+# REM-11 socket-bind correctness: Linux abstract socket (ignores stale fs path,
+# EADDRINUSE on double-bind) + refuse-if-exists semantics (all platforms).
+# No feature gate required: uses only stdlib Unix socket APIs.
+[[test]]
+name = "agent_socket_bind"
+path = "tests/agent_socket_bind.rs"
 
 [[test]]
 name = "migrate_e2e"
@@ -143,6 +192,29 @@ name = "envelope_signature_negative_paths"
 path = "tests/envelope_signature_negative_paths.rs"
 required-features = ["hybrid"]
 
+# Phase 46-02 (VCFG-01..03,05,06) — vault config + envelope-sig v3 integration tests.
+# Exercises the v2/v3 signed envelope (sign + verify), so the whole file is hybrid-only.
+[[test]]
+name = "vault_config_envelope_sig"
+path = "tests/vault_config_envelope_sig.rs"
+required-features = ["hybrid"]
+
+# Phase 46-03 (VCFG-04, VCLI-04) — vault CLI sign-on-write integration tests.
+# Proves set-address/add-binding/set-auth re-sign to format_version=3; idempotency;
+# downgrade rejection; upgrade-sig v2/v3 target selection.
+[[test]]
+name = "vault_cli_signon"
+path = "tests/vault_cli_signon.rs"
+required-features = ["hybrid"]
+
+# Phase 46.1-01 (VSIG-01, VCFG-02/03) — envelope-sig v2/v3 versioning + backward-compat
+# locks: STATIC committed golden fv=2 fixture (verify-only drift lock), fv=2/fv=3
+# round-trips with cross-context-failure, and the fv=2 no-vault-region payload assertion.
+[[test]]
+name = "envelope_v2_v3_versioning"
+path = "tests/envelope_v2_v3_versioning.rs"
+required-features = ["hybrid"]
+
 # Phase 30-01 (TEST-14) — Known-Answer Tests for crypto primitives.
 # Default arm: XChaCha20-Poly1305 secretbox regression freeze + gap documentation.
 # No required-features: libsodium-sys is always available.
@@ -157,6 +229,64 @@ path = "tests/crypto_kat.rs"
 name = "hybrid_kat"
 path = "tests/hybrid_kat.rs"
 required-features = ["hybrid"]
+
+# Phase 47-01 (VNET-01..03) — Vault blocking transport + KV v2 client tests.
+# Exercises JSON extraction, missing/soft-deleted/destroyed discrimination,
+# response-size-cap rejection, and SSRF address validation.
+# Belt-and-braces gating: required-features AND #![cfg(feature = "vault")] in source.
+[[test]]
+name = "vault_client_transport"
+path = "tests/vault_client_transport.rs"
+required-features = ["vault"]
+
+# Phase 47-03 (VAUTH-01..05, VNET-04) — Vault auth + request-scoped resolver tests.
+# Exercises AppRole/renew/lookup body parsing, env-over-.secrets credential
+# precedence, the ReferenceMiss-vs-WholeOperation seam, single-login/single-fetch
+# request caching, and ZeroizeOnDrop of the request cache — all against crafted
+# JSON (no live Vault). serial_test serialises the process-global env mutation.
+# Belt-and-braces gating: required-features AND #![cfg(feature = "vault")] in source.
+[[test]]
+name = "vault_auth_resolver"
+path = "tests/vault_auth_resolver.rs"
+required-features = ["vault"]
+
+# Exit-code contract for vault render errors (47-04): exit 3 = per-reference
+# miss, exit 4 = whole-operation abort.  Tests use std::process::Command so
+# they can inspect the actual process exit status.  required-features guards
+# the test so it is not built or run without --features vault.
+[[test]]
+name = "vault_render_exit_codes"
+path = "tests/vault_render_exit_codes.rs"
+required-features = ["vault"]
+
+# Phase 47-05 (VAUTH-01, VAUTH-05, VNET-02, VFAIL-01, VFAIL-02) — Live
+# ephemeral-Vault integration tier.  Starts a real dev-mode OpenBao (bao) via
+# process-compose (no container runtime required), seeds KV-v2 + AppRole over
+# REST, and exercises the full IT matrix: KV happy-path, AppRole login,
+# @version pin, exit-3 (ACL-denied ref), exit-4 (dead port), token-not-logged.
+# Skip-gracefully when process-compose/bao are absent (not inside nix devShell);
+# default `cargo test` never needs nix or network.
+# Invocation: nix develop .#vault-it --command cargo test --features vault,hybrid --test vault_integration
+# Belt-and-braces gating: required-features AND #![cfg(feature = "vault")] in source.
+# Also requires "hybrid" because the IT harness's init_sss_project calls
+# `sss keys upgrade` (sign the classic key) before `sss init` — `sss init`
+# rejects unsigned format_version=1 keystore entries (get_current_keypair calls
+# load_keypair(.., allow_unsigned=false)), and the re-signing step in `keys upgrade`
+# requires hybrid primitives.  The test itself never exercises PQ crypto; the
+# hybrid dependency is purely for the project-setup helper.  This constraint
+# cannot be removed without adding an --allow-unsigned flag to `sss init`.
+[[test]]
+name = "vault_integration"
+path = "tests/vault_integration.rs"
+required-features = ["vault", "hybrid"]
+
+# Invocation: cargo test --features vault,hybrid,fuse --test vault_mount_integration --no-run
+# (compile-only on CI; live tier requires /dev/fuse + OpenBao — skips gracefully otherwise)
+# Belt-and-braces gating: required-features AND #![cfg(all(feature="vault", ...))] in source.
+[[test]]
+name = "vault_mount_integration"
+path = "tests/vault_mount_integration.rs"
+required-features = ["vault", "hybrid", "fuse"]
 
 # ----------------------------------------------------------------------
 # Workspace clippy strictness contract (Phase 21 / QUAL-01).

@@ -102,8 +102,11 @@ fn setup_signed_project(seed_user: &str) -> (TempDir, KeyPair) {
     }
 
     cfg.format_version = 2;
+    // Sign under the context matching cfg.format_version (=2). The saved .sss.toml is
+    // loaded by the production loader, whose `2 =>` arm verifies under the v2 context —
+    // so a v2-context signature here is what makes the round-trip load succeed.
     let payload = sss::envelope_sig::build_envelope_payload(&cfg);
-    let sig = sss::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)
+    let sig = sss::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload, cfg.format_version)
         .expect("sign_envelope");
     cfg.envelope
         .get_or_insert_with(sss::project::EnvelopeMeta::default)

@@ -111,8 +111,13 @@ fn test_processor_performance_optimizations() {
     use sss::crypto::RepositoryKey;
     use sss::Processor;
 
+    // A project timestamp is required for deterministic sealing (REM-25).
     let key = RepositoryKey::new();
-    let processor = Processor::new(key).expect("Failed to create processor");
+    let processor = Processor::new_with_context(
+        key,
+        std::path::PathBuf::from("."),
+        "2025-01-01T00:00:00Z".to_string(),
+    ).expect("Failed to create processor");
 
     // Test basic processing
     let input = "This is ⊕{secret} text";
@@ -126,7 +131,11 @@ fn test_processor_performance_optimizations() {
     assert_eq!(decrypted, input);
 
     // Test that multiple processor instances work (testing static regex patterns)
-    let processor2 = Processor::new(RepositoryKey::new()).expect("Failed to create processor2");
+    let processor2 = Processor::new_with_context(
+        RepositoryKey::new(),
+        std::path::PathBuf::from("."),
+        "2025-01-01T00:00:00Z".to_string(),
+    ).expect("Failed to create processor2");
     let input2 = "Another ⊕{test} message";
     let encrypted2 = processor2
         .encrypt_content(input2)
@@ -148,8 +157,13 @@ fn test_error_handling_robustness() {
     use sss::crypto::RepositoryKey;
     use sss::Processor;
 
+    // A project timestamp is required for deterministic sealing (REM-25).
     let key = RepositoryKey::new();
-    let processor = Processor::new(key).expect("Failed to create processor");
+    let processor = Processor::new_with_context(
+        key,
+        std::path::PathBuf::from("."),
+        "2025-01-01T00:00:00Z".to_string(),
+    ).expect("Failed to create processor");
 
     // Test with oversized content (should not crash)
     let large_marker = format!("⊕{{{}}}", "x".repeat(20000)); // Oversized marker

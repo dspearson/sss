@@ -63,6 +63,7 @@ use std::{
     io::SeekFrom,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 use tokio::{
     fs,
@@ -74,6 +75,33 @@ use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 use crate::filesystem_common::{has_encrypted_markers, has_balanced_markers};
 use crate::project::ProjectConfig;
 use crate::Processor;
+
+/// Fired exactly once per process when a 9P read encounters a `⊳{}` vault reference.
+///
+/// Vault-over-9P is deferred (VMNT-F01, blocked on CON-08/09).  Until that lands, vault
+/// markers pass through verbatim on the 9P path — callers must NOT invoke the vault
+/// resolver.  This function emits a single diagnostic so operators know why their markers
+/// are not resolved, without flooding logs on every read.
+static VAULT_9P_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Emit a one-time warning when a 9P read encounters vault reference markers.
+///
+/// Checks `content` for `⊳{}` vault references.  If any are found and the warning has
+/// not yet been emitted this process lifetime, prints a diagnostic to stderr.  The vault
+/// resolver is **never** invoked on the 9P path (VMNT-F01 deferred); markers are left
+/// verbatim.
+fn warn_vault_9p_unavailable(content: &str) {
+    if crate::vault::resolver::VAULT_INTERPOLATION_REGEX.is_match(content)
+        && !VAULT_9P_WARNED.swap(true, Ordering::Relaxed)
+    {
+        eprintln!(
+            "[sss 9P] vault reference markers (⊳{{}}) detected but vault resolution is not \
+             available on the 9P transport (VMNT-F01 deferred). \
+             Markers will pass through verbatim. \
+             Use a FUSE mount for vault resolution."
+        );
+    }
+}
 
 /// Convert anyhow errors to rs9p IO errors
 fn to_9p_error(err: impl std::fmt::Display) -> rs9p::Error {
@@ -372,6 +400,12 @@ impl SssNinepFS {
             Some(p) => p,
             None => return Ok(content.into_bytes()), // no keys — return as-is
         };
+
+        // Vault-over-9P is deferred (VMNT-F01): warn once for ANY rendered read whose
+        // content carries ⊳{} vault markers — including pure-vault files with no ⊠{}
+        // encrypted markers that skip the decrypt branch below (UAT G-18). The vault
+        // resolver is NEVER invoked on the 9P path; markers always pass through verbatim.
+        warn_vault_9p_unavailable(&content);
 
         // Only process if file has balanced encrypted markers (avoids false positives
         // from files that mention marker chars in strings/grep patterns)
@@ -721,6 +755,13 @@ impl Filesystem for SssNinepFS {
 
         // Process based on mode (if it's text content)
         let data = if let Ok(content_str) = String::from_utf8(buf.clone()) {
+            // Vault-over-9P is deferred (VMNT-F01): warn once for a rendered read whose
+            // content carries ⊳{} vault markers — including pure-vault files with no ⊠{}
+            // encrypted markers that skip the decrypt branch below (UAT G-18). The vault
+            // resolver is NEVER invoked on the 9P path; markers always pass verbatim.
+            if matches!(mode, FileMode::Rendered) {
+                warn_vault_9p_unavailable(&content_str);
+            }
             if has_balanced_markers(&content_str) && has_encrypted_markers(&content_str) {
                 match mode {
                     FileMode::Sealed => buf, // Return as-is
@@ -733,7 +774,8 @@ impl Filesystem for SssNinepFS {
                             .unwrap_or(buf)
                     }
                     FileMode::Rendered => {
-                        // Fully decrypt and render with secrets interpolation
+                        // Fully decrypt and render with secrets interpolation.
+                        // (G-18 deferral warning already emitted above for Rendered reads.)
                         let processor = self.processor.read().await;
                         processor
                             .decrypt_to_raw_with_path(&content_str, &path)
@@ -742,7 +784,7 @@ impl Filesystem for SssNinepFS {
                     }
                 }
             } else {
-                buf // No markers, return as-is
+                buf // No encrypted markers — pass through verbatim (vault markers included)
             }
         } else {
             buf // Binary data, return as-is
@@ -1290,5 +1332,33 @@ mod tests {
         assert!(!SssNinepFS::is_sealed_protocol_path("file.txt.sealed"));
         assert!(!SssNinepFS::is_sealed_protocol_path("file.txt.open"));
         assert!(!SssNinepFS::is_sealed_protocol_path("file.txt"));
+    }
+
+    /// Verify the vault 9P fence fires once and only once (VMNT-06 / SC5).
+    ///
+    /// We cannot observe stderr from unit tests, but we CAN verify:
+    /// - `warn_vault_9p_unavailable` does not panic on vault-bearing content.
+    /// - The `VAULT_9P_WARNED` flag is set to true after a call with vault refs.
+    /// - A second call with vault refs does NOT reset the flag (idempotent).
+    /// - A call with content that has no vault refs leaves the flag unchanged.
+    #[test]
+    fn vault_9p_fence_warns_once() {
+        use super::{warn_vault_9p_unavailable, VAULT_9P_WARNED};
+        use std::sync::atomic::Ordering;
+
+        // Reset the flag to false for this test (tests may run in any order).
+        VAULT_9P_WARNED.store(false, Ordering::SeqCst);
+
+        // Content with no vault refs — flag must stay false.
+        warn_vault_9p_unavailable("hello world, no vault refs here");
+        assert!(!VAULT_9P_WARNED.load(Ordering::SeqCst), "flag must stay false with no vault refs");
+
+        // Content with a vault ref — flag must become true.
+        warn_vault_9p_unavailable("secret: \u{22B3}{kv/my-app/db_password}");
+        assert!(VAULT_9P_WARNED.load(Ordering::SeqCst), "flag must be set after first vault-ref call");
+
+        // Second call with vault ref — flag stays true, no panic.
+        warn_vault_9p_unavailable("another: \u{22B3}{kv/other/value}");
+        assert!(VAULT_9P_WARNED.load(Ordering::SeqCst), "flag must remain true on second call");
     }
 }

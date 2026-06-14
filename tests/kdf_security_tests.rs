@@ -116,6 +116,7 @@ fn test_derived_key_size_correct() {
 }
 
 #[test]
+#[cfg(not(miri))] // Salt::new() is stubbed to all-zero under miri (FFI randombytes_buf no-op)
 fn test_salt_uniqueness() {
     // Generate many salts and verify they're all unique
     let mut salts = HashSet::new();

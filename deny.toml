@@ -6,7 +6,9 @@
 # confirm Linux x86_64 + macOS arm64 + Linux aarch64 as the primary
 # targets. Windows is best-effort and revisited if a Windows release
 # target is added (v2.4+).
-features = ["hybrid", "fuse", "ninep"]
+# Phase 47 / VNET-05 — vault feature added to the checked surface so that
+# ureq + rustls + ring + rustls-webpki enter the deny/license/bans graph.
+features = ["hybrid", "fuse", "ninep", "vault"]
 
 [licenses]
 confidence-threshold = 0.8
@@ -19,6 +21,19 @@ allow = [
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
+    "OpenSSL",              # ring 0.17 license component (vault feature)
+    "CDLA-Permissive-2.0", # webpki-roots 1.0.7 Mozilla root CA bundle (vault feature)
+]
+
+# Phase 47 / VNET-05 — ring 0.17 carries a non-SPDX composite license
+# (ISC AND MIT AND OpenSSL). cargo-deny cannot parse the bare LICENSE file
+# without a clarify stanza; the hash below was computed by cargo-deny
+# against ring 0.17.14's LICENSE file (per STACK.md §1 + D-DENY-1 pattern).
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [
+    { path = "LICENSE", hash = 0xbd0eed23 },
 ]
 
 # Phase 10 / DEPS-02 — full advisory / bans / sources policy.

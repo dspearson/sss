@@ -558,26 +558,28 @@ fn keys_14_list_v1_entry_shows_unsigned_legacy_tag() {
 fn keys_15_list_v2_entry_omits_legacy_tag() {
     let tmp = TempDir::new().unwrap();
 
-    // Seed a v2 entry directly via store_dual_keypair.
+    // Seed a v3 entry directly via store_dual_keypair.
+    // Phase 38-03 (REM-04): store_dual_keypair now produces format_version=3.
     let ks = fast_keystore(tmp.path());
     let classic = sss::crypto::ClassicKeyPair::generate().unwrap();
     let hybrid = sss::crypto::hybrid::HybridKeyPair::generate().unwrap();
     let id = ks
         .store_dual_keypair(Some(&classic), Some(&hybrid), Some("v2_pw"))
-        .expect("seed v2 entry");
+        .expect("seed v3 entry (dual keypair)");
 
     let entries = ks.list_key_ids().expect("list");
     let stored = entries
         .iter()
         .find(|(k, _)| k == &id)
         .map(|(_, s)| s)
-        .expect("seeded v2 id present in listing");
-    assert_eq!(stored.format_version, 2, "seed must produce v2 entry");
+        .expect("seeded v3 id present in listing");
+    // Phase 38-03 (REM-04): store_dual_keypair produces v3 (was v2 before).
+    assert_eq!(stored.format_version, 3, "seed must produce v3 entry");
 
     let line = sss::commands::keys::format_list_entry(&id, stored, true);
     assert!(
         !line.contains("(unsigned-legacy)"),
-        "v2 entry MUST NOT carry the legacy tag, got: {line}"
+        "v3 entry MUST NOT carry the legacy tag, got: {line}"
     );
 }
 
@@ -587,7 +589,9 @@ fn keys_15_list_v2_entry_omits_legacy_tag() {
 fn keys_16_list_mixed_keystore_tags_per_entry() {
     let tmp = TempDir::new().unwrap();
 
-    // Seed one v1 (classic store_keypair) and one v2 (store_dual_keypair).
+    // Seed one v1 (classic store_keypair) and one v3 (store_dual_keypair).
+    // Phase 38-03 (REM-04): store_dual_keypair now writes format_version=3
+    // (KDF params included in signed payload).
     let ks = fast_keystore(tmp.path());
     let classic_v1 = KeyPair::generate().unwrap();
     let v1_id = ks.store_keypair(&classic_v1, None).expect("seed v1");
@@ -596,7 +600,7 @@ fn keys_16_list_mixed_keystore_tags_per_entry() {
     let hybrid_v2 = sss::crypto::hybrid::HybridKeyPair::generate().unwrap();
     let v2_id = ks
         .store_dual_keypair(Some(&classic_v2), Some(&hybrid_v2), Some("v2pw"))
-        .expect("seed v2");
+        .expect("seed v3 (dual keypair)");
 
     let entries = ks.list_key_ids().expect("list");
     let v1_stored = entries
@@ -608,9 +612,10 @@ fn keys_16_list_mixed_keystore_tags_per_entry() {
         .iter()
         .find(|(k, _)| k == &v2_id)
         .map(|(_, s)| s)
-        .expect("v2 id present");
+        .expect("v3 id present");
     assert_eq!(v1_stored.format_version, 1);
-    assert_eq!(v2_stored.format_version, 2);
+    // Phase 38-03 (REM-04): store_dual_keypair produces v3 (was v2 before).
+    assert_eq!(v2_stored.format_version, 3);
 
     let v1_line = sss::commands::keys::format_list_entry(&v1_id, v1_stored, false);
     let v2_line = sss::commands::keys::format_list_entry(&v2_id, v2_stored, false);
@@ -644,3 +649,8 @@ fn keys_17_upgrade_rejects_allow_unsigned_flag() {
         "clap MUST reject --allow-unsigned on `keys upgrade`; D-17"
     );
 }
+
+// v2→v3 upgrade coverage lives in src/keystore/store.rs:
+// `cr01_format_version_2_loads_and_upgrades` (store-level unit test). The
+// integration crate cannot construct a valid v1-context-signed v2 fixture
+// because `keystore::sig` is crate-private.

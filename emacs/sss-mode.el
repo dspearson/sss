@@ -294,10 +294,27 @@ On failure, signals `(error ...)' — this is MANDATORY.  Returning nil on
 failure would allow Emacs to fall through to its default write path, writing
 plaintext.
 
-Two-step process: step 1 writes plaintext buffer content to disk temporarily,
-step 2 calls `sss seal --in-place' to encrypt the file in place.
-There is a brief window (milliseconds) where plaintext exists on disk — this
-is an accepted limitation identical to the epa-file.el pattern."
+Two-step process:
+  Step 1 — `write-region' writes the decrypted plaintext to the target file.
+  Step 2 — `sss seal --in-place' encrypts the file in place.
+
+SECURITY — SEAL-BEFORE-FLUSH WINDOW: Between step 1 and step 2, the
+plaintext file exists on disk in an unencrypted state.  This window is
+sub-second under normal conditions but is real and cannot be eliminated
+within the two-step model.
+
+Scope: local filesystem, same directory as the secrets file.  An attacker
+or process with read access to that directory during the window can observe
+the plaintext.  Remote attackers and processes without local read access
+are unaffected.
+
+Mitigation: the window is minimised by executing seal immediately after
+write-region with no intervening I/O.  Ensure the containing directory has
+appropriate access controls (mode 0700 or equivalent).
+
+This is an accepted information-disclosure boundary, identical in structure
+to the `epa-file.el' pattern, and is recorded in `docs/security-model.md'
+under the Accepted Information-Disclosure Boundaries section."
   (let ((file buffer-file-name))
     (unless file
       (error "Sss-mode: buffer has no associated file; cannot seal"))

@@ -4,6 +4,11 @@
 #![allow(clippy::unwrap_used)]
 
 use anyhow::{anyhow, Result};
+// Why: `Context` (.context(...)) is used only inside the `hybrid`-gated
+// `handle_project_vault` body; importing it unconditionally warns (unused) on
+// non-hybrid builds, which the `-D warnings` clippy gate rejects.
+#[cfg(feature = "hybrid")]
+use anyhow::Context;
 use clap::ArgMatches;
 use std::path::PathBuf;
 
@@ -35,6 +40,7 @@ pub fn handle_project(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
         Some(("remove", sub_matches)) => handle_project_remove(&mut config_manager, sub_matches)?,
         Some(("ignore", sub_matches)) => handle_project_ignore(&mut config_manager, sub_matches)?,
         Some(("secrets-file", sub_matches)) => handle_project_secrets_file(sub_matches)?,
+        Some(("vault", sub_matches)) => handle_project_vault(sub_matches)?,
         None => {
             return Err(anyhow!(
                 "No subcommand specified. Use 'sss project --help' for usage information."
@@ -296,6 +302,138 @@ fn handle_project_secrets_file(sub_matches: &ArgMatches) -> Result<()> {
         _ => unreachable!(),
     }
     Ok(())
+}
+
+/// `sss project vault <subcommand>` — manage the `[vault]` table in `.sss.toml` and
+/// re-sign the envelope to `format_version=3` on every write (VCLI-04, T-46-20).
+///
+/// Every verb:
+/// 1. Loads the config via `load_from_file_unverified` (sign-on-write pattern).
+/// 2. Mutates `cfg.vault` (inserting the table if absent).
+/// 3. Sets `cfg.format_version = 3`.
+/// 4. Calls `crate::envelope_sig::sign_and_write_atomic` (shared helper — never
+///    the unsigned `save_to_file` path, never a copied sign body).
+///
+/// After any verb the resulting `.sss.toml` verifies cleanly under the v3 context.
+fn handle_project_vault(sub_matches: &ArgMatches) -> Result<()> {
+    // Why: `[vault]` is honoured only under a format_version=3 signed envelope, and
+    // envelope signing requires the hybrid sig primitives (Ed448 + ML-DSA-65), which
+    // live in the `hybrid`-gated `envelope_sig` module. A non-hybrid build cannot sign,
+    // so vault config management is unavailable — mirror the format_version=2
+    // "rebuild with --features hybrid" gate in src/project.rs's dispatch ladder.
+    #[cfg(not(feature = "hybrid"))]
+    {
+        let _ = sub_matches;
+        // Why: `needless_return` is a false positive under cfg — the
+        // `#[cfg(feature = "hybrid")]` block below follows this statement, so the
+        // explicit `return` is required (without it this block becomes a discarded
+        // statement and the fn loses its tail expression). The lint only sees the
+        // non-hybrid post-cfg view, where this block looks final.
+        #[allow(clippy::needless_return)]
+        return Err(anyhow!(
+            "`sss project vault` manages a signed (format_version=3) envelope, which \
+             requires the hybrid build feature; rebuild sss with `--features hybrid`"
+        ));
+    }
+
+    #[cfg(feature = "hybrid")]
+    {
+    use crate::constants::CONFIG_FILE_NAME;
+    use crate::project::{ProjectConfig, VaultAuth, VaultBinding, VaultConfig};
+
+    match sub_matches.subcommand() {
+        Some(("set-address", set_matches)) => {
+            // INVARIANT: clap declares `address` as required(true). HARDEN-01 / 08-01.
+            let address = set_matches.get_one::<String>("address").unwrap();
+
+            // Validate https:// scheme BEFORE any mutation (T-46-21).
+            crate::validation::validate_vault_address(address)
+                .map_err(|e| anyhow!("vault config field `address`: {e}"))?;
+
+            let mut cfg = ProjectConfig::load_from_file_unverified(CONFIG_FILE_NAME)
+                .context("failed to read .sss.toml")?;
+
+            cfg.vault
+                .get_or_insert_with(VaultConfig::default)
+                .address = Some(address.clone());
+            cfg.format_version = 3;
+
+            // Shared sign-on-write (T-46-20: no copied body, no save_to_file).
+            crate::envelope_sig::sign_and_write_atomic(
+                &mut cfg,
+                std::path::Path::new(CONFIG_FILE_NAME),
+            )?;
+        }
+        Some(("add-binding", bind_matches)) => {
+            // INVARIANT: clap declares `name` as required(true). HARDEN-01 / 08-01.
+            let name = bind_matches.get_one::<String>("name").unwrap();
+            let mount = bind_matches.get_one::<String>("mount").cloned();
+            let default_field = bind_matches.get_one::<String>("default-field").cloned();
+            let kv_version: Option<u8> = bind_matches
+                .get_one::<String>("kv-version")
+                .and_then(|s| s.parse::<u8>().ok());
+
+            let mut cfg = ProjectConfig::load_from_file_unverified(CONFIG_FILE_NAME)
+                .context("failed to read .sss.toml")?;
+
+            cfg.vault
+                .get_or_insert_with(VaultConfig::default)
+                .bindings
+                .insert(
+                    name.clone(),
+                    VaultBinding {
+                        kv_version,
+                        mount,
+                        default_field,
+                    },
+                );
+            cfg.format_version = 3;
+
+            crate::envelope_sig::sign_and_write_atomic(
+                &mut cfg,
+                std::path::Path::new(CONFIG_FILE_NAME),
+            )?;
+
+            let safe_name = crate::validation::sanitize_for_display(name);
+            println!("Added vault binding '{safe_name}' (re-signed at format_version=3)");
+        }
+        Some(("set-auth", auth_matches)) => {
+            // INVARIANT: clap declares `method` as required(true). HARDEN-01 / 08-01.
+            let method = auth_matches.get_one::<String>("method").unwrap();
+            let role_id = auth_matches.get_one::<String>("role-id").cloned();
+            let secret_id_secret = auth_matches.get_one::<String>("secret-id-secret").cloned();
+            let token_secret = auth_matches.get_one::<String>("token-secret").cloned();
+
+            let mut cfg = ProjectConfig::load_from_file_unverified(CONFIG_FILE_NAME)
+                .context("failed to read .sss.toml")?;
+
+            cfg.vault
+                .get_or_insert_with(VaultConfig::default)
+                .auth = Some(VaultAuth {
+                    method: Some(method.clone()),
+                    role_id,
+                    secret_id_secret,
+                    token_secret,
+                });
+            cfg.format_version = 3;
+
+            crate::envelope_sig::sign_and_write_atomic(
+                &mut cfg,
+                std::path::Path::new(CONFIG_FILE_NAME),
+            )?;
+
+            let safe_method = crate::validation::sanitize_for_display(method);
+            println!("Set vault auth method '{safe_method}' (re-signed at format_version=3)");
+        }
+        None => {
+            return Err(anyhow!(
+                "No subcommand specified. Use 'sss project vault --help' for usage information."
+            ));
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+    }
 }
 
 #[cfg(test)]

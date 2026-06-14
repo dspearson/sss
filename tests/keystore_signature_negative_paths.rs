@@ -48,10 +48,15 @@ const TEST_PASSPHRASE: &str = "neg-path-test-pw-2026";
 /// Canonical context bytes for keystore-entry signing (must match
 /// `sss::keystore::KEYSTORE_SIG_CONTEXT`). Hard-coded here to make NEG-05
 /// (wrong-context proof) self-explanatory.
-const KEYSTORE_CONTEXT: &[u8] = b"sss-keystore-entry-sig-v1";
+/// Phase 38-03 / REM-04: bumped from v1 to v2 when KDF params were added.
+const KEYSTORE_CONTEXT: &[u8] = b"sss-keystore-entry-sig-v2";
 
-/// Phase 19's envelope-signing context. Used by NEG-05 to forge a signature
-/// that is well-formed but bound to the wrong protocol — verify must reject.
+/// Envelope-signing context. Used by NEG-05 to forge a signature that is
+/// well-formed but bound to the wrong protocol — verify must reject.
+/// Phase 38-01 bumped the envelope context to v2; this constant is kept as
+/// the v1 envelope bytes to remain byte-distinct from both the current keystore
+/// context (v2) and the current envelope context (v2). The test proves
+/// cross-context domain separation: any byte-distinct context produces rejection.
 const WRONG_CONTEXT: &[u8] = b"sss-toml-envelope-sig-v1";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -288,6 +293,10 @@ fn neg_05_wrong_context_fails_verify() -> Result<()> {
 
     // Build canonical payload over the ABOUT-TO-BE-WRITTEN sig pubkey fields
     // (the entry's other identity fields are unchanged).
+    // REM-04 (Phase 38-03): payload now includes KDF params. The entry is
+    // password-protected, so pass the KdfParams::interactive() values that
+    // the production keystore would use for this entry.
+    let kdf = KdfParams::interactive();
     let payload = build_signed_payload(
         &entry.uuid,
         &entry.public_key,
@@ -295,6 +304,8 @@ fn neg_05_wrong_context_fails_verify() -> Result<()> {
         Some(&ed448_pk_b64),
         Some(&mldsa_pk_b64),
         &entry.created_at.to_rfc3339(),
+        kdf.ops_limit,
+        kdf.mem_limit,
     );
 
     // Sign with the WRONG context.

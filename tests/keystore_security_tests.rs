@@ -26,6 +26,10 @@ use sss::kdf::KdfParams;
 use sss::keystore::Keystore;
 use std::fs;
 use tempfile::TempDir;
+#[cfg(feature = "hybrid")]
+use sss::crypto::ClassicKeyPair;
+#[cfg(feature = "hybrid")]
+use sss::crypto::HybridKeyPair;
 
 /// Helper to create a temporary keystore for testing
 fn create_temp_keystore() -> Result<(Keystore, TempDir)> {
@@ -494,6 +498,107 @@ fn test_repeated_save_load_consistency() -> Result<()> {
         assert_eq!(loaded.secret_key().unwrap().to_base64(), keypair.secret_key().unwrap().to_base64());
     }
 
+    Ok(())
+}
+
+/// REM-03 / T-38-07: substituting a hybrid KEM ciphertext from entry B into
+/// entry A (same passwordless encoding) must be rejected with
+/// "public key mismatch (hybrid slot)".
+///
+/// Passwordless hybrid entries store the KEM secret key as plain base64
+/// (no AEAD wrapping), so the substituted bytes decode cleanly; detection
+/// relies entirely on the post-decrypt re-derivation check added in Task 2.
+/// A positive control confirms that the unmodified entry still opens Ok.
+// Why: HybridKeyPair contains Ed448SigningKey which doesn't impl Debug, so
+// expect_err() (which requires T: Debug) cannot be used here.
+#[allow(clippy::err_expect)]
+#[cfg(feature = "hybrid")]
+#[test]
+fn hybrid_ciphertext_substitution() -> Result<()> {
+    let (keystore, temp_dir) = create_temp_keystore()?;
+    let keys_dir = temp_dir.path().join("sss").join("keys");
+
+    // Create two passwordless dual-suite entries.
+    let classic_a = ClassicKeyPair::generate()?;
+    let hybrid_a = HybridKeyPair::generate()?;
+    let id_a = keystore
+        .store_dual_keypair(Some(&classic_a), Some(&hybrid_a), None)
+        .expect("store dual A passwordless");
+
+    let classic_b = ClassicKeyPair::generate()?;
+    let hybrid_b = HybridKeyPair::generate()?;
+    let id_b = keystore
+        .store_dual_keypair(Some(&classic_b), Some(&hybrid_b), None)
+        .expect("store dual B passwordless");
+
+    // Positive control: set current to A and verify it opens normally.
+    keystore
+        .set_current_key(&id_a)
+        .expect("set current to A for positive control");
+    let ok_before = keystore.load_hybrid_keypair(&id_a, None, false);
+    assert!(
+        ok_before.is_ok(),
+        "positive control — entry A must open before substitution; err={:?}",
+        ok_before.err()
+    );
+
+    // Read both TOML files as strings and extract the hybrid_encrypted_secret_key
+    // values using simple line-level parsing (avoids needing internal StoredKeyPair type).
+    let path_a = keys_dir.join(format!("{id_a}.toml"));
+    let path_b = keys_dir.join(format!("{id_b}.toml"));
+    let content_a = fs::read_to_string(&path_a)?;
+    let content_b = fs::read_to_string(&path_b)?;
+
+    // Extract B's hybrid_encrypted_secret_key value (a base64 string on one TOML line).
+    let b_hsk_line = content_b
+        .lines()
+        .find(|l| l.starts_with("hybrid_encrypted_secret_key"))
+        .expect("entry B must have hybrid_encrypted_secret_key");
+    // Extract the quoted value: hybrid_encrypted_secret_key = "..."
+    let b_hsk_value = b_hsk_line
+        .split_once('=')
+        .map(|(_, v)| v)
+        .expect("line must have '='")
+        .trim();
+
+    // Replace A's hybrid_encrypted_secret_key line with B's value.
+    // A's hybrid_public_key remains A's — so re-derivation from B's secret will mismatch.
+    let tampered = content_a
+        .lines()
+        .map(|line| {
+            if line.starts_with("hybrid_encrypted_secret_key") {
+                format!("hybrid_encrypted_secret_key = {b_hsk_value}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Preserve trailing newline if original had one.
+    let tampered = if content_a.ends_with('\n') {
+        format!("{tampered}\n")
+    } else {
+        tampered
+    };
+    fs::write(&path_a, tampered)?;
+
+    // load_hybrid_keypair on tampered entry A must now reject it.
+    let result = keystore.load_hybrid_keypair(&id_a, None, false);
+    assert!(
+        result.is_err(),
+        "substituted hybrid KEM ciphertext must be rejected"
+    );
+    let err = result.err().expect("checked is_err above");
+    assert!(
+        err.to_string().contains("hybrid slot"),
+        "error must name the hybrid slot, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("mismatch") || err.to_string().contains("corrupt"),
+        "error must indicate mismatch/corruption, got: {err}"
+    );
+
+    let _ = id_b; // suppress unused warning
     Ok(())
 }
 

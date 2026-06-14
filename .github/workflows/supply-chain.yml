@@ -81,11 +81,23 @@
 name: Supply Chain
 
 on:
-  # Automatic triggers (push / pull_request / schedule) disabled — manual
-  # workflow_dispatch only. Run the equivalent checks locally to verify
-  # before pushing; preserves the free GitHub Actions allocation until
-  # self-hosted runners are available.
+  # Scheduled — weekly Friday 03:00 UTC (CONTEXT.md cron lock).
+  schedule:
+    - cron: "0 3 * * 5"
+  # Manual trigger for iterating on the workflow or re-running after a
+  # known-fix lands. Mirrors miri.yml + sanitizer.yml convention.
   workflow_dispatch:
+  # PR trigger (CONTEXT.md): surface dep drift early on PRs that touch
+  # Cargo.toml / deny.toml / supply-chain/. Filters keep CI cost bounded
+  # by skipping doc-only / .planning-only PRs.
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+      - "supply-chain/**"
+      - "vendor/**"
+      - ".github/workflows/supply-chain.yml"
 
 # No `permissions:` block — defaults to read-only repo access (matches
 # miri.yml + sanitizer.yml + ci-matrix.yml convention).

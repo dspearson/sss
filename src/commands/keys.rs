@@ -128,6 +128,7 @@ fn handle_keys_generate_command_with_prompt(
             // place to a signed v2 entry via that same path so a freshly
             // generated classic keypair is usable straight away. The hybrid/both
             // arms already emit v2; this brings classic into line.
+            // Backport of master commit bce2ac4 — not yet merged to this branch.
             #[cfg(feature = "hybrid")]
             keystore.upgrade_keypair_in_place(&key_id, password_option.as_deref())?;
 
@@ -742,11 +743,13 @@ fn handle_keys_remove_passphrase_with_prompt(
 ///
 /// Behaviour:
 /// - Reads the source file as a `StoredKeyPair` TOML blob.
-/// - `format_version == 2` → invoke `verify_stored_signature` (requires `hybrid`).
+/// - `format_version == 2|3` → invoke `verify_stored_signature` (requires `hybrid`).
 /// - `format_version == 1` → reject unless `--allow-unsigned` is passed.
-/// - `format_version >= 3` → reject as unsupported.
+/// - `format_version >= 4` → reject as unsupported.
 /// - On success, writes the TOML to `{keys_dir}/{uuid}.toml` verbatim, preserving
-///   the signature sub-table for v2 entries.
+///   the signature sub-table for v2/v3 entries.
+///
+/// Phase 38-03 (REM-04): `format_version=3` added as a supported signed format.
 pub fn handle_keys_import(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let allow_unsigned = sub_matches.get_flag("allow-unsigned");
     let file_path = sub_matches
@@ -767,6 +770,7 @@ pub fn handle_keys_import(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     let keystore = create_keystore(main_matches)?;
 
     // Phase 18 / D-10 dispatch — mirrors `Keystore::load_keypair`.
+    // Phase 38-03 (REM-04): format_version=3 added as signed format arm.
     match stored.format_version {
         1 => {
             if !allow_unsigned {
@@ -778,7 +782,7 @@ pub fn handle_keys_import(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
             }
             // Proceed without verify.
         }
-        2 => {
+        2 | 3 => {
             #[cfg(feature = "hybrid")]
             {
                 keystore.verify_stored_signature(&stored, &src)?;
@@ -786,9 +790,10 @@ pub fn handle_keys_import(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
             #[cfg(not(feature = "hybrid"))]
             {
                 return Err(anyhow!(
-                    "keystore: source file {} is signed (format_version=2) but the current build \
+                    "keystore: source file {} is signed (format_version={}) but the current build \
                      does not include the `hybrid` feature; rebuild with --features hybrid",
-                    src.display()
+                    src.display(),
+                    stored.format_version
                 ));
             }
         }
@@ -861,6 +866,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     // call `load_keypair` directly because that decrypts the secret; export
     // only needs to validate the signature envelope before writing the
     // unmodified bytes.
+    // Phase 38-03 (REM-04): format_version=3 added as signed format arm.
     match stored.format_version {
         1 => {
             if !allow_unsigned {
@@ -871,7 +877,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
             }
             // Proceed without verify.
         }
-        2 => {
+        2 | 3 => {
             #[cfg(feature = "hybrid")]
             {
                 keystore.verify_stored_signature(&stored, &src)?;
@@ -879,8 +885,9 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
             #[cfg(not(feature = "hybrid"))]
             {
                 return Err(anyhow!(
-                    "keystore: entry {full_id} is signed (format_version=2) but the current build does \
-                     not include the `hybrid` feature; rebuild with --features hybrid"
+                    "keystore: entry {full_id} is signed (format_version={}) but the current build does \
+                     not include the `hybrid` feature; rebuild with --features hybrid",
+                    stored.format_version
                 ));
             }
         }
@@ -911,7 +918,7 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
     Ok(())
 }
 
-/// Re-sign a legacy (`format_version=1`) keystore entry in place.
+/// Re-sign a legacy (`format_version=1` or `format_version=2`) keystore entry in place.
 ///
 /// Phase 18-04 / PQSIG-03 part 2: thin CLI wrapper over
 /// `Keystore::upgrade_keypair_in_place`. Resolves the user-supplied uuid
@@ -920,9 +927,13 @@ pub fn handle_keys_export(main_matches: &ArgMatches, sub_matches: &ArgMatches) -
 /// then delegates to the keystore method which performs the atomic
 /// read-modify-write under `tempfile::NamedTempFile::persist` (D-15).
 ///
+/// Phase 38-03 (REM-04): v1 → v3 generates fresh sig keypairs and signs an
+/// 8-field payload including KDF params. v2 → v3 reuses the existing sig keypairs
+/// and re-signs the payload with the added KDF param fields. v3 entries are
+/// already at the latest format and surface as "upgrade is a no-op".
+///
 /// D-17: there is intentionally NO `--allow-unsigned` flag — `upgrade` IS
-/// the upgrade path, so the only legitimate input is a v1 entry. v2 entries
-/// surface as "already signed" errors from the keystore layer.
+/// the upgrade path, so the only legitimate inputs are v1 or v2 entries.
 pub fn handle_keys_upgrade(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Result<()> {
     let uuid = sub_matches
         .get_one::<String>("uuid")
@@ -955,7 +966,7 @@ pub fn handle_keys_upgrade(main_matches: &ArgMatches, sub_matches: &ArgMatches) 
     {
         keystore.upgrade_keypair_in_place(full_id, password_opt.as_deref())?;
         println!(
-            "Upgraded keystore entry: {}... (format_version 1 → 2, AND-composition signature)",
+            "Upgraded keystore entry: {}... (format_version 1/2 → 3, KDF params added to signed payload)",
             &full_id[..KEY_ID_DISPLAY_LENGTH]
         );
         Ok(())

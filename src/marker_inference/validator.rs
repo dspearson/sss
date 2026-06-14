@@ -89,11 +89,16 @@ fn process_marker(
             handle_nested_user_marker(format, content, content_start, validated, warnings);
             marker_end
         } else {
-            // Valid marker - add to list
+            // Valid marker - add to list.
+            // REM-35: strip bidi overrides and control characters from captured content
+            // before storing in UserMarker so the stored field is always display-safe.
+            // Sanitise only the content that flows into storage; leave `content` as-is
+            // for the contains_nested_markers detection above (which already ran).
+            let safe_content = crate::validation::sanitize_for_display(content);
             add_user_marker(
                 &edited[marker_start..marker_end],
                 header_len,
-                content,
+                &safe_content,
                 validated,
                 user_markers,
             );
@@ -191,6 +196,61 @@ mod tests {
         let result = validate_user_markers("o+\\{literal}");
         assert_eq!(result.text, "o+\\{literal}");
         assert_eq!(result.user_markers.len(), 0);
+        assert_eq!(result.warnings.len(), 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // REM-35 — bidi/control stripping before UserMarker storage
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_bidi_content_stripped() {
+        // REM-35: U+202E (RIGHT-TO-LEFT OVERRIDE) in marker content must be stripped
+        // before UserMarker.content is stored — Trojan-Source bidi defence.
+        // U+202C is POP DIRECTIONAL FORMATTING (closes the RLO override).
+        let input = "text o+{\u{202E}secret\u{202C}} more";
+        let result = validate_user_markers(input);
+
+        assert_eq!(result.user_markers.len(), 1, "Expected one valid marker");
+        let content = &result.user_markers[0].content;
+
+        // Bidi overrides must be stripped from stored content
+        assert!(
+            !content.contains('\u{202E}'),
+            "U+202E RLO must be stripped from UserMarker.content, got: {content:?}"
+        );
+        assert!(
+            !content.contains('\u{202C}'),
+            "U+202C PDF must be stripped from UserMarker.content, got: {content:?}"
+        );
+        // Printable content is preserved
+        assert!(
+            content.contains("secret"),
+            "Printable content must be preserved, got: {content:?}"
+        );
+        // The reconstructed text is also bidi-clean (Trojan-Source defence)
+        assert!(
+            !result.text.contains('\u{202E}'),
+            "Reconstructed text must not contain bidi overrides, got: {:?}",
+            result.text
+        );
+        assert_eq!(result.warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_nul_content_stripped() {
+        // REM-35: NUL byte (U+0000) in marker content must be stripped before storage.
+        let input = "o+{before\u{0000}after}";
+        let result = validate_user_markers(input);
+
+        assert_eq!(result.user_markers.len(), 1, "Expected one valid marker");
+        let content = &result.user_markers[0].content;
+
+        assert!(
+            !content.contains('\u{0000}'),
+            "NUL byte must be stripped from UserMarker.content, got: {content:?}"
+        );
+        assert_eq!(content, "beforeafter");
         assert_eq!(result.warnings.len(), 0);
     }
 }

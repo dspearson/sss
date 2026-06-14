@@ -143,9 +143,12 @@ fn sign_on_write_init() {
         "alice's sig_mldsa65_public must be populated"
     );
 
-    // Envelope must verify via the try-all-users path.
-    sss::envelope_sig::verify_envelope_signature(&cfg, Path::new(".sss.toml"))
-        .expect("sign_on_write_init: envelope must verify");
+    // Envelope must verify via the try-all-users path. init keeps the repo at
+    // format_version=2 (no force-bump), so the signature is produced under the v2 context
+    // and MUST be verified under the matching v2 arm (mirrors the production loader's
+    // `2 =>` dispatch).
+    sss::envelope_sig::verify_envelope_signature_v2(&cfg, Path::new(".sss.toml"))
+        .expect("sign_on_write_init: fv=2 envelope must verify under the v2 context");
 }
 
 // ---------------------------------------------------------------------------
@@ -214,9 +217,10 @@ fn sign_on_write_user_add() {
     );
     assert_sig_present(&cfg, "sign_on_write_user_add");
 
-    // Envelope must verify (alice's sig pubkeys are in the config).
-    sss::envelope_sig::verify_envelope_signature(&cfg, Path::new(".sss.toml"))
-        .expect("sign_on_write_user_add: envelope must verify");
+    // Envelope must verify (alice's sig pubkeys are in the config). user add keeps the
+    // repo at format_version=2, so verify under the matching v2 arm.
+    sss::envelope_sig::verify_envelope_signature_v2(&cfg, Path::new(".sss.toml"))
+        .expect("sign_on_write_user_add: fv=2 envelope must verify under the v2 context");
 
 }
 
@@ -289,9 +293,10 @@ fn sign_on_write_user_remove() {
     );
     assert_sig_present(&cfg, "sign_on_write_user_remove");
 
-    // Post-rotation envelope must verify.
-    sss::envelope_sig::verify_envelope_signature(&cfg, Path::new(".sss.toml"))
-        .expect("sign_on_write_user_remove: envelope must verify");
+    // Post-rotation envelope must verify. user remove keeps the repo at
+    // format_version=2, so verify under the matching v2 arm.
+    sss::envelope_sig::verify_envelope_signature_v2(&cfg, Path::new(".sss.toml"))
+        .expect("sign_on_write_user_remove: fv=2 envelope must verify under the v2 context");
 }
 
 // ---------------------------------------------------------------------------
@@ -777,6 +782,90 @@ fn neg_04_unsigned_v2_exact_string() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 38 REM-01 — format_version downgrade rejection (PAR-13/CRY-08)
+// ---------------------------------------------------------------------------
+
+/// A signed v2 hybrid envelope rewritten on disk to `format_version = 1`
+/// (with the [envelope.sig] table intact) must be rejected by the production
+/// loader. This closes the bypass where the `1 =>` arm previously returned
+/// the config without calling `verify_envelope_signature`.
+///
+/// Setup mirrors `verify_passes_round_trip`: init hybrid → get a valid signed
+/// v2 envelope. Then rewrite the TOML to set `format_version = 1` while
+/// leaving the `[envelope.sig]` table intact. Load via
+/// `ProjectConfig::load_from_file` and assert it returns `Err`.
+#[test]
+fn downgrade_format_version_with_sig_table_rejected() {
+    let project_dir = TempDir::new().expect("project tempdir");
+    let env = UserEnv::new();
+
+    // Generate both suites in one call (avoids SSS_NONINTERACTIVE issue).
+    let out = env
+        .cmd(project_dir.path())
+        .args(["keys", "generate", "--suite", "both", "--no-password"])
+        .output()
+        .expect("dual-suite keygen");
+    assert!(
+        out.status.success(),
+        "keygen failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Init hybrid → produces format_version=2 with [envelope.sig].
+    let out = env
+        .cmd(project_dir.path())
+        .args(["init", "--crypto", "hybrid", "alice"])
+        .output()
+        .expect("sss init");
+    assert!(
+        out.status.success(),
+        "sss init failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Pre-condition: verify the envelope is signed and format_version=2.
+    let (pre_str, pre_cfg) = load_toml(project_dir.path());
+    assert_eq!(pre_cfg.format_version, 2, "init --crypto hybrid must produce format_version=2");
+    assert_sig_present(&pre_cfg, "downgrade test pre-condition");
+
+    // Rewrite the on-disk .sss.toml: change `format_version = 2` to
+    // `format_version = 1` while leaving the [envelope.sig] table intact.
+    // We do a raw string replace so we don't accidentally strip the sig table
+    // via toml::to_string (which would skip it on deserialization).
+    let downgraded_str = pre_str.replace("format_version = 2", "format_version = 1");
+    assert!(
+        downgraded_str.contains("format_version = 1"),
+        "downgrade rewrite must change format_version field"
+    );
+    assert!(
+        downgraded_str.contains("[envelope.sig]"),
+        "downgraded TOML must still carry [envelope.sig] table"
+    );
+    let toml_path = project_dir.path().join(".sss.toml");
+    std::fs::write(&toml_path, downgraded_str)
+        .expect("write downgraded .sss.toml");
+
+    // The production loader must reject this envelope: format_version=1 with
+    // an [envelope.sig] table present is the tamper signal.
+    let result = sss::project::ProjectConfig::load_from_file(&toml_path);
+    assert!(
+        result.is_err(),
+        "a format_version=1 envelope carrying [envelope.sig] must be rejected as a load error"
+    );
+    let err_str = result.unwrap_err().to_string();
+    // Error must be actionable: it should mention both the downgrade indicator
+    // and a remediation step.
+    assert!(
+        err_str.contains("format_version=1") || err_str.contains("format_version = 1"),
+        "error must mention format_version=1; got: {err_str}"
+    );
+    assert!(
+        err_str.contains("upgrade-sig") || err_str.contains("tampering") || err_str.contains("envelope"),
+        "error must be actionable (mention upgrade-sig or tampering); got: {err_str}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 19-02-04 — sss migrate produces a signed v2 envelope
 // ---------------------------------------------------------------------------
 
@@ -840,7 +929,8 @@ fn sign_on_write_migrate() {
     assert_eq!(cfg.format_version, 2, "migrate must set format_version = 2");
     assert_sig_present(&cfg, "sign_on_write_migrate");
 
-    // Migrated envelope must verify.
-    sss::envelope_sig::verify_envelope_signature(&cfg, Path::new(".sss.toml"))
-        .expect("sign_on_write_migrate: envelope must verify");
+    // Migrated envelope must verify. migrate keeps the repo at format_version=2
+    // (no force-bump), so verify under the matching v2 arm.
+    sss::envelope_sig::verify_envelope_signature_v2(&cfg, Path::new(".sss.toml"))
+        .expect("sign_on_write_migrate: fv=2 envelope must verify under the v2 context");
 }

@@ -2,6 +2,42 @@
 
 The `.secrets` file format allows you to define reusable secret values that can be interpolated into your encrypted files using the `⊲{key}` or `<{key}` syntax.
 
+> **Two render-time markers — do not confuse them.**
+>
+> - `⊲{key}` / `<{key}` (U+22B2, NORMAL SUBGROUP OF) — interpolates a value from the **local `.secrets` file** (this document). Resolved at seal/open time before encryption.
+> - `⊳{ref}` / `>{ref}` (U+22B3, CONTAINS AS NORMAL SUBGROUP) — resolves a value from **HashiCorp Vault** at render time. Preserved verbatim by seal and open; never encrypted. See [docs/marker-format.md](./marker-format.md) for the `⊳{}` grammar and semantics.
+
+---
+
+## This is NOT YAML
+
+The `.secrets` format is a **custom line-oriented `key: value` format**. It is not YAML
+and is not parsed by a YAML library. Although its basic `key: value` appearance
+superficially resembles YAML, the parser has no knowledge of YAML semantics.
+
+The following YAML constructs are **not supported** — they will not behave as you expect:
+
+| YAML construct | What actually happens in `.secrets` |
+|----------------|--------------------------------------|
+| Document separator `---` | Raises a parse error — not silently skipped |
+| Anchors `&name` | Stored as the literal string starting with `&` — not a reusable anchor |
+| Aliases `*name` | Stored as the literal string `*name` — **not dereferenced** to the anchored value |
+| Flow scalars `{...}` / `[...]` | Stored as literal text |
+| Explicit tags `!tag value` | Stored as literal text (the `!tag` becomes part of the value) |
+| Directives `%YAML 1.2` / `%TAG` | Stored as literal text or cause a parse error |
+
+**Important:** Aliases are the most likely source of confusion. If you write:
+
+```
+password: &pw secret123
+other_password: *pw
+```
+
+`other_password` will be the literal string `*pw`, **not** `secret123`. Always specify
+values directly; do not rely on anchor/alias semantics.
+
+---
+
 ## Basic Format
 
 ### Single-Line Values
@@ -33,7 +69,7 @@ api_key: sk-1234567890abcdef
 
 ## Multi-Line Values
 
-For values that span multiple lines (such as SSH keys, certificates, JSON configurations, or database connection strings), use the YAML-style pipe (`|`) indicator:
+For values that span multiple lines (such as SSH keys, certificates, JSON configurations, or database connection strings), use the pipe (`|`) multi-line indicator:
 
 ### Syntax
 

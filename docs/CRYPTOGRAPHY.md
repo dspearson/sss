@@ -6,19 +6,29 @@ This document provides a detailed technical specification of the cryptographic p
 
 For the project's threat model — what each primitive in this spec is required to defend against, the trust boundaries it crosses, and the per-suite assumption breakdown — see [`docs/security-model.md`](./security-model.md). This file owns the algorithmic spec; `security-model.md` owns the threat-model coverage.
 
+> **UNAUDITED POST-QUANTUM COMPONENT:** The hybrid suite (v2.0) relies on the
+> [`trelis`](https://github.com/dspearson/trelis) library (X448 + sntrup761 KEM,
+> Ed448 + ML-DSA-65 signatures, BLAKE3 KDF), which is **in-house and has not
+> undergone a formal third-party security audit** (backlog item AUDIT-01). Classic
+> (libsodium) remains the recommended default for production deployments. See
+> [trelis Cryptographic Library (UNAUDITED)](#trelis-cryptographic-library-unaudited)
+> for the full audit-gap scope, interim mitigations, and resolution path.
+
 ## Table of Contents
 
 1. [Cryptographic Dependencies](#cryptographic-dependencies)
-2. [Symmetric Encryption](#symmetric-encryption)
-3. [Asymmetric Encryption](#asymmetric-encryption)
-4. [Hybrid Suite (v2.0)](#hybrid-suite-v20)
-5. [Key Derivation](#key-derivation)
-6. [Hash Functions](#hash-functions)
-7. [Nonce Derivation](#nonce-derivation)
-8. [Memory Safety](#memory-safety)
-9. [Implementation Patterns](#implementation-patterns)
-10. [Security Properties](#security-properties)
-11. [Code Examples](#code-examples)
+2. [trelis Cryptographic Library (UNAUDITED)](#trelis-cryptographic-library-unaudited)
+3. [Symmetric Encryption](#symmetric-encryption)
+4. [Asymmetric Encryption](#asymmetric-encryption)
+5. [Hybrid Suite (v2.0)](#hybrid-suite-v20)
+6. [Key Derivation](#key-derivation)
+7. [Hash Functions](#hash-functions)
+8. [Nonce Derivation](#nonce-derivation)
+9. [Vault Lockfile Digest (keyed BLAKE2b MAC)](#vault-lockfile-digest-keyed-blake2b-mac)
+10. [Memory Safety](#memory-safety)
+11. [Implementation Patterns](#implementation-patterns)
+12. [Security Properties](#security-properties)
+13. [Code Examples](#code-examples)
 
 ## Cryptographic Dependencies
 
@@ -240,6 +250,49 @@ pub fn unwrap_repository_key(sealed: &[u8], keypair: &KeyPair) -> Result<Reposit
 - **Authenticated**: Poly1305 MAC prevents tampering
 - **Post-Quantum Security**: ~128-bit security against Grover's algorithm
 
+## trelis Cryptographic Library (UNAUDITED)
+
+> **SECURITY NOTICE: The hybrid-feature arm of sss uses the [trelis](https://github.com/dspearson/trelis)
+> library, which is IN-HOUSE and UNAUDITED. An independent third-party security audit of trelis
+> is tracked as backlog item AUDIT-01 and has NOT been performed. Until AUDIT-01 is complete,
+> treat the hybrid suite as EXPERIMENTAL for production deployments with a high assurance
+> requirement. Classic (libsodium) remains the recommended default.**
+
+**What trelis provides:**
+
+- **X448 + sntrup761 KEM** (`HybridKemKeypair`) — post-quantum key encapsulation for per-user
+  repository-key wrapping in all v2.0 projects
+- **Ed448 + ML-DSA-65 signature primitives** — keystore entry and envelope signing (Phases 18, 19)
+- **BLAKE3 KDF** (`trelis_primitives::derive_key`) — domain-separated key derivation from the
+  shared secret (`HYBRID_KEM_CONTEXT = "sss-hybrid-kem-v1"`)
+
+**Pinned commit:** `5374dff482ba94a94695794b5e4554f908eb0d4d` (2026-04-24, `github.com/dspearson/trelis`)
+— updates require an explicit `Cargo.toml` change; the project does not consume floating versions.
+
+**Scope of the audit gap:** Every v2.0 (hybrid-default) repository relies on trelis for its
+post-quantum security claim. The classical X25519 AEAD layer (XChaCha20-Poly1305 on `⊠{...}`
+markers) is libsodium and is unaffected — the trelis exposure is bounded to the per-user
+`sealed_key` wrapping in `.sss.toml` and to keystore/envelope signatures. A defect in trelis's
+sntrup761 KEM, ML-DSA-65, or BLAKE3 KDF binding would eliminate the PQ guarantee while
+classical security remains intact.
+
+**In-house interim mitigations (Phase 42, pending AUDIT-01):**
+
+| Mitigation | Description |
+|------------|-------------|
+| REM-30 (MEM-16) | `ZeroizeOnDrop` regression tests for `HybridKemKeypair`, `Ed448SigningKey`, `MlDsa65SigningKey` — detects a defective upstream `ZeroizeOnDrop` derive |
+| REM-27 (CRY-17) | KAT pinning `HYBRID_KEM_CONTEXT` bytes and `derive_key` output against the pinned SHA — detects silent context-string or output-length drift on any trelis bump |
+
+**Resolution path:** AUDIT-01 — commission / track a third-party audit of trelis at pinned rev
+`5374dff482ba94a94695794b5e4554f908eb0d4d`. See `.planning/REQUIREMENTS.md` (Future
+Requirements / External Engagement). Teams that cannot accept this supply-chain risk should
+use the classic suite (`sss init --crypto classic`).
+
+See [`docs/security-model.md#trelis-attack-surface`](./security-model.md#trelis-attack-surface)
+for the full attack-surface picture, mitigation options for teams, and per-suite threat tables.
+
+---
+
 ## Hybrid Suite (v2.0)
 
 ### WARNING: trelis is Unaudited and Experimental
@@ -277,7 +330,7 @@ The hybrid suite seals the 32-byte repository key `K` via a three-step process:
 1. **trelis KEM** — `HybridKemKeypair::encapsulate(recipient_public_key)` produces
    `(encapsulation[1095], shared_bytes[64])`. The encapsulation contains the X448 ephemeral
    public key concatenated with the sntrup761 ciphertext.
-2. **BLAKE3 KDF** — `blake3::derive_key("sss hybrid kem v1", shared_bytes)` reduces the
+2. **BLAKE3 KDF** — `blake3::derive_key("sss-hybrid-kem-v1", shared_bytes)` reduces the
    64-byte shared secret to a 32-byte AEAD key.
 3. **libsodium XChaCha20-Poly1305** — the derived 32-byte key seals the repository key `K`
    with a random 24-byte nonce.
@@ -624,6 +677,99 @@ impl Blake2bState {
 }
 ```
 
+## Vault Lockfile Digest (keyed BLAKE2b MAC)
+
+This subsection documents the cryptographic construction used for `.sss.vault.lock`
+entry digests (Phase 48, Plan 01). It uses the **same libsodium primitive** as nonce
+derivation ([§ Nonce Derivation](#nonce-derivation)) — `crypto_generichash_blake2b_salt_personal`
+via `libsodium-sys` — but with distinct parameters that make it a **keyed MAC** rather
+than a nonce-derivation call. The two usages are domain-separated by different
+`personal` tag bytes and by different output widths; they are completely independent.
+
+For the threat-model rationale (what offline oracle this closes and why the key is
+required), see [§ Vault Lockfile Integrity](./security-model.md#vault-lockfile-integrity)
+in `docs/security-model.md`. For the surrounding vault bootstrap-trust-chain
+(AppRole auth, CA-pinning, classic-v1 gate, envelope-sig v3 context), see
+[§ Envelope Signatures (v2)](#envelope-signatures-v2) and the vault section of
+`docs/security-model.md`.
+
+### Primitive
+
+```
+crypto_generichash_blake2b_salt_personal(
+    out      = [u8; 32],          // 32-byte output (LOCKFILE_DIGEST_LEN)
+    in       = resolved_value_bytes,
+    key      = repo_key.to_bytes(),  // 32-byte RepositoryKey — never committed
+    salt     = NULL,              // unused; libsodium requires NULL or zeroed
+    personal = LOCKFILE_EFFECTIVE_PERSONAL,  // b"sss-vault-lock-v" (16 bytes)
+)
+```
+
+**Library:** `libsodium-sys` — no new crypto dependency (VNET-05 zero-new-crypto-deps).
+The `#[cfg(miri)]` test stub replaces the FFI call with a deterministic zero array for
+Miri-compatible test runs; production builds always use the FFI path.
+
+### Constants (frozen for the lockfile format)
+
+```rust
+/// Human-readable label stored in the TOML `personal` field.
+/// 17 bytes — the trailing `'1'` is stripped by BLAKE2B_PERSONALBYTES truncation.
+pub const LOCKFILE_PERSONAL: &[u8] = b"sss-vault-lock-v1";
+
+/// The 16 bytes that libsodium actually sees as the `personal` parameter.
+/// FROZEN FOREVER: changing these bytes silently invalidates every existing
+/// `.sss.vault.lock` entry. Any future lockfile format version MUST use a
+/// different effective personal value and a new schema `version` field.
+pub const LOCKFILE_EFFECTIVE_PERSONAL: &[u8; 16] = b"sss-vault-lock-v";
+
+/// Output width in bytes; stored as 64 lowercase hex characters.
+/// FROZEN: widening or narrowing silently invalidates existing lockfiles.
+pub const LOCKFILE_DIGEST_LEN: usize = 32;
+```
+
+The 17-byte source string `"sss-vault-lock-v1"` is truncated to 16 bytes because
+`BLAKE2B_PERSONALBYTES` = 16 (defined in `libsodium-sys`). The effective 16-byte value
+is stored in `LOCKFILE_EFFECTIVE_PERSONAL` as an explicitly named, documented constant
+(a named-constant-freeze pattern: see `48-01-SUMMARY.md` decision 1). The trailing
+`'1'` is not part of the effective domain-separation tag.
+
+### Distinguished from Nonce-Derivation BLAKE2b
+
+| Property | Nonce derivation | Lockfile MAC |
+|----------|-----------------|--------------|
+| Output width | 24 bytes | 32 bytes |
+| `personal` tag | `b"sss_autononce_v1"` (16 bytes) | `b"sss-vault-lock-v"` (16 bytes, from 17-byte source) |
+| Key | `RepositoryKey` (32 bytes) | `RepositoryKey` (32 bytes) |
+| Purpose | Deterministic XChaCha20 nonce | Keyed MAC for lockfile integrity check |
+| Where stored | Embedded in `⊠{...}` ciphertext markers | `.sss.vault.lock` `digest` field as 64 hex chars |
+
+The distinct `personal` tags and output widths ensure that a lockfile digest cannot be
+confused with a nonce, even though both are computed with the same key. A BLAKE2b output
+computed under `personal = b"sss_autononce_v1"` with 24-byte width is cryptographically
+unrelated to one computed under `personal = b"sss-vault-lock-v"` with 32-byte width.
+
+### Frozen-Parameter Invariant
+
+The effective 16-byte personal tag **and** the 32-byte output width are frozen for
+`version = 1` lockfiles. Changing either silently invalidates every existing
+`.sss.vault.lock` entry: `vault verify` would recompute a different digest and report
+drift against all previously locked references, even when the Vault values have not
+changed. Any lockfile format change must increment the TOML `version` field and
+introduce a new frozen `LOCKFILE_EFFECTIVE_PERSONAL` constant.
+
+### Security Property
+
+The keyed digest is a commitment to the secret value that is safe to commit alongside
+source code because it cannot be reversed or used for offline dictionary confirmation
+without the `RepositoryKey`. Two repositories with different `RepositoryKey` values
+produce different digests for identical secret values, preventing cross-repository
+comparison (test: `different_keys_different_digest`, VLOCK-03).
+
+For the full oracle-closure argument and the no-plaintext guarantee, see
+[§ Vault Lockfile Integrity](./security-model.md#vault-lockfile-integrity).
+
+---
+
 ## Memory Safety
 
 ### Zeroization
@@ -882,9 +1028,11 @@ fn example_key_wrapping() -> Result<()> {
 }
 ```
 
-## Keystore Entry Signatures (v2)
+## Keystore Entry Signatures (v3)
 
 Phase 18 introduces hybrid AND-composition signatures over keystore entries. Every `~/.config/sss/keys/<uuid>.toml` entry written by an `sss` v2.2-or-later client carries a `[signature]` sub-table whose Ed448 + ML-DSA-65 components both verify before the entry is accepted on read.
+
+Phase 38 (REM-04) extends the signed payload from 6 to 8 fields by adding `kdf_ops_limit` and `kdf_mem_limit` as fields 7–8 (decimal-ASCII encoded), bumps the domain-separation context from `v1` to `v2`, and introduces `format_version=3` for entries with KDF params authenticated. Existing `format_version=2` entries remain loadable but must be re-signed via `sss keys upgrade <uuid>` to reach v3.
 
 ### Format-Version Dispatch
 
@@ -893,23 +1041,33 @@ Each on-disk entry carries a `format_version` field:
 | format_version | Meaning | Read behaviour |
 |----------------|---------|----------------|
 | (absent) or `1` | Legacy unsigned (pre-Phase 18) | Rejected unless caller passes `--allow-unsigned` |
-| `2`             | Hybrid signed (Phase 18+) | Hard verify; reject on mismatch |
-| `>= 3`          | Future schema | Hard reject with "upgrade sss" error |
+| `2`             | Hybrid signed (Phase 18+) | Hard verify under v1 context; re-sign to v3 recommended |
+| `3`             | Hybrid signed incl. KDF params (Phase 38+) | Hard verify under v2 context; reject on mismatch |
+| `>= 4`          | Future schema | Hard reject with "upgrade sss" error |
 
-Mixed keystores (some `format_version=1`, some `=2`) are supported — each `*.toml` file is dispatched independently. `sss keys list` displays a trailing ` (unsigned-legacy)` tag for `format_version=1` entries; the tag is omitted (silent good case) for signed entries.
+> **Note (format\_version=1 / unsigned legacy):** A `format_version=1` entry carries
+> **zero signature coverage** — no signed payload exists. As a consequence, the Phase 38
+> KDF anti-downgrade protection (REM-04), which relies on the numeric `kdf_ops_limit` and
+> `kdf_mem_limit` values being pinned inside a verified v3 signed payload, is **orthogonal
+> to v1 entries and does not apply to them**. Upgrading to `format_version=3` via
+> `sss keys upgrade <uuid>` is strongly recommended for all production keystores.
 
-The transition path is `sss keys upgrade <uuid>`, which re-signs a legacy entry in place using the existing passphrase (atomic via `tempfile::NamedTempFile::persist`).
+Mixed keystores (some `format_version=1`, some `=2`, some `=3`) are supported — each `*.toml` file is dispatched independently. `sss keys list` displays a trailing ` (unsigned-legacy)` tag for `format_version=1` entries; the tag is omitted (silent good case) for signed entries (v2 or v3).
+
+The transition path is `sss keys upgrade <uuid>`, which re-signs a legacy entry in place using the existing passphrase (atomic via `tempfile::NamedTempFile::persist`). v1 entries generate fresh per-entry sig keypairs; v2 entries reuse the existing sig keypairs (no rotation — only the signed payload and context change).
 
 ### Per-Entry Signing Keypair Model
 
-Each `format_version=2` `StoredKeyPair` carries its own dedicated Ed448 + ML-DSA-65 signing keypair, generated alongside the existing X448 + sntrup761 encryption keypair. All three keypairs share a single KDF-derived KEK (Argon2id over `passphrase + salt`), so one passphrase prompt unlocks all three secret keys.
+Each `format_version=2` or `format_version=3` `StoredKeyPair` carries its own dedicated Ed448 + ML-DSA-65 signing keypair, generated alongside the existing X448 + sntrup761 encryption keypair. All three keypairs share a single KDF-derived KEK (Argon2id over `passphrase + salt`), so one passphrase prompt unlocks all three secret keys.
 
-The canonical fields added in v2:
+For passwordless entries (`is_password_protected = false`), no KEK is applied; sig secret keys are stored as plain base64 of raw bytes. At signing / verification time, such entries use the **0/0 sentinel** for KDF params (see below).
+
+The canonical fields added in v2/v3:
 
 ```rust
 pub struct StoredKeyPair {
     // ... existing v1 fields ...
-    pub format_version: u32,                          // 1 = legacy, 2 = signed
+    pub format_version: u32,                          // 1 = legacy, 2 = signed, 3 = signed incl. KDF params
     pub sig_ed448_public_key: Option<String>,         // Ed448 verifying key, base64 (57B)
     pub sig_ed448_encrypted_secret_key: Option<String>,
     pub sig_mldsa65_public_key: Option<String>,       // ML-DSA-65 verifying key, base64 (1952B)
@@ -927,24 +1085,22 @@ pub struct KeystoreEntrySig {
 
 The signed payload is a length-prefixed concatenation of the entry's identity-bearing fields. All integers are big-endian; lengths are 4-byte unsigned (count bytes that follow):
 
-| Offset | Field | Length | Value |
-|--------|-------|--------|-------|
-| 0 | `uuid_len` | 4B u32-BE | bytes of `uuid` UTF-8 string |
-| 4 | `uuid_bytes` | `uuid_len` | UTF-8 of `uuid` |
-| ... | `pk_len` | 4B u32-BE | bytes of base64-encoded `public_key` |
-| ... | `pk_b64_bytes` | `pk_len` | UTF-8 of base64 string verbatim from on-disk TOML |
-| ... | `hybrid_pk_len` | 4B u32-BE | bytes of base64-encoded `hybrid_public_key` (0 if absent) |
-| ... | `hybrid_pk_b64_bytes` | `hybrid_pk_len` | UTF-8 (empty if `hybrid_pk_len == 0`) |
-| ... | `sig_ed448_pk_len` | 4B u32-BE | bytes of base64-encoded `sig_ed448_public_key` |
-| ... | `sig_ed448_pk_b64_bytes` | `sig_ed448_pk_len` | UTF-8 |
-| ... | `sig_mldsa65_pk_len` | 4B u32-BE | bytes of base64-encoded `sig_mldsa65_public_key` |
-| ... | `sig_mldsa65_pk_b64_bytes` | `sig_mldsa65_pk_len` | UTF-8 |
-| ... | `created_at_len` | 4B u32-BE | bytes of RFC 3339 timestamp string |
-| ... | `created_at_bytes` | `created_at_len` | UTF-8 of `created_at.to_rfc3339()` |
+| # | Field | Length | Value |
+|---|-------|--------|-------|
+| 1 | `uuid_len` + `uuid_bytes` | 4B u32-BE + `uuid_len` | UTF-8 of `uuid` |
+| 2 | `pk_len` + `pk_b64_bytes` | 4B u32-BE + `pk_len` | UTF-8 of base64-encoded `public_key` |
+| 3 | `hybrid_pk_len` + `hybrid_pk_b64_bytes` | 4B u32-BE + `hybrid_pk_len` | UTF-8 (0-length if absent) |
+| 4 | `sig_ed448_pk_len` + `sig_ed448_pk_b64_bytes` | 4B u32-BE + `sig_ed448_pk_len` | UTF-8 of base64-encoded `sig_ed448_public_key` |
+| 5 | `sig_mldsa65_pk_len` + `sig_mldsa65_pk_b64_bytes` | 4B u32-BE + `sig_mldsa65_pk_len` | UTF-8 of base64-encoded `sig_mldsa65_public_key` |
+| 6 | `created_at_len` + `created_at_bytes` | 4B u32-BE + `created_at_len` | UTF-8 of `created_at.to_rfc3339()` |
+| 7 | `kdf_ops_len` + `kdf_ops_bytes` | 4B u32-BE + `kdf_ops_len` | Decimal ASCII of `kdf_ops_limit` (e.g. `"3"`) |
+| 8 | `kdf_mem_len` + `kdf_mem_bytes` | 4B u32-BE + `kdf_mem_len` | Decimal ASCII of `kdf_mem_limit` (e.g. `"268435456"`) |
 
-Field order is fixed and documented; absent `hybrid_public_key` encodes as a 4-byte zero-length prefix followed by zero bytes (the slot is preserved for future schema growth).
+Fields 7–8 were added in Phase 38 (REM-04, `format_version=3`). Absent `hybrid_public_key` encodes as a 4-byte zero-length prefix followed by zero bytes (the slot is preserved for future schema growth). KDF params are decimal-ASCII (not binary) for human-legibility in debug logs and consistency with the `created_at` timestamp encoding.
 
-Encrypted-secret fields (`encrypted_secret_key`, `hybrid_encrypted_secret_key`, `sig_*_encrypted_secret_key`) are NOT in the signed payload — the signature covers identity (public keys + uuid + timestamp), not storage detail. The encrypted-secret bytes are independently authenticated by the AEAD tag of XChaCha20-Poly1305 at decrypt time.
+**Passwordless 0/0 sentinel:** Entries with `is_password_protected = false` do not apply Argon2id — there are no KDF cost params to sign. Both legs sign `kdf_ops_limit = 0, kdf_mem_limit = 0`. The signer and verifier both key off `stored.is_password_protected` identically, eliminating any order-dependent ambiguity (T-38-13).
+
+Encrypted-secret fields (`encrypted_secret_key`, `hybrid_encrypted_secret_key`, `sig_*_encrypted_secret_key`) are NOT in the signed payload — the signature covers identity (public keys + uuid + timestamp + KDF cost), not storage detail. The encrypted-secret bytes are independently authenticated by the AEAD tag of XChaCha20-Poly1305 at decrypt time.
 
 ### Signature Scheme
 
@@ -958,14 +1114,16 @@ Two signatures are computed over the same canonical payload, both required:
 Both use the trelis `sign_with_context` / `verify_with_context` APIs (NOT plain `sign` / `verify`) to invoke each algorithm's native domain-separation path. The context bytes are constant across both schemes:
 
 ```rust
-pub const KEYSTORE_SIG_CONTEXT: &[u8] = b"sss-keystore-entry-sig-v1";
+pub const KEYSTORE_SIG_CONTEXT: &[u8] = b"sss-keystore-entry-sig-v2";
 ```
+
+Phase 38 (REM-04) bumped the context from `v1` to `v2` to reflect the extended 8-field payload. Any entry signed under the old `v1` context fails verification with the new binary, prompting `sss keys upgrade <uuid>` — the intended fail-closed migration path.
 
 The trelis API folds the context into Ed448's RFC 8032 §8.1 with-context branch and into ML-DSA-65's FIPS 204 §5.1 ctx parameter — no application-layer concatenation needed. This prevents cross-protocol confusion attacks (e.g. a Phase 19 envelope signature being valid as a keystore signature).
 
 ### On-Disk Schema (TOML)
 
-A `format_version=2` entry on disk:
+A `format_version=3` entry on disk (Phase 38+):
 
 ```toml
 uuid = "abc12345-6789-..."
@@ -977,7 +1135,7 @@ is_password_protected = true
 in_keyring = false
 hybrid_public_key = "<b64-x448-sntrup-pk>"
 hybrid_encrypted_secret_key = "<b64-hybrid-sk-encrypted>"
-format_version = 2
+format_version = 3
 sig_ed448_public_key = "<b64-ed448-pk-57b>"
 sig_ed448_encrypted_secret_key = "<b64-ed448-sk-encrypted>"
 sig_mldsa65_public_key = "<b64-mldsa-pk-1952b>"
@@ -988,6 +1146,8 @@ ed448 = "<b64-114b>"
 mldsa65 = "<b64-3309b>"
 ```
 
+The `[signature]` blob authenticates all 8 payload fields (uuid, public_key, hybrid_public_key, sig_ed448_public_key, sig_mldsa65_public_key, created_at, kdf_ops_limit, kdf_mem_limit) under the `v2` context. Substituting weaker KDF params on disk will cause verification to fail, detecting a KDF parameter substitution (downgrade) attack (T-38-10, CRY-05).
+
 ### Verification Algorithm
 
 Pseudocode for verifying an entry on read:
@@ -995,14 +1155,18 @@ Pseudocode for verifying an entry on read:
 ```text
 1. Deserialise TOML → StoredKeyPair { format_version, ..., signature: Option<KeystoreEntrySig>, ... }.
 2. If format_version is absent or 1:
-    - If caller passed --allow-unsigned: accept; skip steps 3-7.
+    - If caller passed --allow-unsigned: accept; skip steps 3-8.
     - Else: hard-reject with "unsigned legacy format" error.
-3. If format_version >= 3: hard-reject with "unsupported format_version" error.
-4. Assert format_version == 2 implies signature is Some(...) AND all four sig pubkey fields are Some(...).
+3. If format_version >= 4: hard-reject with "unsupported format_version" error.
+4. Assert format_version == 2 or 3 implies signature is Some(...) AND all four sig pubkey fields are Some(...).
    If any are None: hard-reject with "missing signature" or "missing sig pubkey" error.
-5. Build canonical payload over (uuid, public_key, hybrid_public_key, sig_ed448_public_key, sig_mldsa65_public_key, created_at).
-6. Decode base64 of signature.ed448 (114B) and signature.mldsa65 (3309B).
-7. Run BOTH:
+5. Determine KDF params for payload:
+    - If is_password_protected == true: use keystore's kdf_params (ops_limit, mem_limit).
+    - If is_password_protected == false (passwordless): use 0/0 sentinel.
+6. Build canonical 8-field payload over (uuid, public_key, hybrid_public_key, sig_ed448_public_key,
+   sig_mldsa65_public_key, created_at, kdf_ops_limit, kdf_mem_limit).
+7. Decode base64 of signature.ed448 (114B) and signature.mldsa65 (3309B).
+8. Run BOTH:
     - Ed448Standard::verify_with_context(&ed448_pk, &payload, KEYSTORE_SIG_CONTEXT, &ed448_sig)
         → must return true.
     - MlDsa65Fips204::verify_with_context(&mldsa_pk, &payload, KEYSTORE_SIG_CONTEXT, &mldsa_sig)
@@ -1032,11 +1196,16 @@ There is no soft-fail mode, no warning-only mode, and no `--ignore-signature-err
 - Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`, crates `trelis-primitives::Ed448Standard` (`crates/trelis-primitives/src/ed448_scheme.rs`) + `trelis-primitives::MlDsa65Fips204` (`crates/trelis-primitives/src/mldsa.rs`).
 - Test vectors: `vectors/hybrid-sig.json` in trelis upstream (sanity-check reference).
 
-**Final state (v2.2):** Phase 18 (PQSIG-01..03) closed with AND-composition
+**Final state (v2.5 / Phase 38):** Phase 18 (PQSIG-01..03) closed with AND-composition
 Ed448 + ML-DSA-65, payload-first canonical encoding, and domain-separation
-context bytes `b"sss-keystore-entry-sig-v1"`. Each leg verifies independently
-and both must succeed; verification errors report which leg failed (Ed448 /
-ML-DSA-65 / both) for operator triage. Negative-path coverage in
+context bytes `b"sss-keystore-entry-sig-v1"`. Phase 38 (REM-04) extended the
+signed payload to 8 fields (adding `kdf_ops_limit` and `kdf_mem_limit`) and
+bumped the context to `b"sss-keystore-entry-sig-v2"`, closing CRY-05 (KDF
+parameter substitution downgrade attack). New entries are written as
+`format_version=3`; existing v1/v2 entries are upgraded in-place via
+`sss keys upgrade <uuid>`. Each leg verifies independently and both must succeed;
+verification errors report which leg failed (Ed448 / ML-DSA-65 / both) for
+operator triage. Negative-path coverage in
 `tests/keystore_signature_negative_paths.rs` exercises tampered ciphertext,
 context-byte mismatch, and downgrade attempts.
 
@@ -1062,26 +1231,37 @@ The signed payload is prefixed with the byte-exact ASCII string used as the sign
 context (D-02):
 
 ```rust
-pub const ENVELOPE_SIG_CONTEXT: &[u8] = b"sss-toml-envelope-sig-v1";
+pub const ENVELOPE_SIG_CONTEXT: &[u8] = b"sss-toml-envelope-sig-v2";
 ```
 
-This MUST differ from the keystore entry signature context
-(`b"sss-keystore-entry-sig-v1"`) to prevent cross-context replay (T-19-01). Any
-change to either context requires a `format_version` bump and must update both this
-section and the corresponding drift-detector unit test.
+Phase 38 (REM-01) bumped the envelope context from `v1` to `v2`. This MUST differ
+from the keystore entry signature context (`b"sss-keystore-entry-sig-v2"`) to prevent
+cross-context replay (T-19-01). Any change to either context requires a
+`format_version` bump and must update both this section and the corresponding
+drift-detector unit test.
 
 ### Canonical Signed Payload (D-03)
 
 Field order is fixed; each variable-length field is preceded by a `u32`-BE length
-prefix to prevent length-extension / boundary-shift attacks (T-19-02):
+prefix to prevent length-extension / boundary-shift attacks (T-19-02).
 
-| # | Field | Width | Notes |
-|---|-------|-------|-------|
-| 1 | `version` | u32-BE length + UTF-8 bytes | e.g. `"1.0"` or `"2.0"` |
+**Updated Phase 38 (REM-01/02):** fields 3-8 were added to close CRY-06 (configuration
+fields outside the signed payload). An independent implementer MUST include all 8 fixed
+fields before the per-user loop, in the exact order shown:
+
+| # | Field | Encoding | Notes |
+|---|-------|----------|-------|
+| 1 | `version` | u32-BE length + UTF-8 bytes | e.g. `"2.0"` |
 | 2 | `created` | u32-BE length + UTF-8 bytes | RFC 3339 envelope creation timestamp |
-| 3..N | Per-user entries, sorted by username | — | See sub-table below |
+| 3 | `format_version` | u32-BE length + UTF-8 decimal string | e.g. `"2"` |
+| 4 | `secrets_filename` | u32-BE length + UTF-8 bytes; zero-length if `None` | e.g. `"secrets.env"` |
+| 5 | `secrets_suffix` | u32-BE length + UTF-8 bytes; zero-length if `None` | e.g. `".enc"` |
+| 6 | `ignore` | u32-BE length + UTF-8 bytes; zero-length if `None` | gitignore-style pattern |
+| 7 | `hooks.git_pre_commit` | u32-BE length + UTF-8 bytes; `"true"` / `"false"` / `""` if `None` | Phase 38 REM-02 |
+| 8 | `hooks.git_post_checkout` | u32-BE length + UTF-8 bytes; `"true"` / `"false"` / `""` if `None` | Phase 38 REM-02 |
+| 9..N | Per-user entries, sorted by username | — | See sub-table below |
 
-Per-user fields (each prefixed with u32-BE length):
+Per-user fields (each prefixed with u32-BE length), within a user block sorted alphabetically by username:
 
 | Sub-field | Notes |
 |-----------|-------|
@@ -1094,14 +1274,22 @@ Per-user fields (each prefixed with u32-BE length):
 | `sig_mldsa65_public` | base64 ML-DSA-65 verifying key; zero-length prefix if `None` |
 
 The exact field list and order is defined by `src/envelope_sig.rs::build_envelope_payload`.
-Any change requires a `format_version` bump.
+Any change to this list requires a `format_version` bump and must update both this table
+and the drift-detector unit test.
 
-### Real `.sss.toml` Schema (Post-Phase-19, Abridged)
+### Real `.sss.toml` Schema (Post-Phase-38, Abridged)
 
 ```toml
 version = "2.0"
 created = "2026-05-09T12:34:56Z"
 format_version = 2
+secrets_filename = "secrets.env"  # field 4 in signed payload (Phase 38 REM-01)
+secrets_suffix = ".enc"           # field 5 in signed payload (Phase 38 REM-01)
+ignore = "node_modules"           # field 6 in signed payload (Phase 38 REM-01)
+
+[hooks]
+git_pre_commit = true             # field 7 in signed payload (Phase 38 REM-02)
+git_post_checkout = false         # field 8 in signed payload (Phase 38 REM-02)
 
 [users.alice]
 public = "..."              # base64 X25519 KEM pubkey (classic identity anchor)
@@ -1114,9 +1302,6 @@ sig_mldsa65_public = "..."  # base64 ML-DSA-65 verifying key (Phase 19; Some in 
 [envelope.sig]
 ed448 = "..."     # base64 Ed448 signature over canonical payload (114 bytes)
 mldsa65 = "..."   # base64 ML-DSA-65 signature over canonical payload (3309 bytes)
-
-# rotation, hooks, ignore, key, secrets_filename, secrets_suffix all
-# preserved unchanged from v1 schema.
 ```
 
 Fields `salt`, `recovery_share`, per-user `encrypted_share`, and `public_key` do NOT
@@ -1175,7 +1360,7 @@ This string is asserted byte-exact by `neg_04_unsigned_v2_exact_string` in
 
 | Threat ID | Description | Mitigation |
 |-----------|-------------|-----------|
-| T-19-01 | Cross-context replay (envelope ↔ keystore) | Distinct context bytes (`ENVELOPE_SIG_CONTEXT` ≠ `KEYSTORE_SIG_CONTEXT`); assert_ne unit test |
+| T-19-01 | Cross-context replay (envelope ↔ keystore) | Distinct context bytes (`b"sss-toml-envelope-sig-v2"` ≠ `b"sss-keystore-entry-sig-v2"`); assert_ne unit test |
 | T-19-02 | Canonicalisation drift | u32-BE length-prefixed payload; determinism test |
 | T-19-03 | sign↔verify drift | proptest round-trip across 50 arbitrary envelopes |
 | T-19-04 | Unsigned write reaches disk | Sign-on-write at all 5 mutating sites + NEG-04 integration test |
@@ -1192,10 +1377,11 @@ This string is asserted byte-exact by `neg_04_unsigned_v2_exact_string` in
 - Executable spec (regression tests): `tests/envelope_signature_negative_paths.rs` (7 sign-on-write + round-trip + upgrade-sig + 4 NEG tests).
 - Trelis upstream: pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`.
 
-**Final state (v2.2):** Phase 19 (PQSIG-04..06) closed with sign-on-write at
+**Final state (v2.5 / Phase 38):** Phase 19 (PQSIG-04..06) closed with sign-on-write at
 `init` / `users add` / `users remove` / `migrate` and verify-on-read on every
-envelope load. Domain-separation context bytes `b"sss-toml-envelope-sig-v1"`
-distinguish envelope sigs from keystore-entry sigs. Per-leg error reporting
+envelope load. Phase 38 (REM-01) bumped the context from `b"sss-toml-envelope-sig-v1"`
+to `b"sss-toml-envelope-sig-v2"`. Distinct context bytes distinguish envelope sigs
+from keystore-entry sigs (`b"sss-keystore-entry-sig-v2"`). Per-leg error reporting
 matches the keystore pattern. Negative-path coverage in
 `tests/envelope_signature_negative_paths.rs` exercises tampered envelope body,
 swapped sig bytes, missing signature, and context-byte mismatch.

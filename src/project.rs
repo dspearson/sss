@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use chrono::Utc;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 
@@ -110,6 +110,15 @@ pub struct ProjectConfig {
     /// Migration: old-style key (should be removed)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+
+    /// Vault resolver configuration (`[vault]` table).
+    ///
+    /// CRITICAL (R4): must NOT have `#[cfg_attr(not(feature = "vault"), serde(skip))]`.
+    /// The field must be present in every build configuration so that
+    /// `build_envelope_payload` can encode vault fields unconditionally.
+    /// `None` → encodes as 4 zero bytes per field (deterministic, feature-independent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<VaultConfig>,
 }
 
 fn default_envelope_format_version() -> u32 {
@@ -164,6 +173,7 @@ impl Default for ProjectConfig {
             secrets_suffix: None,
             ignore: None,
             key: None,
+            vault: None,
         }
     }
 }
@@ -195,12 +205,80 @@ pub struct RotationMetadata {
 }
 
 impl RotationMetadata {
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.last_rotation.is_none()
             && self.rotation_count == 0
             && self.last_rotation_reason.is_none()
     }
+}
+
+/// Vault-backed resolver configuration.
+///
+/// Signed into the envelope payload at `format_version=3`.
+/// Fields must mirror the payload encoding order in `build_envelope_payload` (fields 9–16+).
+///
+/// CRITICAL (R4): this struct must NOT be `#[cfg(feature = "vault")]` gated —
+/// it must be present in every build so that `build_envelope_payload` can encode
+/// vault fields identically whether or not the vault feature is compiled.
+/// The `serde(skip_serializing_if = "Option::is_none")` on each field handles
+/// the serialisation-only skip; the struct remains in the payload encoding path.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct VaultConfig {
+    /// Vault server address — `https://` only, validated at config load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Vault Enterprise namespace (optional).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Default binding name for `⊳{path}` references without a `binding:` prefix.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_binding: Option<String>,
+    /// Secret name in `.secrets` that holds the TLS CA cert PEM (CA pinning).
+    /// Mandatory under `--allow-unsigned-vault-config` (VCFG-05).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_ca_secret: Option<String>,
+    /// Named bindings: `[vault.bindings.<name>]`.
+    /// `BTreeMap` for deterministic key-sorted iteration (required by canonical payload encoding).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, VaultBinding>,
+    /// Authentication configuration: `[vault.auth]`
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<VaultAuth>,
+}
+
+/// Per-binding configuration (KV engine + mount + default field).
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct VaultBinding {
+    /// KV engine version: 1 or 2 (default 2 if absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kv_version: Option<u8>,
+    /// KV mount path, e.g. `"secret"` or `"kv"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<String>,
+    /// Default field name when `#field` is omitted in a `⊳{}` reference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_field: Option<String>,
+}
+
+/// Vault authentication configuration.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct VaultAuth {
+    /// Auth method — `"approle"` is the primary supported method in Phase 46.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// `AppRole` `role_id` (non-secret — safe in git).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_id: Option<String>,
+    /// Secret name in `.secrets` holding the `AppRole` `secret_id` (sealed, never stored raw).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret_id_secret: Option<String>,
+    /// Secret name in `.secrets` holding a static token (alternative to `AppRole`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_secret: Option<String>,
 }
 
 impl ProjectConfig {
@@ -249,11 +327,58 @@ impl ProjectConfig {
             secrets_suffix: None,
             ignore: None,
             key: None,
+            vault: None,
         })
     }
 
-    /// Load project configuration from file
+    /// Load project configuration from file.
+    ///
+    /// Delegates to `load_from_file_with_opts` with all security gates enabled
+    /// (`allow_unsigned_vault_config = false`, `allow_insecure_vault_addr_override = false`).
+    /// CLI callers that expose `--allow-*` flags call `load_from_file_with_opts` directly.
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::load_from_file_with_opts(path, false, false)
+    }
+
+    /// Load project configuration from file with explicit security gate opt-ins.
+    ///
+    /// - `allow_unsigned_vault_config`: when `true`, a `[vault]` table on a
+    ///   `format_version=1` (unsigned) repo is permitted, but `vault.tls_ca_secret`
+    ///   becomes mandatory (CA pinning is the only phishing mitigation without a signature).
+    ///   Pass `false` for all callers that do not explicitly expose this flag — a `[vault]`
+    ///   table on an unsigned repo is a hard error by default (VCFG-05).
+    /// - `allow_insecure_vault_addr_override`: when `true`, `SSS_VAULT_ADDR` may override
+    ///   a signed vault address. Pass `false` to enforce the default refusal (VCFG-06).
+    // Why: this function is long because it implements a sequential gate pipeline (size-check
+    // → parse → validate paths → validate vault addr → version gate → format_version dispatch
+    // → VCFG-06 gate). Each step is mandatory and order-sensitive; factoring into sub-functions
+    // would require threading `path` and `config` through all of them, buying nothing in clarity.
+    #[allow(clippy::too_many_lines)]
+    pub fn load_from_file_with_opts<P: AsRef<Path>>(
+        path: P,
+        allow_unsigned_vault_config: bool,
+        allow_insecure_vault_addr_override: bool,
+    ) -> Result<Self> {
+        // REM-32: reject .sss.toml larger than 1 MB before allocating the buffer.
+        // NIT-01: this metadata→read is a two-syscall check, so it is best-effort
+        // against a local writer that grows the file between stat and read_to_string.
+        // Accepted: the threat is local-only Low-severity (PAR-01); no behavioural fix.
+        let meta = fs::metadata(&path).map_err(|e| {
+            anyhow!(
+                "Failed to stat project config file {}: {}",
+                path.as_ref().display(),
+                e
+            )
+        })?;
+        if meta.len() > crate::constants::MAX_TOML_SIZE as u64 {
+            return Err(anyhow!(
+                "{}: project config file too large ({} bytes, max {} bytes)",
+                path.as_ref().display(),
+                meta.len(),
+                crate::constants::MAX_TOML_SIZE,
+            ));
+        }
+
         let content = fs::read_to_string(&path).map_err(|e| {
             anyhow!(
                 "Failed to read project config file {}: {}",
@@ -264,6 +389,32 @@ impl ProjectConfig {
 
         let config: Self = toml_helpers::parse_toml(&content, "project")?;
 
+        // REM-06: validate secrets_filename and secrets_suffix immediately after
+        // the TOML parse, BEFORE the format_version dispatch ladder.  Placement
+        // here is mandatory so that a v1 (unsigned) TOML with a malicious path
+        // is rejected just as a v2 signed one would be — moving these calls
+        // inside the `2 =>` arm below would silently skip them for v1 (Pitfall 4).
+        // validate_file_path intentionally allows absolute paths and `..` per its
+        // own docstring; use the dedicated stricter helper instead.
+        if let Some(ref sf) = config.secrets_filename {
+            crate::validation::validate_secrets_path(sf, "secrets_filename")
+                .map_err(|e| anyhow!("{}: {}", path.as_ref().display(), e))?;
+        }
+        if let Some(ref ss) = config.secrets_suffix {
+            crate::validation::validate_secrets_path(ss, "secrets_suffix")
+                .map_err(|e| anyhow!("{}: {}", path.as_ref().display(), e))?;
+        }
+
+        // VCFG-02: validate vault.address (https-only, never echoes value — T-46-04).
+        // Run BEFORE format_version dispatch so the check applies uniformly regardless
+        // of envelope state (mirrors the secrets_path placement rationale above).
+        if let Some(ref vc) = config.vault
+            && let Some(ref addr) = vc.address
+        {
+            crate::validation::validate_vault_address(addr)
+                .map_err(|e| anyhow!("{}: {}", path.as_ref().display(), e))?;
+        }
+
         // Version gate — run BEFORE envelope dispatch so suite-version errors
         // surface ahead of envelope-version errors (D-15). Emits the SUITE-04
         // actionable error for `version = "2.0"` against this v1 binary.
@@ -273,14 +424,73 @@ impl ProjectConfig {
         // before Ok(config)).
         match config.format_version {
             1 => {
-                // Legacy un-signed envelope; return as-is. Callers that mutate
+                // PAR-13/CRY-08 downgrade closure (Phase 38, REM-01):
+                // A genuinely legacy v1 envelope has no [envelope.sig] table.
+                // If format_version=1 but a sig table IS present, this signals
+                // that an attacker flipped a signed v2/v3 envelope's format_version
+                // field to bypass verification — reject with an actionable error.
+                // A v1 envelope with no sig table continues to load as legacy-unsigned.
+                if config.envelope.as_ref().and_then(|e| e.sig.as_ref()).is_some() {
+                    return Err(anyhow!(
+                        "{}: envelope declares format_version=1 but carries an [envelope.sig] \
+                        table — this indicates tampering (a signed envelope with a \
+                        downgraded format_version field) or an interrupted upgrade. \
+                        Restore the file from git, or run `sss envelope upgrade-sig` to re-sign.",
+                        path.as_ref().display()
+                    ));
+                }
+                // VCFG-05: classic-v1 gate — [vault] on an unsigned repo is a hard error
+                // unless the explicit opt-in is supplied (T-46-13).
+                if config.vault.is_some() {
+                    if !allow_unsigned_vault_config {
+                        return Err(anyhow!(
+                            "{}: [vault] config is present but this repo is unsigned \
+                            (format_version=1). A v1 envelope cannot cover the vault fields, \
+                            which opens a credential-phishing gap. Either sign the repo first \
+                            (`sss envelope upgrade-sig`) or pass `--allow-unsigned-vault-config` \
+                            to acknowledge the risk.",
+                            path.as_ref().display()
+                        ));
+                    }
+                    // Opt-in is set: CA pinning is mandatory (the only phishing mitigation
+                    // available without a signature — see CONTEXT.md §decisions).
+                    if config.vault.as_ref().and_then(|v| v.tls_ca_secret.as_ref()).is_none() {
+                        return Err(anyhow!(
+                            "{}: [vault] is allowed on an unsigned repo (--allow-unsigned-vault-config) \
+                            but `vault.tls_ca_secret` is not set. CA pinning is mandatory when the \
+                            vault config is not signature-protected. Set `vault.tls_ca_secret` to the \
+                            name of a sealed secret holding the CA certificate.",
+                            path.as_ref().display()
+                        ));
+                    }
+                    log::warn!(
+                        "{}: [vault] config is unsigned (format_version=1, --allow-unsigned-vault-config \
+                        in effect). The vault address and credentials are NOT signature-protected. \
+                        Sign the repo with `sss envelope upgrade-sig` when possible.",
+                        path.as_ref().display()
+                    );
+                }
+                // Genuine legacy unsigned envelope; return as-is. Callers that mutate
                 // the envelope must additionally call `require_signed(path)?`
                 // (PQSIG-06 — see require_signed below).
             }
             2 => {
-                // Signed envelope — verify before returning to any caller.
+                // VCFG-03 / T-46-11: vault-presence gate MUST fire BEFORE signature verification.
+                // A valid v2 signature does not cover vault fields; honouring [vault] under v2
+                // reopens the credential-phishing gap (T-46-10). Reject with an actionable
+                // upgrade-sig message regardless of whether the v2 signature verifies.
+                if config.vault.is_some() {
+                    return Err(anyhow!(
+                        "{}: [vault] config is present but the envelope is signed under \
+                        format_version=2 (the pre-vault signature context). A v2 signature \
+                        does not cover the vault fields. Run `sss envelope upgrade-sig` to \
+                        re-sign under the v3 context, which includes all [vault] fields.",
+                        path.as_ref().display()
+                    ));
+                }
+                // Signed envelope (no [vault]) — verify under the v2 context.
                 #[cfg(feature = "hybrid")]
-                crate::envelope_sig::verify_envelope_signature(&config, path.as_ref())
+                crate::envelope_sig::verify_envelope_signature_v2(&config, path.as_ref())
                     .map_err(|e| anyhow!(
                         "{}: envelope signature verification failed: {}",
                         path.as_ref().display(),
@@ -294,13 +504,50 @@ impl ProjectConfig {
                     path.as_ref().display()
                 ));
             }
+            3 => {
+                // VCFG-03: verify under the v3 context (vault fields included in payload).
+                #[cfg(feature = "hybrid")]
+                crate::envelope_sig::verify_envelope_signature(&config, path.as_ref())
+                    .map_err(|e| anyhow!(
+                        "{}: envelope signature verification failed: {}",
+                        path.as_ref().display(),
+                        e
+                    ))?;
+                // On non-hybrid builds, format_version=3 is unreadable.
+                #[cfg(not(feature = "hybrid"))]
+                return Err(anyhow!(
+                    "{}: format_version=3 requires the `hybrid` build feature; rebuild sss with `--features hybrid`",
+                    path.as_ref().display()
+                ));
+            }
             other => {
                 return Err(anyhow!(
-                    "{}: envelope format_version {} is forward-incompatible (this binary supports 1 and 2)",
+                    "{}: envelope format_version {} is forward-incompatible (this binary supports 1, 2, and 3)",
                     path.as_ref().display(),
                     other
                 ));
             }
+        }
+
+        // VCFG-06: refuse SSS_VAULT_ADDR override of a signed vault address (T-46-16).
+        // Placement: AFTER the format_version dispatch (so the signature is verified for v3)
+        // and BEFORE returning to the caller (so the signed address cannot be silently
+        // repointed by the environment).
+        // Presence-only read via var_os; no network call; no value echo.
+        let has_signed_address = config.format_version >= 3
+            && config.vault.as_ref().and_then(|v| v.address.as_ref()).is_some();
+        if has_signed_address
+            && std::env::var_os("SSS_VAULT_ADDR").is_some()
+            && !allow_insecure_vault_addr_override
+        {
+            return Err(anyhow!(
+                "{}: SSS_VAULT_ADDR is set but this repo carries a signed vault address \
+                (format_version=3, vault.address is present). Overriding a signed address \
+                via the environment is refused by default to prevent credential phishing. \
+                Either unset SSS_VAULT_ADDR or pass `--allow-insecure-vault-addr-override` \
+                to acknowledge the risk.",
+                path.as_ref().display()
+            ));
         }
 
         Ok(config)
@@ -336,6 +583,25 @@ impl ProjectConfig {
     /// SUITE-04 guard that prevents stale binaries from silently corrupting
     /// v2 files.
     pub(crate) fn load_from_file_unverified<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // REM-32: reject .sss.toml larger than 1 MB before allocating the buffer.
+        // NIT-01: best-effort metadata→read check (two syscalls); a local writer could
+        // grow the file between stat and read_to_string. Accepted local-only Low risk.
+        let meta = fs::metadata(&path).map_err(|e| {
+            anyhow!(
+                "Failed to stat project config file {}: {}",
+                path.as_ref().display(),
+                e
+            )
+        })?;
+        if meta.len() > crate::constants::MAX_TOML_SIZE as u64 {
+            return Err(anyhow!(
+                "{}: project config file too large ({} bytes, max {} bytes)",
+                path.as_ref().display(),
+                meta.len(),
+                crate::constants::MAX_TOML_SIZE,
+            ));
+        }
+
         let content = fs::read_to_string(&path).map_err(|e| {
             anyhow!(
                 "Failed to read project config file {}: {}",
@@ -1231,5 +1497,132 @@ hybrid_public = "abc123"
             "hybrid_public must round-trip correctly"
         );
         let _ = alice_some;
+    }
+
+    #[test]
+    fn test_load_from_file_rejects_oversized_toml() {
+        // Write a file larger than MAX_TOML_SIZE (1 MB).
+        let tmp = NamedTempFile::new().unwrap();
+        // 1 MB + 1 byte — exceeds the cap.
+        let oversized: Vec<u8> = vec![b'#'; crate::constants::MAX_TOML_SIZE + 1];
+        std::fs::write(tmp.path(), &oversized).unwrap();
+        let result = ProjectConfig::load_from_file(tmp.path());
+        assert!(result.is_err(), "load_from_file must reject a file > 1 MB");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("too large"),
+            "Error message must say 'too large', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_load_from_file_unverified_rejects_oversized_toml() {
+        // Same check on the unverified path (used by rotation.rs).
+        let tmp = NamedTempFile::new().unwrap();
+        let oversized: Vec<u8> = vec![b'#'; crate::constants::MAX_TOML_SIZE + 1];
+        std::fs::write(tmp.path(), &oversized).unwrap();
+        let result = ProjectConfig::load_from_file_unverified(tmp.path());
+        assert!(
+            result.is_err(),
+            "load_from_file_unverified must reject a file > 1 MB"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("too large"),
+            "Error message must say 'too large', got: {msg}"
+        );
+    }
+
+    // ── VaultConfig / ProjectConfig.vault parsing ────────────────────────────
+
+    #[test]
+    fn test_vault_field_absent_yields_none() {
+        // A classic-style TOML with no [vault] table must parse with vault = None.
+        let toml_str = r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-01-01T00:00:00Z"
+"#;
+        let cfg: ProjectConfig = toml::from_str(toml_str).expect("parse must succeed");
+        assert!(
+            cfg.vault.is_none(),
+            "vault must be None when [vault] table is absent"
+        );
+    }
+
+    #[test]
+    fn test_vault_config_round_trips() {
+        // A TOML with a [vault] section deserialises correctly and re-serialises
+        // back to equivalent TOML (round-trip stability, determinism guard).
+        let toml_str = r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-01-01T00:00:00Z"
+
+[vault]
+address = "https://vault.example.com:8200"
+namespace = "myns"
+default_binding = "kv"
+
+[vault.bindings.kv]
+mount = "secret"
+kv_version = 2
+default_field = "value"
+
+[vault.auth]
+method = "approle"
+role_id = "my-role-id"
+"#;
+        let cfg: ProjectConfig = toml::from_str(toml_str).expect("parse must succeed");
+        let v = cfg.vault.as_ref().expect("vault must be Some");
+        assert_eq!(v.address.as_deref(), Some("https://vault.example.com:8200"));
+        assert_eq!(v.namespace.as_deref(), Some("myns"));
+        assert_eq!(v.default_binding.as_deref(), Some("kv"));
+        let binding = v.bindings.get("kv").expect("binding 'kv' must be present");
+        assert_eq!(binding.mount.as_deref(), Some("secret"));
+        assert_eq!(binding.kv_version, Some(2));
+        assert_eq!(binding.default_field.as_deref(), Some("value"));
+        let auth = v.auth.as_ref().expect("auth must be Some");
+        assert_eq!(auth.method.as_deref(), Some("approle"));
+        assert_eq!(auth.role_id.as_deref(), Some("my-role-id"));
+        // Re-serialise and re-parse — must be stable (determinism via BTreeMap).
+        let re_serialised = toml::to_string(&cfg).expect("serialise must succeed");
+        let cfg2: ProjectConfig = toml::from_str(&re_serialised).expect("re-parse must succeed");
+        let v2 = cfg2.vault.as_ref().expect("vault must survive round-trip");
+        assert_eq!(v2.address, v.address);
+        assert_eq!(v2.namespace, v.namespace);
+        assert_eq!(v2.bindings.len(), v.bindings.len());
+    }
+
+    #[test]
+    fn test_vault_bindings_are_btree_sorted() {
+        // bindings must be BTreeMap so iteration order is deterministic (payload
+        // encoding is load-bearing — byte-stable canonical form).
+        let toml_str = r#"version = "1.0"
+created = "2026-01-01T00:00:00Z"
+
+[alice]
+public = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+sealed_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+added = "2026-01-01T00:00:00Z"
+
+[vault]
+[vault.bindings.zzz]
+mount = "late"
+[vault.bindings.aaa]
+mount = "early"
+[vault.bindings.mmm]
+mount = "mid"
+"#;
+        let cfg: ProjectConfig = toml::from_str(toml_str).expect("parse must succeed");
+        let vault = cfg.vault.as_ref().expect("vault must be Some");
+        let keys: Vec<&str> = vault.bindings.keys().map(String::as_str).collect();
+        assert_eq!(keys, vec!["aaa", "mmm", "zzz"], "bindings must be BTree-sorted");
     }
 }

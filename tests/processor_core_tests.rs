@@ -63,7 +63,15 @@ fn proc_01_process_file_handles_normal_sized_file_metadata_path() -> Result<()> 
 #[test]
 fn proc_02_process_content_secrets_file_dispatch() -> Result<()> {
     let key = RepositoryKey::new();
-    let processor = Processor::new(key)?;
+    // REM-25/CRY-06: sealing now requires a project timestamp (the random-nonce
+    // fallback was removed). Construct the Processor with project context so the
+    // secrets-file encryption arm can derive a deterministic nonce instead of
+    // hard-erroring with "no project timestamp available".
+    let processor = Processor::new_with_context(
+        key,
+        std::path::PathBuf::from("."),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Plaintext `.secrets` content — should dispatch to the secrets-file
     // encryption arm (is_secrets_file == true).

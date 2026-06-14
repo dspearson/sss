@@ -13,7 +13,17 @@ if ! sss --non-interactive status &> /dev/null; then
     exit 0
 fi
 
-# Try to render project files (requires auto-render permission)
-sss --non-interactive render --project 2>&1 || true
+# REM-08: Advisory flock — prevents concurrent hook invocations from interleaving a partial
+# seal (pre-commit) with a render (post-merge/post-checkout). The lock is advisory; if flock(1)
+# is unavailable (macOS without util-linux) the || true fallback lets the hook continue without
+# the lock rather than failing. GIT_DIR is resolved via git rev-parse for worktree safety.
+# WR-03: -w 30 adds a 30-second timeout so a stalled holder (e.g. hung passphrase prompt)
+# never blocks git pull/merge indefinitely; on timeout the hook proceeds fail-open.
+GIT_DIR=$(git rev-parse --git-dir 2>/dev/null) || GIT_DIR=".git"
+(
+    flock -x -w 30 200 2>/dev/null || true
+    # Try to render project files (requires auto-render permission)
+    sss --non-interactive render --project 2>&1 || true
+) 200>>"$GIT_DIR/sss-hook.lock"
 
 exit 0

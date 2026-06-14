@@ -221,8 +221,12 @@ fn test_file_operations_respect_configured_username() -> anyhow::Result<()> {
     let sealed_key = config.get_sealed_key_for_user(username)?;
     let repository_key = sss::crypto::open_repository_key(&sealed_key, &keypair)?;
 
-    // Create processor
-    let processor = Processor::new(repository_key)?;
+    // Create processor — a project timestamp is required for deterministic sealing (REM-25).
+    let processor = Processor::new_with_context(
+        repository_key,
+        config_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf(),
+        config.created.clone(),
+    )?;
 
     // Test seal operation
     let plaintext = "Secret: ⊕{my_secret}";

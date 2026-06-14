@@ -17,6 +17,7 @@ pub mod settings;
 pub mod status;
 pub mod users;
 pub mod utils;
+pub mod vault;
 
 pub use agent::handle_agent;
 #[cfg(feature = "hybrid")]
@@ -36,6 +37,7 @@ pub use project::handle_project;
 pub use settings::handle_settings;
 pub use status::handle_status;
 pub use users::handle_users;
+pub use vault::handle_vault;
 
 #[cfg(test)]
 mod tests {

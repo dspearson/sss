@@ -1,0 +1,13 @@
+version: "0.5"
+
+processes:
+  vault:
+    command: "bao server -dev -dev-tls -dev-tls-cert-dir=${SSS_IT_VAULT_CERT_DIR} -dev-root-token-id=${SSS_IT_VAULT_TOKEN} -dev-listen-address=127.0.0.1:${SSS_IT_VAULT_PORT}"
+    readiness_probe:
+      http_get:
+        host: "127.0.0.1"
+        scheme: "https"
+        path: "/v1/sys/health"
+        port: ${SSS_IT_VAULT_PORT}
+      period_seconds: 1
+      failure_threshold: 30

@@ -232,12 +232,18 @@ mod deterministic {
     }
 
     #[test]
-    fn deeply_nested_braces_no_panic() {
-        // 100 levels of nesting — must not overflow or panic.
-        let opens: String = std::iter::repeat_n('{', 100).collect();
-        let closes: String = std::iter::repeat_n('}', 100).collect();
+    fn deeply_nested_braces_rejected_no_panic() {
+        // 200 levels of nesting — must not overflow or panic AND must produce
+        // zero matches (MAX_BRACE_DEPTH = 64 early-exit treats over-nested
+        // markers as literal text, per REM-33 / PAR-04).
+        let opens: String = std::iter::repeat_n('{', 200).collect();
+        let closes: String = std::iter::repeat_n('}', 200).collect();
         let input = format!("o+{opens}content{closes}");
-        let _ = find_balanced_markers(&input, PREFIXES);
+        let matches = find_balanced_markers(&input, PREFIXES);
+        assert!(
+            matches.is_empty(),
+            "A marker nested 200 levels deep (> MAX_BRACE_DEPTH) must yield zero matches"
+        );
     }
 
     #[test]

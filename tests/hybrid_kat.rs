@@ -10,7 +10,7 @@
 
 //! Known-answer tests (KAT) for hybrid primitives — `--features hybrid` arm.
 //!
-//! Belt-and-braces feature gating (mirroring `tests/keystore_signature_negative_paths.rs)`:
+//! Belt-and-braces feature gating (mirroring `tests/keystore_signature_negative_paths.rs`):
 //! - Source-level `#![cfg(feature = "hybrid")]` (below) AND
 //! - `Cargo.toml [[test]] required-features = ["hybrid"]`
 //!

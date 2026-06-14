@@ -9,16 +9,16 @@
 //! classic` plus `sss init <username>` (which writes `.sss.toml` with
 //! `users[*].sealed_key`), spawns `sss-agent --foreground` as a child process
 //! in a per-test tempdir HOME, then drives 10 000 `unseal_repository_key`
-//! calls against the single `sealed_key`. Samples `/proc/<pid>/status` `VmRSS`
+//! calls against the single sealed_key. Samples `/proc/<pid>/status` VmRSS
 //! at start (post 30 s warmup) and end, asserts RSS growth <= 10 MB AND
 //! total runtime >= 10 minutes, then SIGTERM-s the agent and confirms a
 //! clean exit.
 //!
-//! Suite choice: Classic. Plan 17-03 explicitly authorises `Suite::Classic` at
+//! Suite choice: Classic. Plan 17-03 explicitly authorises Suite::Classic at
 //! the unseal call site (lines 359-362). The agent's startup `load_keypair`
-//! returns `KeyPair::Classic` unconditionally (`keystore.rs::decrypt_stored_keypair`
+//! returns `KeyPair::Classic` unconditionally (keystore.rs::decrypt_stored_keypair
 //! always wraps as Classic; the agent has no analogue of the client's
-//! `load_hybrid_keypair` branch in config.rs:307-314), so even a hybrid-sealed
+//! load_hybrid_keypair branch in config.rs:307-314), so even a hybrid-sealed
 //! key would not be unsealable by the agent today. Exercising the soak hot
 //! path under Classic still validates the bounded-RSS guarantee under
 //! sustained load — that is the property TEST-13 part-A is gating on.
@@ -108,11 +108,7 @@ fn setup_sealed_key(home: &Path) -> (PathBuf, String, String) {
         &project_dir,
         &["keys", "generate", "--suite", "classic", "--no-password"],
     );
-    // `keys generate --suite classic` signs on write (format_version=2), so the
-    // entry is immediately loadable. Seal the repo key with the CLASSIC key so
-    // the classic-only agent can unseal it — plain `init` now defaults to
-    // --crypto hybrid (v2.2).
-    run_sss(home, &project_dir, &["init", "--crypto", "classic", &username]);
+    run_sss(home, &project_dir, &["init", &username]);
 
     let toml_path = project_dir.join(".sss.toml");
     let toml_text = std::fs::read_to_string(&toml_path)
@@ -125,11 +121,17 @@ fn setup_sealed_key(home: &Path) -> (PathBuf, String, String) {
     (project_dir, sealed_key, username)
 }
 
-fn spawn_agent(home: &Path) -> Child {
+fn spawn_agent(home: &Path, socket_path: &Path) -> Child {
+    // REM-11: pass an explicit --socket path to force the filesystem branch on
+    // every platform (including Linux where the default is now an abstract
+    // socket).  This keeps the soak test working with a real filesystem path
+    // that AgentClient::with_socket_path can resolve.
     let bin = env!("CARGO_BIN_EXE_sss-agent");
     let mut cmd = Command::new(bin);
     apply_test_env(&mut cmd, home);
     cmd.arg("--foreground")
+        .arg("--socket")
+        .arg(socket_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -142,9 +144,7 @@ fn shutdown_agent(mut child: Child) {
     // shut down cleanly. std::process::Child::kill sends SIGKILL on Unix
     // which the agent cannot trap — use libc::kill explicitly so the
     // graceful-shutdown handler runs.
-    let pid = libc::pid_t::try_from(child.id()).expect("agent pid fits in pid_t");
-    // SAFETY: libc::kill is an FFI call with no memory-safety preconditions;
-    // `pid` is the live spawned agent and SIGTERM is a valid signal number.
+    let pid = child.id() as libc::pid_t;
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
@@ -152,7 +152,7 @@ fn shutdown_agent(mut child: Child) {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let signal_ok = status.signal().is_some_and(|s| s == 15);
+                let signal_ok = status.signal().map(|s| s == 15).unwrap_or(false);
                 assert!(
                     status.success() || signal_ok,
                     "sss-agent exited with non-success non-SIGTERM status: {status:?}"
@@ -171,15 +171,22 @@ fn shutdown_agent(mut child: Child) {
     }
 }
 
-fn wait_for_socket(socket_path: &Path) {
+/// Wait until the agent responds to a ping, with a 10 s deadline.
+///
+/// Replaced the previous `socket_path.exists()` filesystem poll (which is
+/// always false for Linux abstract sockets) with a ping-retry loop that works
+/// on both abstract and filesystem socket addresses.  The soak test pins a
+/// filesystem socket via `--socket`, so this change is belt-and-braces here,
+/// but correct on both paths (40-RESEARCH.md Pitfall 5).
+fn wait_for_agent(client: &AgentClient) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if socket_path.exists() {
+        if client.ping().is_ok() {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    panic!("agent socket did not appear within 10 s: {}", socket_path.display());
+    panic!("agent did not respond to ping within 10 s");
 }
 
 #[test]
@@ -198,14 +205,16 @@ fn soak_agent_unseals_for_at_least_10_minutes_with_bounded_rss() {
 
     write_permissive_agent_policy(&home);
 
-    let agent = spawn_agent(&home);
+    // Pin the socket to a filesystem path via --socket so the soak test works
+    // on Linux regardless of the default abstract-socket behaviour (REM-11).
+    let socket_path = home.join(".sss-agent.sock");
+    let agent = spawn_agent(&home, &socket_path);
     let pid = agent.id();
 
-    let socket_path = home.join(".sss-agent.sock");
-    wait_for_socket(&socket_path);
-
     let client = AgentClient::with_socket_path(socket_path.clone());
-    client.ping().expect("agent ping must succeed before soak loop");
+    // Use the ping-retry wait_for_agent (correct for both abstract and
+    // filesystem socket addresses; see 40-RESEARCH.md Pitfall 5).
+    wait_for_agent(&client);
 
     // Warmup before initial RSS sample (heap settles after first connect).
     std::thread::sleep(Duration::from_secs(WARMUP_SEC));
@@ -257,21 +266,11 @@ fn soak_agent_unseals_for_at_least_10_minutes_with_bounded_rss() {
         "soak unseal-call count too low: did {calls_done}, want >={UNSEAL_CALLS}"
     );
     let growth = rss_final.saturating_sub(rss_initial);
-    // ThreadSanitizer/AddressSanitizer shadow memory inflates RSS several-fold,
-    // so the bounded-RSS budget cannot hold under a sanitizer. The RSS property
-    // is validated in the normal (non-sanitized) soak run; under a sanitizer the
-    // soak still exercises 10 min of liveness + race/UB detection, which is the
-    // point of running it there (MEMSAFE-04). `cfg(sanitize)` is nightly-only,
-    // so detect the sanitizer at runtime via the options env var it sets.
-    let under_sanitizer =
-        std::env::var_os("TSAN_OPTIONS").is_some() || std::env::var_os("ASAN_OPTIONS").is_some();
-    if !under_sanitizer {
-        assert!(
-            growth <= MAX_RSS_GROWTH_BYTES,
-            "RSS growth exceeded budget: initial={rss_initial}, final={rss_final}, growth={growth}, budget={MAX_RSS_GROWTH_BYTES} ({}MB)",
-            MAX_RSS_GROWTH_BYTES / 1024 / 1024
-        );
-    }
+    assert!(
+        growth <= MAX_RSS_GROWTH_BYTES,
+        "RSS growth exceeded budget: initial={rss_initial}, final={rss_final}, growth={growth}, budget={MAX_RSS_GROWTH_BYTES} ({}MB)",
+        MAX_RSS_GROWTH_BYTES / 1024 / 1024
+    );
 
     eprintln!(
         "soak: unseal_calls={calls_done}, duration={total_elapsed}s, rss_initial={rss_initial}, rss_final={rss_final}, growth={growth}"

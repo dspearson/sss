@@ -8,10 +8,43 @@
 use anyhow::{anyhow, Result};
 use regex::Regex;
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::crypto::{decrypt_from_base64, RepositoryKey};
+use crate::validation::sanitize_for_display;
+
+/// Typed error for unresolved `⊲{}` references (VFAIL-05 / T-48-09).
+///
+/// Carries only the sanitised reference **names** — never a value (T-48-13).
+/// Downcast at the command boundary to map to exit 3 on BOTH the default and
+/// `vault` builds (the ⊲{} path is not vault-specific).
+///
+/// # Security
+///
+/// `Display` and `Debug` emit only sanitised names, never secret values.
+#[derive(Debug)]
+pub enum SecretsInterpolationError {
+    /// One or more `⊲{}` references could not be resolved.
+    ///
+    /// The `Vec` contains the `sanitize_for_display`-ed reference names that
+    /// missed (same form used in the stderr report).  The order mirrors the
+    /// order of first occurrence in the content.
+    Unresolved(Vec<String>),
+}
+
+impl fmt::Display for SecretsInterpolationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SecretsInterpolationError::Unresolved(names) => {
+                write!(f, "unresolved ⊲{{}} references: {}", names.join(", "))
+            }
+        }
+    }
+}
+
+impl std::error::Error for SecretsInterpolationError {}
 
 /// Trait for abstracting filesystem operations
 ///
@@ -205,13 +238,18 @@ impl SecretsCache {
             }
         }
 
-        Err(anyhow!(
+        // REM-38: redact path by default. The detail is routed to log::debug! so it
+        // lights up once a logging backend is initialised (matches the envelope_sig.rs
+        // convention). WR-02: no logging backend exists yet, so the user-facing string
+        // must NOT promise RUST_LOG=debug — that escape hatch is currently a no-op.
+        log::debug!(
             "No secrets file found for {}. Searched: {}{} and '{}' up to project root.",
             file_path.display(),
             file_path.display(),
             self.secrets_suffix,
             self.secrets_filename
-        ))
+        );
+        Err(anyhow!("No secrets file found (path detail suppressed)"))
     }
 
     /// Find secrets file using the lookup hierarchy (uses standard filesystem operations)
@@ -263,10 +301,18 @@ impl SecretsCache {
             .get(secret_name)
             .cloned()
             .ok_or_else(|| {
-                anyhow!(
+                // REM-34: sanitise name before formatting into error message.
+                // REM-38: redact secrets-file path by default. WR-02: detail goes to
+                // log::debug! (a no-op until a logging backend is initialised); the
+                // user-facing anyhow! below must not promise RUST_LOG=debug.
+                log::debug!(
                     "Secret '{}' not found in {}",
                     secret_name,
                     secrets_file.display()
+                );
+                anyhow!(
+                    "Secret '{}' not found",
+                    sanitize_for_display(secret_name)
                 )
             })
     }
@@ -284,8 +330,9 @@ impl SecretsCache {
 
 /// Unified secret interpolation function that works with any filesystem operations
 ///
-/// This replaces ⊲{`secret_name`} and <{`secret_name`} markers with actual values from .secrets files.
-/// Uses the `FileSystemOps` trait to support both normal filesystem and fd-based operations (for FUSE).
+/// This replaces ⊲{`secret_name`} and <{`secret_name`} markers with actual values
+/// from `.secrets` files.  Uses the `FileSystemOps` trait to support both normal
+/// filesystem and fd-based operations (for FUSE).
 ///
 /// # Arguments
 /// * `content` - The content containing interpolation markers
@@ -293,31 +340,65 @@ impl SecretsCache {
 /// * `project_root` - Project root directory
 /// * `secrets_cache` - `SecretsCache` for finding and loading secrets
 /// * `fs_ops` - Filesystem operations implementation
+/// * `keep_unresolved` - When `true`, a missing `⊲{}` reference returns `Ok` with the
+///   marker preserved verbatim (seal/open / FUSE mount semantics — byte-for-byte
+///   unchanged behaviour).  When `false`, ALL misses are collected in one pass and
+///   reported via `sanitize_for_display`; the function returns
+///   `Err(SecretsInterpolationError::Unresolved)` so the render command boundary can
+///   map the result to exit 3 (VFAIL-05 / T-48-09).
 ///
 /// # Returns
-/// Content with secrets interpolated, or original markers if lookup fails
+/// Content with secrets interpolated, or `Err` when `keep_unresolved` is `false` and
+/// at least one `⊲{}` reference could not be resolved.
+///
+/// # Scope guard
+///
+/// The exit-3 contract (`keep_unresolved=false`) is for the **render command path
+/// only**.  All seal/open and FUSE/9P mount callers MUST pass `keep_unresolved=true`
+/// so their behaviour is byte-for-byte unchanged (VFAIL-05).
 pub fn interpolate_secrets<P: AsRef<Path>, F: FileSystemOps>(
     content: &str,
     file_path: P,
     project_root: &Path,
     secrets_cache: &mut SecretsCache,
     fs_ops: &F,
+    keep_unresolved: bool,
 ) -> Result<String> {
     let file_path = file_path.as_ref();
+
+    // Collect all miss names in one full pass before deciding to error.
+    // This lets us report every unresolved reference at once rather than
+    // first-failure — mirrors the Phase 47 ⊳{} collect-then-error design.
+    let mut unresolved: Vec<String> = Vec::new();
 
     let result = SECRETS_INTERPOLATION_REGEX.replace_all(content, |caps: &regex::Captures| {
         let secret_name = &caps[1];
 
         match secrets_cache.lookup_secret_with_ops(secret_name, file_path, project_root, fs_ops) {
             Ok(value) => value,
-            Err(e) => {
-                eprintln!("Warning: Failed to lookup secret '{secret_name}': {e}");
-                caps[0].to_string() // Return original marker on error
+            Err(_e) => {
+                // REM-34: sanitise secret_name before recording or emitting to stderr
+                // to prevent terminal-injection from an attacker-controlled marker name.
+                // T-48-13: only the sanitised name is stored — never the value.
+                let display_name = sanitize_for_display(secret_name).clone();
+                unresolved.push(display_name);
+                caps[0].to_string() // Preserve original marker verbatim (VREF-02).
             }
         }
     });
 
-    Ok(result.to_string())
+    // After a full pass: if any references missed and the caller did NOT opt in
+    // to keep-unresolved semantics, emit the report and return a typed error.
+    if !unresolved.is_empty() && !keep_unresolved {
+        for name in &unresolved {
+            eprintln!("error: unresolved ⊲{{}} reference: {name}");
+        }
+        return Err(anyhow::Error::new(SecretsInterpolationError::Unresolved(
+            unresolved,
+        )));
+    }
+
+    Ok(result.into_owned())
 }
 
 /// Decrypt secrets file content, handling encrypted marker
@@ -364,12 +445,19 @@ pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<Strin
                 .or_else(|| caps.get(3))
                 .map(|m| m.as_str().trim())
                 .ok_or_else(|| {
-                    anyhow!(
+                    // REM-38 / WR-01: redact the filesystem path AND the raw line
+                    // (a malformed .secrets line can contain secret material) from
+                    // the user-facing error — it is surfaced verbatim to stderr by
+                    // interpolate_secrets. Detail is routed to the (currently dead,
+                    // see WR-02) log::debug! sink. Do NOT advertise RUST_LOG here:
+                    // no logging backend is initialised, so the hint would mislead.
+                    log::debug!(
                         "Failed to parse key on line {} in {}: {}",
                         line_num,
                         path.display(),
                         line
-                    )
+                    );
+                    anyhow!("Failed to parse key on line {line_num} of secrets file")
                 })?;
 
             // Collect multi-line value
@@ -389,12 +477,15 @@ pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<Strin
                 .or_else(|| caps.get(3))
                 .map(|m| m.as_str().trim())
                 .ok_or_else(|| {
-                    anyhow!(
+                    // REM-38 / WR-01: redact path + raw line; route detail to the
+                    // dead log::debug! sink. See the multi-line site above.
+                    log::debug!(
                         "Failed to parse key on line {} in {}: {}",
                         line_num,
                         path.display(),
                         line
-                    )
+                    );
+                    anyhow!("Failed to parse key on line {line_num} of secrets file")
                 })?;
 
             // Extract value (from first matching group among groups 4, 5, 6)
@@ -407,11 +498,16 @@ pub fn parse_secrets_content(content: &str, path: &Path) -> Result<HashMap<Strin
             secrets.insert(key.to_string(), value.to_string());
             i += 1;
         } else {
-            return Err(anyhow!(
+            // REM-38 / WR-01: redact path + raw line (may contain secret material);
+            // route detail to the dead log::debug! sink. No RUST_LOG hint (WR-02).
+            log::debug!(
                 "Invalid secrets file format on line {} in {}: {}",
                 line_num,
                 path.display(),
                 line
+            );
+            return Err(anyhow!(
+                "Invalid secrets file format on line {line_num} of secrets file"
             ));
         }
     }
@@ -1000,7 +1096,8 @@ empty_value:
         let file_path = project_root.join("config.txt");
 
         let content = "KEY=⊲{ssh_key}\nEND\n";
-        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops).unwrap();
+        // keep_unresolved=true: seal/open/mount semantics (marker preserved on miss).
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops, true).unwrap();
 
         assert!(result.contains("-----BEGIN RSA-----"), "Interpolated content must include key header");
         assert!(result.contains("-----END RSA-----"), "Interpolated content must include key footer");
@@ -1046,7 +1143,8 @@ empty_value:
 
         // Content refers to both keys — should resolve in one pass, no loop.
         let content = "A=⊲{key_a} B=⊲{key_b}";
-        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops);
+        // keep_unresolved=true: both keys exist, but use safe semantics for test.
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops, true);
 
         assert!(result.is_ok(), "Interpolation must terminate, got: {:?}", result.err());
         let output = result.unwrap();
@@ -1068,9 +1166,10 @@ empty_value:
         let file_path = project_root.join("config.txt");
 
         let content = "known=⊲{existing_key} unknown=⊲{no_such_key}";
-        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops);
+        // keep_unresolved=true: seal/open semantics — missing key preserved, no error.
+        let result = interpolate_secrets(content, &file_path, project_root, &mut cache, &fs_ops, true);
 
-        assert!(result.is_ok(), "interpolate_secrets must not return Err for missing key");
+        assert!(result.is_ok(), "interpolate_secrets must not return Err for missing key (keep_unresolved=true)");
         let output = result.unwrap();
         // Known key should be resolved
         assert!(output.contains("value"), "Known key should be resolved");
@@ -1078,6 +1177,319 @@ empty_value:
         assert!(
             output.contains("⊲{no_such_key}") || output.contains("<{no_such_key}"),
             "Missing key should be preserved as original marker, got: {output}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // REM-34 + REM-38 — sanitised names and redacted paths in error output
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_secret_name_sanitised_in_warning() {
+        // REM-34: a secret name containing control/ANSI bytes must be stripped before
+        // the name appears in the "not found" error message.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        // Secrets file present but does NOT contain the attacker-named key.
+        let secrets_content = "safe_key: value\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        // Name with embedded ESC byte (ANSI injection attempt) and a bidi override.
+        let malicious_name = "\u{1b}[1;31m\u{202E}evil\u{202C}";
+        let result =
+            cache.lookup_secret_with_ops(malicious_name, &file_path, project_root, &fs_ops);
+
+        assert!(result.is_err(), "Missing key must return Err");
+        let msg = result.unwrap_err().to_string();
+
+        // The error message must NOT contain the raw ESC byte.
+        assert!(
+            !msg.contains('\u{1b}'),
+            "Error message must not contain raw ESC byte, got: {msg:?}"
+        );
+        // The error message must NOT contain the bidi RLO override.
+        assert!(
+            !msg.contains('\u{202E}'),
+            "Error message must not contain bidi override U+202E, got: {msg:?}"
+        );
+        // The printable ASCII part of the name is kept (after stripping control/bidi).
+        assert!(
+            msg.contains("evil"),
+            "Sanitised printable portion must remain in error, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_not_found_error_no_path() {
+        // REM-38: the "not found" error must NOT contain the secrets-file filesystem path.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        // Secrets file present but missing the looked-up key.
+        let secrets_content = "other_key: value\n";
+        let fs_ops = mock_with_secrets(project_root, secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        let result = cache.lookup_secret_with_ops("missing_key", &file_path, project_root, &fs_ops);
+
+        assert!(result.is_err(), "Missing key must return Err");
+        let msg = result.unwrap_err().to_string();
+
+        // The secrets-file path must NOT appear in the user-facing error.
+        let secrets_path = project_root.join("secrets");
+        assert!(
+            !msg.contains(secrets_path.to_str().unwrap_or("")),
+            "Error message must not contain the secrets-file path, got: {msg:?}"
+        );
+        // The error must still name the key so the message is actionable.
+        assert!(
+            msg.contains("missing_key"),
+            "Error message must name the missing key, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_malformed_secrets_file_error_no_path_or_content() {
+        // WR-01: a malformed secrets file (a line with no `=`/`:` that fails the
+        // line regex) must produce an error from parse_secrets_content that leaks
+        // NEITHER the absolute filesystem path NOR the raw offending line — the raw
+        // line can contain secret material, and the error is surfaced verbatim to
+        // stderr by interpolate_secrets.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        // The raw line carries a recognisable "secret" token we assert is NOT echoed.
+        let raw_secret_line = "GARBAGE_LINE_WITH_SECRET_sk_live_DEADBEEF";
+        let secrets_content = format!("good_key: value\n{raw_secret_line}\n");
+        let fs_ops = mock_with_secrets(project_root, &secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        // lookup_secret_with_ops calls parse_secrets_content before the key lookup,
+        // so the malformed-file error propagates out here.
+        let result = cache.lookup_secret_with_ops("good_key", &file_path, project_root, &fs_ops);
+
+        assert!(result.is_err(), "Malformed secrets file must return Err");
+        let msg = result.unwrap_err().to_string();
+
+        // Must NOT contain the absolute secrets-file path.
+        let secrets_path = project_root.join("secrets");
+        assert!(
+            !msg.contains(secrets_path.to_str().unwrap_or("")),
+            "Error must not contain the secrets-file path, got: {msg:?}"
+        );
+        // Must NOT echo the raw offending line (which may carry secret material).
+        assert!(
+            !msg.contains(raw_secret_line),
+            "Error must not echo the raw secrets-file line, got: {msg:?}"
+        );
+        assert!(
+            !msg.contains("sk_live_DEADBEEF"),
+            "Error must not leak any token from the raw line, got: {msg:?}"
+        );
+        // The error must NOT advertise the non-functional RUST_LOG escape hatch (WR-02).
+        assert!(
+            !msg.contains("RUST_LOG"),
+            "Error must not promise RUST_LOG=debug (no backend initialised), got: {msg:?}"
+        );
+        // The error should still be diagnostically useful: it names the line number.
+        assert!(
+            msg.contains("line 2"),
+            "Error should name the offending line number, got: {msg:?}"
+        );
+    }
+
+    #[test]
+    fn test_malformed_secrets_error_redacted_end_to_end_via_interpolate() {
+        // WR-01: end-to-end guarantee. interpolate_secrets surfaces the
+        // parse_secrets_content error to stderr (the `{e}` sink). Here we assert the
+        // raw line / path are absent from the error string that would be printed —
+        // obtained via lookup_secret_with_ops (interpolate_secrets itself swallows
+        // the error into a warning and returns Ok with the original marker).
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        let raw_secret_line = "no_delimiter_here_TOPSECRET";
+        let secrets_content = format!("{raw_secret_line}\n");
+        let fs_ops = mock_with_secrets(project_root, &secrets_content);
+
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("config.txt");
+
+        // Confirm interpolate_secrets does not panic and preserves the marker.
+        // keep_unresolved=true: seal/open semantics; malformed secrets → marker preserved, no error.
+        let interp = interpolate_secrets(
+            "X=⊲{anything}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            true,
+        );
+        assert!(interp.is_ok(), "interpolate_secrets must not return Err (keep_unresolved=true)");
+        assert!(
+            interp.unwrap().contains("⊲{anything}"),
+            "marker must be preserved on parse failure"
+        );
+
+        // The redaction guarantee is on the error string itself.
+        let result = cache.lookup_secret_with_ops("anything", &file_path, project_root, &fs_ops);
+        assert!(result.is_err(), "Malformed secrets file must return Err");
+        let msg = result.unwrap_err().to_string();
+
+        let secrets_path = project_root.join("secrets");
+        assert!(
+            !msg.contains(secrets_path.to_str().unwrap_or("")),
+            "Error must not contain the secrets-file path, got: {msg:?}"
+        );
+        assert!(
+            !msg.contains(raw_secret_line) && !msg.contains("TOPSECRET"),
+            "Error must not echo the raw secrets-file line, got: {msg:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // VFAIL-05 / VFAIL-04 — collect-then-exit-3 + keep_unresolved=true/false
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_interpolate_known_key_ok_keep_false() {
+        // Happy path: a present ⊲{} substitutes and returns Ok regardless of flag.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+        let fs_ops = mock_with_secrets(project_root, "db_pass: hunter2\n");
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("env");
+
+        let result = interpolate_secrets(
+            "PASS=⊲{db_pass}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            false,
+        );
+        assert!(result.is_ok(), "present key must succeed: {:?}", result.err());
+        assert_eq!(result.unwrap(), "PASS=hunter2");
+    }
+
+    #[test]
+    fn test_interpolate_missing_key_keep_false_returns_err() {
+        // VFAIL-05: a missing ⊲{} with keep_unresolved=false returns Err.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+        let fs_ops = mock_with_secrets(project_root, "other: x\n");
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("env");
+
+        let result = interpolate_secrets(
+            "X=⊲{missing}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            false,
+        );
+        assert!(result.is_err(), "missing key with keep_unresolved=false must return Err");
+        let err = result.unwrap_err();
+        let downcast = err.downcast_ref::<SecretsInterpolationError>();
+        assert!(
+            downcast.is_some(),
+            "error must downcast to SecretsInterpolationError"
+        );
+        if let Some(SecretsInterpolationError::Unresolved(names)) = downcast {
+            assert!(names.iter().any(|n| n.contains("missing")), "names must contain 'missing', got: {names:?}");
+        }
+    }
+
+    #[test]
+    fn test_interpolate_two_missing_both_collected_keep_false() {
+        // VFAIL-05: full-pass collect — BOTH names are in the error, not just the first.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+        let fs_ops = mock_with_secrets(project_root, "other: x\n");
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("env");
+
+        let result = interpolate_secrets(
+            "A=⊲{alpha} B=⊲{beta}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            false,
+        );
+        assert!(result.is_err(), "must error on two missing refs");
+        let err = result.unwrap_err();
+        if let Some(SecretsInterpolationError::Unresolved(names)) = err.downcast_ref::<SecretsInterpolationError>() {
+            assert!(
+                names.iter().any(|n| n.contains("alpha")),
+                "'alpha' must be in unresolved names: {names:?}"
+            );
+            assert!(
+                names.iter().any(|n| n.contains("beta")),
+                "'beta' must be in unresolved names: {names:?}"
+            );
+        } else {
+            panic!("error must be SecretsInterpolationError::Unresolved");
+        }
+    }
+
+    #[test]
+    fn test_interpolate_missing_key_keep_true_returns_ok() {
+        // VFAIL-04 / seal-open semantics: keep_unresolved=true → Ok with marker preserved.
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+        let fs_ops = mock_with_secrets(project_root, "other: x\n");
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("env");
+
+        let result = interpolate_secrets(
+            "X=⊲{missing}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            true,
+        );
+        assert!(result.is_ok(), "keep_unresolved=true must return Ok: {:?}", result.err());
+        let out = result.unwrap();
+        assert!(
+            out.contains("⊲{missing}"),
+            "marker must be preserved verbatim, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_interpolate_error_downcastable_to_exit3() {
+        // VFAIL-05: error type is downcastable (mirrors Phase-47 single-anyhow-layer).
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+        let fs_ops = mock_with_secrets(project_root, "other: x\n");
+        let mut cache = SecretsCache::new();
+        let file_path = project_root.join("env");
+
+        let err = interpolate_secrets(
+            "⊲{nope}",
+            &file_path,
+            project_root,
+            &mut cache,
+            &fs_ops,
+            false,
+        )
+        .unwrap_err();
+
+        // Must downcast to the typed error so the command boundary can route to exit 3.
+        assert!(
+            err.downcast_ref::<SecretsInterpolationError>().is_some(),
+            "error must downcast to SecretsInterpolationError"
         );
     }
 }

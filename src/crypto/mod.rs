@@ -18,6 +18,10 @@ pub use classic::{
     encrypt_to_base64_deterministic, ClassicKeyPair,
     ClassicSuite, Key, KeyPair, PublicKey, RepositoryKey, SecretKey,
 };
+// REM-22: crate-internal re-export so core.rs can call crate::crypto::decrypt_from_base64_with_context
+// without a deeper path reference into classic.rs.
+#[allow(unused_imports)]
+pub(crate) use classic::decrypt_from_base64_with_context;
 // Why: open_repository_key + seal_repository_key are the v1.x free-function forms retained for integration-test wire-format compatibility only; new code must use ClassicSuite.seal_repo_key / open_repo_key via the CryptoSuite trait; the public re-export with #[allow(deprecated)] preserves the existing .sss.toml ciphertext read path until the v2.4 migration plan removes the deprecated entry points.
 #[allow(deprecated)]
 pub use classic::{open_repository_key, seal_repository_key};

@@ -237,6 +237,14 @@ Each key file is encrypted using Argon2id key derivation from your passphrase:
   - `sensitive`: ~256 MiB RAM, highest security
   - `moderate`: ~128 MiB RAM, balanced
   - `interactive`: ~64 MiB RAM, fastest
+- **Note:** `keystore.kdf_level` governs which Argon2id parameter set is used **at key
+  generation and re-sign time** (`sss keys init`, `sss keys upgrade`). For signed
+  `format_version=3` keystore entries, the exact numeric `kdf_ops_limit` and
+  `kdf_mem_limit` values are **pinned by the signature** (REM-04 / Phase 38):
+  they are verified against the signed payload when the keystore is opened, and a
+  disk-level downgrade of these parameters results in a hard signature-verification
+  failure. They are not re-read from the current `keystore.kdf_level` config at
+  verify time.
 
 Alternatively, passphrase protection can be delegated to the system keyring with
 `keystore.use_system_keyring = true`, in which case the key file is stored

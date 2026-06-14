@@ -136,6 +136,68 @@ The following data is visible to anyone with access to the repository or file sy
 
 ---
 
+## Access Control
+
+This section documents how FUSE mount access control works, the kernel-level permission
+checks that are applied, and the deliberate defaults for `AllowRoot` and `AllowOther`.
+
+### DefaultPermissions (kernel DAC check)
+
+FUSE mounts created by `sss mount` pass `MountOption::DefaultPermissions` to the kernel.
+This tells the kernel's VFS layer to perform its own discretionary access control (DAC)
+check — verifying uid, gid, and mode bits against the inode attributes returned by `getattr`
+— before forwarding a request to the FUSE filesystem. Without this option the kernel skips
+its check and relies entirely on the FUSE `access` callback.
+
+**Linux:** The `access` callback calls `faccessat(source_fd, path, mask, 0)` against the
+backing directory, enforcing real-uid checks correctly. `DefaultPermissions` adds a
+kernel-level first-pass check on top of this.
+
+**macOS:** The `access` callback returns OK unconditionally (a documented defence-in-depth
+gap; fixing the macOS callback is deferred to a future phase). On macOS, `DefaultPermissions`
+is the primary uid/gid/mode enforcement layer — kernel checks are applied before the
+callback is consulted.
+
+Passing `DefaultPermissions` addresses CON-16 observation 1 / REM-19 from the internal
+security audit.
+
+### AllowRoot default (deliberate, scoped limitation)
+
+`AllowRoot` is the default mount option (overridden by `--no-allow-root`). Root is allowed
+to access the FUSE mount for the following reasons:
+
+- **Linux:** Root holds `CAP_DAC_READ_SEARCH`, which bypasses FUSE permission checks
+  regardless of whether `AllowRoot` is set. On Linux, `AllowRoot` is therefore largely
+  redundant — root can already access the mount. The option is passed to be consistent
+  and to ensure macOS behaviour matches.
+- **macOS:** Root does not hold a Linux-style capability that bypasses FUSE. `AllowRoot`
+  is needed on macOS to allow `sudo`-prefixed commands executed inside the mount to
+  access files owned by the non-root mount owner. This preserves workflows such as
+  `sudo openstack undercloud install` inside a `sss mount`-ed project directory.
+
+`AllowRoot` and `DefaultPermissions` coexist without conflict: fuser serialises `AllowRoot`
+as the `allow_other` kernel flag with an internal root-only enforcement filter;
+`DefaultPermissions` is a separate kernel flag. The kernel's uid/gid/mode check from
+`DefaultPermissions` still applies to non-root processes.
+
+This default is a documented, scoped limitation (CON-16 observation 2 / REM-19). Pass
+`--no-allow-root` to opt out; root will then be subject to the same FUSE visibility rules
+as any other uid, which may break `sudo`-inside-mount workflows on macOS.
+
+### AllowOther (opt-in, not the default)
+
+`--allow-other` is an explicit opt-in that grants every user on the system access to the
+FUSE mount. On Linux the `access` callback enforces real-uid checks via `faccessat` against
+the backing directory; on macOS the callback returns OK unconditionally, meaning that with
+`--allow-other` on macOS any local user can read any file from the mount without a uid
+check. Users who pass `--allow-other` on macOS should be aware of this limitation (CON-16
+observation 3).
+
+Both `AllowRoot` and `AllowOther` require `user_allow_other` in `/etc/fuse.conf` when the
+mount is performed by a non-root user.
+
+---
+
 ## Hybrid Trust Boundaries (v2.0)
 
 The hybrid suite (selected by `version = "2.0"` in `.sss.toml`) extends the v1.0 threat
@@ -262,7 +324,7 @@ cross-references the spec.
 |----------|----------------|----------------|
 | KEM hardness | X25519 ECDH ([Curve25519 DLP](./CRYPTOGRAPHY.md#asymmetric-encryption)) | X448 ECDH (Curve448 DLP) **and** sntrup761 (Streamlined NTRU Prime lattice problem); see [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) |
 | Per-message AEAD on the sealed key | XSalsa20-Poly1305 (sealed-box internal; libsodium) | XChaCha20-Poly1305; see [docs/CRYPTOGRAPHY.md#symmetric-encryption](./CRYPTOGRAPHY.md#symmetric-encryption) |
-| KDF for repo-key wrapping | Implicit in `crypto_box_seal` (no separate KDF step) | BLAKE3 `derive_key("sss hybrid kem v1", shared)`; see [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) |
+| KDF for repo-key wrapping | Implicit in `crypto_box_seal` (no separate KDF step) | BLAKE3 `derive_key("sss-hybrid-kem-v1", shared)`; see [docs/CRYPTOGRAPHY.md#hybrid-suite-v20](./CRYPTOGRAPHY.md#hybrid-suite-v20) |
 | Quantum resistance (KEM layer) | None — broken by Shor's algorithm against X25519 | sntrup761 lattice KEM is believed resistant to known quantum attacks |
 | Audit pedigree | libsodium (extensively reviewed; long deployment history) | trelis (vendored at pinned commit `5374dff482ba94a94695794b5e4554f908eb0d4d`; **unaudited** — see [Trelis Attack Surface](#trelis-attack-surface) and `AUDIT-01` in `.planning/REQUIREMENTS.md`) |
 | Sealed-key size on disk | 80 bytes per user entry | 1167 bytes per user entry (~1448 base64 chars); see [docs/CRYPTOGRAPHY.md#classic-vs-hybrid-comparison](./CRYPTOGRAPHY.md#classic-vs-hybrid-comparison) |
@@ -273,7 +335,7 @@ cross-references the spec.
 |-------------------|-------------|
 | In-file AEAD on secret content | XChaCha20-Poly1305 — byte-identical ciphertext invariant; see [docs/CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant](./CRYPTOGRAPHY.md#byte-identical-ciphertexts-invariant) |
 | Nonce derivation for in-file AEAD | BLAKE2b-192 keyed with the repository key, personalisation `"sss_autononce_v1"`; see [Deterministic Nonces](#deterministic-nonces) and [docs/CRYPTOGRAPHY.md#nonce-derivation](./CRYPTOGRAPHY.md#nonce-derivation) |
-| Passphrase KDF for keystore wrapping | Argon2id v1.3 with `sensitive` parameters (~4 ops, 256 MiB); see [Key Derivation (Argon2id)](#key-derivation-argon2id) and [docs/CRYPTOGRAPHY.md#key-derivation](./CRYPTOGRAPHY.md#key-derivation) |
+| Passphrase KDF for keystore wrapping | Argon2id v1.3; the `keystore.kdf_level` setting governs which Argon2id parameter set (`sensitive` ~4 ops/256 MiB, `moderate`, `interactive`) is used **at key generation and re-sign time**. For signed `format_version=3` entries the exact numeric `kdf_ops_limit`/`kdf_mem_limit` values are **pinned by the signature** (REM-04 / Phase 38): they are verified against the signed payload at keystore open time, and a disk-level downgrade of these parameters causes a hard signature-verification failure. They are not re-read from current config at verify time. See [Key Derivation (Argon2id)](#key-derivation-argon2id) and [docs/CRYPTOGRAPHY.md#key-derivation](./CRYPTOGRAPHY.md#key-derivation). |
 | Zeroisation on drop for secret-bearing types | `ZeroizeOnDrop` on `RepositoryKey`, `SecretKey`, `DerivedKey`, `Salt`, plus upstream `trelis_hybrid::HybridKemKeypair` / `HybridSharedSecret`; transient buffers wrapped in `Zeroizing<T>`; see [Zeroisation](#zeroisation-phase-8--harden-04-audit-input) |
 | Determinism of in-file AEAD | Same `(K, path, plaintext, timestamp)` → same ciphertext, regardless of suite — load-bearing for clean git diffs |
 | DoS protection (marker / file size limits) | `MAX_MARKER_CONTENT_SIZE = 100 MB`, `MAX_FILE_SIZE = 100 MB`; see [DoS Protection](#dos-protection) |
@@ -287,6 +349,48 @@ against a specific threat (e.g. harvest-now-decrypt-later by a quantum adversary
 should follow the row that touches their threat — that row's "Classic" column will
 state where the protection is absent, and the "Hybrid" column will state which
 additional assumption is now in play.
+
+---
+
+## trelis Trust Assumption (UNAUDITED — REM-31)
+
+> **SECURITY NOTICE: The hybrid suite (v2.0) — the default since v2.2 — depends on the
+> [trelis](https://github.com/dspearson/trelis) library for its post-quantum security claim.
+> trelis is IN-HOUSE and UNAUDITED. An independent third-party audit is tracked as backlog
+> item AUDIT-01 and has NOT been performed. Until AUDIT-01 closes, treat the hybrid suite
+> as EXPERIMENTAL for production deployments with a high assurance requirement.**
+
+**What trelis provides (and what the audit gap covers):**
+
+- **X448 + sntrup761 KEM** (`HybridKemKeypair`) — every v2.0 project's repo-key wrapping
+- **Ed448 + ML-DSA-65 signature primitives** — keystore entry and envelope signing
+- **BLAKE3 KDF** (`trelis_primitives::derive_key`) — key derivation from shared secrets
+
+**Pinned at:** `5374dff482ba94a94695794b5e4554f908eb0d4d` (2026-04-24). Updates require an
+explicit `Cargo.toml` edit; the project does not consume floating versions.
+
+**In-house interim mitigations (Phase 42, pending AUDIT-01):**
+
+| Mitigation | What it covers |
+|------------|----------------|
+| REM-30 (MEM-16) | `ZeroizeOnDrop` regression tests for `HybridKemKeypair`, `Ed448SigningKey`, `MlDsa65SigningKey` — detects a defective upstream zeroise-on-drop derive |
+| REM-27 (CRY-17) | KAT pinning `HYBRID_KEM_CONTEXT` (`"sss-hybrid-kem-v1"`) bytes and `trelis_primitives::derive_key` output at the pinned SHA — detects silent context-string or output-length drift |
+
+These mitigations address in-house observability of zeroise and KDF correctness. They do
+not substitute for a third-party review of trelis's sntrup761 KEM, ML-DSA-65 implementation,
+or BLAKE3 context binding.
+
+**Scope of the gap:** The classical X25519 AEAD layer (XChaCha20-Poly1305 on `⊠{...}`
+markers) is libsodium and is NOT affected — the trelis exposure is bounded to per-user
+`sealed_key` wrapping in `.sss.toml` and to keystore/envelope signatures.
+
+**Resolution path:** AUDIT-01 — see `.planning/REQUIREMENTS.md` (Future Requirements / External
+Engagement). Teams that cannot accept this supply-chain risk should use the classic suite
+(`sss init --crypto classic` or `--crypto classic` on `sss init`). See
+[Mitigation options for teams](#mitigation-options-for-teams) below.
+
+For the algorithmic spec and the full WARNING callout, see
+[docs/CRYPTOGRAPHY.md#trelis-cryptographic-library-unaudited](./CRYPTOGRAPHY.md#trelis-cryptographic-library-unaudited).
 
 ---
 
@@ -395,6 +499,165 @@ Trelis-specific risk material elsewhere in this document and the algorithmic spe
   WARNING callout and the full algorithmic spec.
 - [docs/CRYPTOGRAPHY.md#classic-vs-hybrid-comparison](./CRYPTOGRAPHY.md#classic-vs-hybrid-comparison)
   — the audit-status row in the comparison table.
+
+---
+
+## Vault Lockfile Integrity
+
+The `.sss.vault.lock` file is the on-disk record of which secret values a repository
+has pinned from HashiCorp Vault (or compatible KV v2 endpoint). This section documents
+the security properties of that file and the threat it is designed to close.
+
+### Keyed Digest: Closing the Offline Oracle
+
+Each lockfile entry records a **keyed BLAKE2b MAC** over the resolved secret value, not
+a bare hash:
+
+```
+digest = blake2b(
+    key     = RepositoryKey,            // the 32-byte per-repo key — never committed
+    message = resolved_value_bytes,
+    personal = b"sss-vault-lock-v"      // frozen 16-byte domain-separation tag
+)
+```
+
+The output is 32 bytes, stored as 64 lowercase hex characters. The implementation is
+`compute_lockfile_digest(key: &RepositoryKey, value: &[u8])` in
+`src/vault/lockfile.rs`, calling `crypto_generichash_blake2b_salt_personal` via
+`libsodium-sys`. See [§ Vault Lockfile Digest (keyed BLAKE2b MAC)](#vault-lockfile-digest-keyed-blake2b-mac) in
+`docs/CRYPTOGRAPHY.md` for the primitive specification.
+
+**Threat closed: offline guess-and-confirm oracle.** If the lockfile instead stored a
+bare `blake2b(value)` — a public, keyless hash — then anyone with read access to the
+committed `.sss.vault.lock` could mount a dictionary attack against low-entropy secrets
+(a dictionary-word API key, a short numeric token, a predictable credential format):
+hash each candidate and compare to the stored value. The lock file would be an offline
+confirmer of guesses, requiring zero Vault access.
+
+Keying the hash with `RepositoryKey` (which is never committed — it lives only in each
+authorised user's `sealed_key` in `.sss.toml`) closes this oracle entirely: the digest
+is indistinguishable from random to anyone who does not hold the repository key. As a
+corollary, two repositories with different `RepositoryKey` values produce different
+digests for the same secret value (verified by the `different_keys_different_digest`
+unit test, VLOCK-03). The BLAKE2b `personal` tag `b"sss-vault-lock-v"` additionally
+domain-separates lockfile MACs from the nonce-derivation BLAKE2b use
+(see [§ Deterministic Nonces](#deterministic-nonces)).
+
+The classic-v1 gate ensures that a `[vault]` block cannot be active on an unsigned v1
+repository — the `RepositoryKey` anchor that the lockfile MAC relies on is protected by
+the envelope signature (see [§ Envelope Signatures (v2)](./CRYPTOGRAPHY.md#envelope-signatures-v2)
+in `docs/CRYPTOGRAPHY.md`).
+
+### Lockfile Schema and No-Plaintext Guarantee
+
+`.sss.vault.lock` is a TOML document with the following top-level fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | `u32` | Schema version (currently `1`) |
+| `personal` | `String` | Human-readable label `"sss-vault-lock-v1"` (17 bytes; effective personal bytes are the first 16 — see CRYPTOGRAPHY.md) |
+| `entries` | TOML table | `BTreeMap<String, VaultLockEntry>` — keyed by canonical ref string |
+
+Each entry in `[entries."binding:path#field"]` contains:
+
+| Sub-field | Type | Description |
+|-----------|------|-------------|
+| `binding` | `String` | KV binding name (e.g. `"kv"`) |
+| `path` | `String` | KV path (e.g. `"secret/app"`) |
+| `field` | `String` | Field name within the KV secret (e.g. `"password"`) |
+| `version` | `u64` | The concrete KV v2 version that was resolved |
+| `digest` | `String` | 64 hex chars — the keyed BLAKE2b MAC of the resolved value |
+
+**No-plaintext guarantee (VLOCK-02):** The lockfile contains **no plaintext secret
+value**. Only the coordinates (`binding`, `path`, `field`, `version`) and the keyed
+digest are written. The digest is safe to commit because it cannot be reversed or used
+to confirm guesses without the `RepositoryKey`. The commands `sss vault verify` and
+`sss vault list` likewise never emit a secret value to stdout or stderr; only
+`sss vault get` (an explicit retrieval command) may.
+
+Entries are stored in `BTreeMap` order (alphabetically by canonical key), producing
+deterministic TOML output for clean git diffs.
+
+The following example shows the TOML shape. All values are placeholders; no real
+secret value or real key ever appears in this file:
+
+```toml
+version = 1
+personal = "sss-vault-lock-v1"
+
+[entries."kv:secret/app#password"]
+binding = "kv"
+path = "secret/app"
+field = "password"
+version = 4
+digest = "a3f1b2c4d5e6..."   # 64 hex chars — keyed MAC; not reversible without RepositoryKey
+```
+
+### @version Pinning and Lockfile Interaction
+
+A `⊳{binding:path#field}` Vault reference resolves to the **latest** KV v2 version by
+default. To pin a specific version, append `@N`:
+
+```
+⊳{kv:secret/app#password@2}    # pin to KV v2 version 2
+⊳{kv:secret/app#password}      # resolve latest; record concrete version in lockfile
+```
+
+When the inline `@version` is **present**, the resolver fetches that specific version
+and records it as-is in the lockfile entry's `version` field (VLOCK-01).
+
+When the inline `@version` is **absent**, the resolver calls the Vault KV v2 `GET`
+endpoint, which returns the current latest version number alongside the secret data.
+The concrete resolved version is then recorded in the lockfile entry — so an unversioned
+reference is still pinned in the lockfile at the version that was current at lock time.
+
+`sss vault verify` re-resolves each reference and compares the resulting version number
+against what is recorded. A mismatch (the secret has been updated in Vault since the
+lock was written) is reported as drift (exit code 2). This makes version drift visible
+before deployment without requiring the caller to hold the `RepositoryKey` — but the
+verify command still authenticates the value via the keyed digest, so a compromised
+Vault response that changes the value without changing the version is also detected.
+
+### All-or-Nothing Persisted-Operation Contract
+
+The following operations are **all-or-nothing at the filesystem level** (VFAIL-03/06):
+
+- `sss vault lock` / `sss vault update` — write or update `.sss.vault.lock`
+- `sss render -o <file>` — render resolved content to a named output file
+- `sss render --in-place` — overwrite the source file with resolved content
+
+**How it works:** Each of these operations resolves all references **entirely in
+memory** first. Only if every reference resolves successfully does the write proceed,
+via an atomic temp-file rename (`NamedTempFile::new_in(parent)` + `persist()`), so
+the on-disk file contains either the complete new state or the original state — never
+a partial / torn result.
+
+**Exit-code contract:**
+
+| Condition | Exit code | What is left on disk |
+|-----------|-----------|----------------------|
+| All references resolved successfully | `0` | New file written atomically |
+| One or more `⊳{}` / `⊲{}` references unresolved (per-ref miss) | `3` | Original file **untouched** |
+| Vault unreachable or auth failure (whole-operation failure) | `4` | Original file **untouched** |
+
+**`--keep-unresolved` flag:** When passed to `sss render`, per-ref miss errors (exit 3)
+are downgraded to exit 0 and unresolved markers are left in the output verbatim. This
+flag never suppresses a whole-operation failure (exit 4 is always fatal to the
+operation). The flag applies to both `⊳{}` Vault references and `⊲{}` secrets-file
+references on the render path.
+
+The `sss vault verify` command uses exit code `2` for drift (a distinct case from a
+per-ref miss) and exits `0` when all recorded digests match the current resolved values.
+
+### Threat Model Rows (Lockfile)
+
+The main [Protects Against](#protects-against) and [Does Not Protect Against](#does-not-protect-against)
+tables cover the overall encryption model. The two rows below address the lockfile-specific threats:
+
+| Threat | Mitigation |
+|--------|-----------|
+| Offline dictionary attack against a committed lockfile (guess-and-confirm oracle) | `RepositoryKey`-keyed BLAKE2b MAC — digest is uninterpretable without the repo key; keying closes the oracle (see § Keyed Digest above) |
+| Partial / torn lockfile or render output written to disk on resolution failure | All-or-nothing atomic temp-rename write; exit 3/4 both leave the target untouched |
 
 ---
 
@@ -713,4 +976,236 @@ The constant-time decision must be revisited when **any** of these become true:
 
 - `src/envelope_sig.rs::verify_envelope` — the per-leg error path under the at-rest threat model.
 - `src/keystore/sig.rs::verify_stored_signature` — same shape for keystore entries; same decision applies.
+
+---
+
+## Agent Policy: Hostname Trust Boundary (Phase 40 / REM-14)
+
+### The hostname field is client-self-reported
+
+The `RequestContext.hostname` field carried in every `sss-agent` IPC request is populated
+client-side from the `SSH_CONNECTION` environment variable (first token), or — if that is
+absent — from `HOSTNAME` or `HOST` (`src/agent/protocol.rs::from_environment`). **The kernel
+does not attest this value.** Any process running as the same UID can set `SSH_CONNECTION`
+to an arbitrary string before invoking `sss`, causing the agent to receive a fabricated
+hostname.
+
+### Host-based policy rules are a convenience filter, not a security boundary
+
+`sss-agent` supports host-based policy rules (e.g., "allow requests from `laptop.local`",
+"block requests from `untrusted.example.com`"). These rules are evaluated against the
+self-reported `hostname` and are therefore **advisory only**. A same-UID process can bypass
+host-based restrictions trivially by spoofing `SSH_CONNECTION`.
+
+Host-based rules remain available as a user-experience convenience — they allow a user to
+express coarse intent ("only allow from my primary machine") without requiring a second
+authentication step. They must not be relied on as a security control.
+
+### The authoritative trust anchor is the OS-verified UID
+
+The binding trust anchor for all agent policy decisions is the **OS-verified UID** obtained
+from `SO_PEERCRED` on Linux or `getpeereid` on macOS/BSD immediately after each connection
+is accepted (added in Phase 40, Plan 01 — REM-09). The kernel attests this UID; a client
+cannot forge it regardless of environment-variable manipulation.
+
+The policy evaluation model is therefore:
+
+| Source | Verified by | Trust level | Used for |
+|--------|-------------|-------------|---------|
+| Peer UID (`SO_PEERCRED` / `getpeereid`) | OS kernel | **Authoritative** | Identity — must match claimed `sss_username` |
+| `hostname` (`SSH_CONNECTION` / `HOSTNAME`) | Client process | Advisory only | Convenience filter — spoofable by same-UID process |
+| `project_path` | Client process | Informational | Logging only — not an authorisation input |
+
+When evaluating security impact, assume that a same-UID process can always present any
+hostname. Only the kernel-attested UID provides meaningful identity assurance.
 - `docs/CRYPTOGRAPHY.md § Hybrid AND-composition signatures` — the semantic spec the runtime preserves; references this constant-time decision by anchor.
+
+## Envelope Signature: First-Match-Wins Signer Policy (REM-26 / CRY-12)
+
+### Policy description
+
+`verify_envelope_signature` (`src/envelope_sig.rs`) iterates `config.users` sorted
+alphabetically by username and accepts the **first** user whose advertised Ed448 and
+ML-DSA-65 signing keys successfully verify the AND-composition envelope signature (see
+`docs/CRYPTOGRAPHY.md §Hybrid AND-composition signatures` and algorithm D-05 in
+`19-PATTERNS.md`).  There is no binding between the signer identity and the operating
+user (the user currently running `sss`).
+
+### Trust-model rationale (accept-with-rationale)
+
+This is an intentional **multi-user-equal-trust** model: any user present in
+`config.users` with valid signing keys may sign any envelope mutation.  The design
+reflects the team-secrets use-case where all current users are mutually trusted
+principals — the ability to sign is conferred by key possession, which is in turn
+conferred by being enrolled in `config.users`.
+
+The key security properties are:
+
+| Property | Status |
+|----------|--------|
+| Only enrolled users can produce a valid signature | Enforced — non-enrolled key cannot verify |
+| Both Ed448 AND ML-DSA-65 legs must verify | Enforced — AND-composition (PQSIG-04) |
+| Signer identity is observable | Enforced — see §Observability below |
+| Signer must be the operating user | Not enforced — deferred (see §Deferred) |
+
+### Sorted iteration and first-match-wins
+
+The sorted iteration (alphabetical by username) provides stable, replayable behaviour
+and deterministic error messages.  The first-match-wins rule is intentional: once a
+valid signer is found, further iteration is unnecessary and the function returns `Ok(())`.
+
+This means:
+
+- If multiple users hold signing keys that could all verify the same envelope (because
+  the payload reflects their shared `.sss.toml`), the alphabetically-first user is
+  credited as the signer for log purposes.
+- A user with no `sig_ed448_public` / `sig_mldsa65_public` fields is skipped silently;
+  this handles legacy users enrolled before hybrid signing was available.
+
+### Observability
+
+When verification succeeds, the resolved signer username is emitted at **debug log
+level** via `log::debug!("envelope signature verified for signer={username}")`.
+This makes the accepted signer identity observable without requiring a logging
+backend.  To observe it in a CLI invocation, set `RUST_LOG=sss=debug` (or
+`RUST_LOG=debug`).
+
+This satisfies the REM-26 observability requirement.  The value is logged, not
+returned, so it does not affect the function's `Result<()>` contract or any caller.
+
+### Current signer trust model (peer-credential binding)
+
+The sss agent enforces a two-step, fail-closed OS-kernel-attested identity binding on
+every accepted Unix-domain socket connection, implemented in `src/agent/peer_cred.rs`.
+
+**Step 1 — kernel uid read (`get_peer_creds`):**
+
+Immediately after accepting the connection, before reading any wire bytes, the agent
+reads the kernel-attested peer uid from the socket:
+
+- **Linux / Android:** `getsockopt(SO_PEERCRED)` — returns uid, gid, and pid in a
+  single syscall.
+- **macOS / iOS:** `getpeereid(fd)` — returns uid and gid; pid is not available.
+- **All other platforms:** returns `Err` immediately — the connection is refused
+  (fail-closed; unsupported platforms cannot authenticate).
+
+Any syscall error (including permission failures) also returns `Err` and refuses the
+connection. The uid is kernel-attested and cannot be forged by the connecting process.
+
+**Step 2 — username resolution and claim check (`enforce_peer_identity`):**
+
+The attested uid is resolved via `User::from_uid` (the system passwd database):
+
+- If the lookup fails (system error), the connection is refused.
+- If the uid has no passwd entry, the connection is refused.
+- If the resolved username does not equal the `sss_username` claimed in the
+  `RequestContext`, the connection is refused.
+
+The net effect is: **the connecting OS user's kernel-verified identity must exactly
+match the claimed `sss_username`**. A process cannot claim a different user's identity
+on the local socket regardless of what it sends over the wire.
+
+`peer_cred.rs` contains **zero `unsafe` blocks** — all syscall access goes through the
+`nix` crate's safe wrappers.
+
+**What this binding does NOT yet cover:** The relationship between the authenticated OS
+user and the *envelope signer* (the `sig_ed448` / `sig_mldsa65` public key in the
+keystore entry) is a separate question — a user whose OS identity is verified may hold
+signing keys enrolled under a different `sss_username`, or multiple users' signing keys
+may all verify the same envelope. That gap (CRY-12) is tracked in the section below.
+
+### Deferred: full signer-identity binding
+
+Binding the accepted signer to the operating user (verifying that the signer username
+matches the user who initiated the operation) is a possible future enhancement.  It is
+tracked but not implemented in this version.  Reasons for deferral:
+
+- The team-secrets threat model (all enrolled users are mutually trusted) does not
+  require per-initiator binding for correctness.
+- Adding binding would require threading the operating username from the CLI layer
+  through `verify_envelope_signature`, which is a larger interface change.
+- The debug log (above) provides sufficient observability for audit purposes in the
+  current trust model.
+
+This decision is recorded as CRY-12 in the audit findings and is accepted for the
+v2.6 milestone.
+
+---
+
+## Accepted Information-Disclosure Boundaries (Phase 43 / PAR-16, PAR-19)
+
+The following two low-severity side channels are **known and accepted** boundaries.
+Neither requires a behavioural change at this time; both are documented here so that
+security reviewers have a complete picture of the information disclosed by error paths.
+
+### `⊠{` Key-Presence Oracle (REM-39 / PAR-19)
+
+When sss processes a file that begins with the `⊠{` ciphertext-marker prefix and no
+repository key has been loaded, the error message is:
+
+```
+Secrets file is encrypted but no repository key provided
+```
+
+When a repository key *is* loaded but the AEAD decryption fails (wrong key, corrupted
+ciphertext), the error message is an AEAD / ciphertext error.
+
+These two error paths are distinguishable. An adversary who can:
+
+1. plant a crafted `⊠{...}` file at the location sss will attempt to load, **and**
+2. observe the resulting error output (local shell session, log stream, etc.)
+
+can infer whether a repository key is currently loaded — a single binary fact (key
+present / key absent). The attacker does not learn the key value or any secret content.
+
+**Disposition: accepted, Low severity.** The attacker must already have filesystem
+write access and the ability to observe error output — a level of access that implies
+substantially stronger attacks are already available. The one-bit oracle provides
+minimal additional leverage.
+
+Future hardening possibility (deferred): unifying the two error paths into a single
+generic error message would eliminate the oracle. This is tracked but not implemented.
+No behavioural change ships with this documentation entry.
+
+### Secrets-File Path Redaction (REM-38 / PAR-16)
+
+By default, sss does not include the secrets-file filesystem path or the configured
+`secrets_filename` / `secrets_suffix` values in its "not found" or search-failure
+error messages. This redaction was implemented in plan 43-02 (`src/secrets.rs`).
+
+The redaction prevents a local log observer from inferring the project's directory
+layout or configured secrets-file naming convention from error output alone.
+
+**Full path detail is available via debug logging.** Setting `RUST_LOG=sss=debug` (or
+`RUST_LOG=debug`) before running sss will cause the searched paths to appear in the
+debug log output, alongside the signer-identity debug already noted in the
+[Observability](#observability) section above. Debug logging is operator-controlled
+and requires a logging backend to be initialised.
+
+**Disposition: accepted, Low severity.** This is a local / log-observer-only boundary.
+An attacker who can read the log stream typically already has enough filesystem access
+to enumerate secrets-file candidates directly. The redaction is a defence-in-depth
+measure, not a primary security control.
+
+### Emacs sss-mode seal-before-flush Window (REM-42 / XCUT-01-001)
+
+When `sss-mode` saves a buffer via `sss--write-contents`, it uses a two-step process:
+step 1 writes the decrypted plaintext to the target file (`write-region`), then step 2
+encrypts it in place (`sss seal --in-place`). Between these two steps the plaintext
+file exists briefly on disk — this is the **seal-before-flush window**.
+
+**Scope:** local filesystem, same directory as the secrets file, sub-second duration.
+An attacker or process with read access to that directory during the window can observe
+the plaintext. Remote attackers and processes without local filesystem read access are
+unaffected. This is structurally identical to the `epa-file.el` pattern (see the
+plaintext-on-disk window discussion in the [Editor Integration](#editor-integration)
+section).
+
+**Mitigation:** the window is minimised by issuing `sss seal --in-place` immediately
+after `write-region` with no intervening I/O. The containing directory should use
+restrictive permissions (mode 0700 or equivalent) so that no other local user or
+process can read the file during the window.
+
+**Disposition: accepted, Low severity.** The window is inherent to the two-step
+model; no behavioural change is warranted at this time. It is documented prominently
+in the `sss--write-contents` docstring in `emacs/sss-mode.el`.

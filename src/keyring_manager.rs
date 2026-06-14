@@ -2,6 +2,7 @@
 use anyhow::{anyhow, Result};
 use keyring::Entry;
 use std::path::Path;
+use zeroize::Zeroizing;
 
 // Temporarily use old config for backwards compatibility
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,7 @@ impl KeyringManager {
         let entry = Entry::new(&self.service_name, user)
             .map_err(|e| anyhow!("Failed to create keyring entry for user '{user}': {e}"))?;
 
-        let key_b64 = key.to_base64();
+        let key_b64: Zeroizing<String> = Zeroizing::new(key.to_base64());
         entry
             .set_password(&key_b64)
             .map_err(|e| anyhow!("Failed to store key in keyring for user '{user}': {e}"))?;
@@ -82,11 +83,14 @@ impl KeyringManager {
         let entry = Entry::new(&self.service_name, user)
             .map_err(|e| anyhow!("Failed to create keyring entry for user '{user}': {e}"))?;
 
-        let key_b64 = entry.get_password().map_err(|e| {
+        // REM-21 / CR-02: wrap the retrieved base64 in Zeroizing so the secret-key
+        // bytes are volatile-overwritten when `key_b64` drops, rather than lingering
+        // in heap pages until the allocator reuses them.
+        let key_b64: Zeroizing<String> = Zeroizing::new(entry.get_password().map_err(|e| {
             anyhow!(
                 "Failed to retrieve key from keyring for user '{user}': {e}"
             )
-        })?;
+        })?);
 
         Key::from_base64(&key_b64)
     }

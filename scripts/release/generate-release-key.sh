@@ -91,8 +91,18 @@ echo
 
 # Generate Ed25519 keypair. PKCS#8 PEM format for the private key
 # (interoperable with sodium, libsodium, signify, age, etc.).
+#
+# REM-44: close the create→chmod permission window by setting umask 0077
+# before openssl genpkey so the private key is born mode 0600 (no other
+# user can read it even in the brief moment before chmod 0600 runs).
+# The prior umask is captured and restored before the public-key write so
+# that the public key is created at the normal umask (explicit chmod 0644
+# below provides the required final permission regardless).
+OLD_UMASK=$(umask)
+umask 0077                                   # private key born 0600
 openssl genpkey -algorithm ED25519 -out "$PRIV"
-chmod 0600 "$PRIV"
+chmod 0600 "$PRIV"                           # defence-in-depth (keep)
+umask "$OLD_UMASK"                           # restore before pubkey write
 
 # Extract the public key
 openssl pkey -in "$PRIV" -pubout -out "$PUB.tmp"

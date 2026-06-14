@@ -182,8 +182,10 @@ pub fn handle_migrate(main_matches: &ArgMatches, matches: &ArgMatches) -> Result
             }
         }
         config.format_version = 2;
+        // Sign under the context matching config.format_version (=2): migrate keeps the
+        // repo at fv=2 (no force-bump to v3) and signs/verifies under the v2 context (VSIG-01).
         let payload = crate::envelope_sig::build_envelope_payload(&config);
-        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload, config.format_version)?;
         config
             .envelope
             .get_or_insert_with(crate::project::EnvelopeMeta::default)

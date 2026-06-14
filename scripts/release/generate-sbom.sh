@@ -5,18 +5,22 @@
 # so the dep tree per release artefact is explicit and tooling-ingestible
 # (e.g. dependency-track, grype, syft can read CycloneDX 1.4+).
 #
-# Matrix (per .planning/REQUIREMENTS.md BUILD-03):
+# Matrix (per .planning/REQUIREMENTS.md BUILD-03 + Phase 47 VNET-05):
 #   platforms:    linux-x86_64, linux-aarch64, macos-arm64
-#   feature arms: default (classic crypto only), hybrid (classic + PQ X448 + ML-DSA-65)
-#   = 6 SBOM files in dist/sbom/
+#   feature arms: default (classic crypto only), hybrid (classic + PQ X448 + ML-DSA-65),
+#                 vault (Vault secret resolver — ureq+rustls+ring, no tokio)
+#   = 9 SBOM files in dist/sbom/
 #
 # Naming:  sss-<platform>-<arm>.cdx.json
 #   sss-linux-x86_64-default.cdx.json
 #   sss-linux-x86_64-hybrid.cdx.json
+#   sss-linux-x86_64-vault.cdx.json
 #   sss-linux-aarch64-default.cdx.json
 #   sss-linux-aarch64-hybrid.cdx.json
+#   sss-linux-aarch64-vault.cdx.json
 #   sss-macos-arm64-default.cdx.json
 #   sss-macos-arm64-hybrid.cdx.json
+#   sss-macos-arm64-vault.cdx.json
 #
 # Notes:
 #   - cargo-cyclonedx 0.5.9+ is the toolchain pin per REQUIREMENTS.md BUILD-03.
@@ -56,13 +60,22 @@ OUTPUT_DIR="dist/sbom"
 mkdir -p "$OUTPUT_DIR"
 
 # Matrix definition. Each (platform, target, features) tuple produces one SBOM.
+#
+# Phase 47 / VNET-05 / T-47-SC4: vault arm added so the vault dep surface
+# (ureq 3.3.0, rustls 0.23.40, ring 0.17.14, rustls-webpki 0.103.13, and 8
+# transitive crates) is enumerated in release artefacts. vault is a blocking
+# HTTP client for HashiCorp Vault; it does NOT pull tokio. The 3 vault SBOMs
+# are: linux-x86_64-vault, linux-aarch64-vault, macos-arm64-vault.
 declare -a CELLS=(
     "linux-x86_64:x86_64-unknown-linux-gnu:default:"
     "linux-x86_64:x86_64-unknown-linux-gnu:hybrid:hybrid"
+    "linux-x86_64:x86_64-unknown-linux-gnu:vault:vault"
     "linux-aarch64:aarch64-unknown-linux-gnu:default:"
     "linux-aarch64:aarch64-unknown-linux-gnu:hybrid:hybrid"
+    "linux-aarch64:aarch64-unknown-linux-gnu:vault:vault"
     "macos-arm64:aarch64-apple-darwin:default:"
     "macos-arm64:aarch64-apple-darwin:hybrid:hybrid"
+    "macos-arm64:aarch64-apple-darwin:vault:vault"
 )
 
 echo "==> Generating $((${#CELLS[@]})) CycloneDX SBOM files in $OUTPUT_DIR/"

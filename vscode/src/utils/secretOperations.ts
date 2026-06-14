@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import { promptForNonEmptyInput, showInfo } from './uiHelpers';
 
 /**
@@ -32,9 +31,23 @@ export async function addSecretToFile(secretsFilePath: string): Promise<string |
         return null;
     }
 
-    // Append to secrets file
+    // Append to secrets file via the document-edit API (routes through the
+    // VS Code dirty-buffer lifecycle and fires onWillSaveTextDocument).
     const secretLine = `${secretName}: ${secretValue}\n`;
-    fs.appendFileSync(secretsFilePath, secretLine);
+    const uri = vscode.Uri.file(secretsFilePath);
+
+    const doc = await vscode.workspace.openTextDocument(uri);
+
+    const edit = new vscode.WorkspaceEdit();
+    const endPos = doc.lineAt(doc.lineCount - 1).range.end;
+    edit.insert(uri, endPos, secretLine);
+    const applied = await vscode.workspace.applyEdit(edit);
+    if (!applied) {
+        vscode.window.showErrorMessage(`Failed to add secret "${secretName}"`);
+        return null;
+    }
+
+    await doc.save();
 
     showInfo(`Added secret "${secretName}" to secrets file`);
     return secretName;

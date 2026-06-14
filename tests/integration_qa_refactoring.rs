@@ -63,12 +63,14 @@ fn test_unified_interpolation_with_std_ops() -> Result<()> {
 
     // Test interpolation
     let mut cache = SecretsCache::new();
+    // keep_unresolved=true: integration test uses seal/open semantics.
     let result = interpolate_secrets(
         content_with_markers,
         &test_file,
         project_root,
         &mut cache,
         &StdFileSystemOps,
+        true,
     )?;
 
     assert_eq!(result, "api: secret_key_123\ndb: secure_pass\n");
@@ -176,12 +178,14 @@ fn test_interpolation_multiple_secrets() -> Result<()> {
     let content = "host=⊲{db_host}\nport=<{db_port}\ndb=⊲{db_name}\nuser=<{db_user}\n";
 
     let mut cache = SecretsCache::new();
+    // keep_unresolved=true: integration test uses seal/open semantics.
     let result = interpolate_secrets(
         content,
         &test_file,
         project_root,
         &mut cache,
         &StdFileSystemOps,
+        true,
     )?;
 
     assert_eq!(
@@ -208,12 +212,14 @@ fn test_interpolation_missing_secret() -> Result<()> {
     let content = "key=⊲{nonexistent_secret}\n";
 
     let mut cache = SecretsCache::new();
+    // keep_unresolved=true: seal/open semantics — missing secret preserved, no error.
     let result = interpolate_secrets(
         content,
         &test_file,
         project_root,
         &mut cache,
         &StdFileSystemOps,
+        true,
     )?;
 
     // Should preserve the original marker when secret not found (with warning)
@@ -297,12 +303,14 @@ fn test_both_interpolation_marker_syntaxes() -> Result<()> {
     let content = "first: ⊲{key1}\nsecond: <{key2}\n";
 
     let mut cache = SecretsCache::new();
+    // keep_unresolved=true: integration test uses seal/open semantics.
     let result = interpolate_secrets(
         content,
         &test_file,
         project_root,
         &mut cache,
         &StdFileSystemOps,
+        true,
     )?;
 
     assert_eq!(result, "first: value1\nsecond: value2\n");

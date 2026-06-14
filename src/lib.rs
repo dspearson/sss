@@ -158,6 +158,18 @@ pub mod config_manager;
 
 pub mod constants;
 
+/// Vault integration — offline grammar, reference parser, and (Phase 47+) resolution.
+///
+/// This module is NOT feature-gated: the `⊳{}` marker constants, the interpolation
+/// regex, and `parse_vault_reference` must compile in every build so that peers
+/// without `--features vault` can recognise and preserve vault reference markers
+/// byte-for-byte through `seal` and `open` (R4 / VREF-01).
+///
+/// Currently provides: `VAULT_INTERPOLATION_REGEX`, `VaultReference`,
+/// `VaultRefError`, `parse_vault_reference`, and `interpolate_vault_refs`
+/// (identity stub in Phase 46; wired in Phase 47).
+pub mod vault;
+
 /// Cryptographic primitives — Classic (libsodium-backed) and Hybrid
 /// post-quantum suites; FFI surface fully audited under HARDEN-03 (see
 /// `08-03-SUMMARY.md`).

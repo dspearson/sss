@@ -9,8 +9,11 @@ use std::cell::RefCell;
 #[cfg(feature = "ninep")]
 use parking_lot::RwLock;
 
-use crate::constants::{MAX_FILE_SIZE, MAX_MARKER_CONTENT_SIZE};
-use crate::crypto::{decrypt_from_base64, encrypt_to_base64, encrypt_to_base64_deterministic, RepositoryKey};
+use crate::constants::{MARKER_VAULT_ASCII, MARKER_VAULT_UTF8, MAX_FILE_SIZE, MAX_MARKER_CONTENT_SIZE};
+use crate::crypto::{
+    decrypt_from_base64, decrypt_from_base64_with_context, encrypt_to_base64_deterministic,
+    RepositoryKey,
+};
 use crate::secrets::{interpolate_secrets, SecretsCache, StdFileSystemOps};
 
 // Marker match structure for brace-counting parser
@@ -269,12 +272,24 @@ fn find_ciphertext_markers(content: &str) -> Vec<MarkerMatch> {
     find_balanced_markers(content, &["⊠"])
 }
 
-/// Classify a prefix as plaintext or ciphertext marker type.
+/// Classify a prefix as plaintext, ciphertext, or vault marker type.
+///
+/// `Vault` is a third kind — vault markers are NEITHER encrypt targets (plaintext)
+/// NOR decrypt targets (ciphertext).  Adding them to the scan-all list lets the
+/// scanner know they exist, while this classification ensures they route to the
+/// `(false, false) => Ok(content)` pass-through arm of `process_content_with_path`
+/// rather than accidentally triggering encrypt or decrypt.  (T-46-01 / VREF-03)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MarkerKind { Plaintext, Ciphertext }
+enum MarkerKind { Plaintext, Ciphertext, Vault }
 
 fn classify_prefix(prefix: &str) -> MarkerKind {
-    if prefix == "⊠" { MarkerKind::Ciphertext } else { MarkerKind::Plaintext }
+    if prefix == "⊠" {
+        MarkerKind::Ciphertext
+    } else if prefix == MARKER_VAULT_UTF8 || prefix == MARKER_VAULT_ASCII {
+        MarkerKind::Vault
+    } else {
+        MarkerKind::Plaintext
+    }
 }
 
 /// Normalize ASCII secrets markers to UTF-8 style
@@ -285,6 +300,27 @@ fn classify_prefix(prefix: &str) -> MarkerKind {
 fn normalize_secrets_markers(content: &str) -> std::borrow::Cow<'_, str> {
     if content.contains("<{") {
         std::borrow::Cow::Owned(content.replace("<{", "⊲{"))
+    } else {
+        std::borrow::Cow::Borrowed(content)
+    }
+}
+
+/// Normalise the vault ASCII alias `>{` to the Unicode preferred form `⊳{` on
+/// the seal/encrypt path.
+///
+/// This is the exact mirror of `normalize_secrets_markers` (which rewrites `<{`
+/// to `⊲{`) applied to the vault alias pair.  Both normalisations happen on the
+/// same pass inside `encrypt_content_with_path`; neither fires on the open/decrypt
+/// path, preserving `>{}` verbatim there (VREF-05).
+///
+/// Fast-path: if content contains no `>{\u{0000}` sequences (the common case) this
+/// returns a `Cow::Borrowed` referencing the original slice with zero allocation.
+fn normalize_vault_markers(content: &str) -> std::borrow::Cow<'_, str> {
+    // ">{" is the two-byte sequence that opens a vault ASCII alias marker.
+    // We only replace ">{" (brace immediately follows >) to avoid rewriting
+    // standalone ">"-characters that are not vault markers.
+    if content.contains(">{") {
+        std::borrow::Cow::Owned(content.replace(">{", "⊳{"))
     } else {
         std::borrow::Cow::Borrowed(content)
     }
@@ -301,6 +337,20 @@ pub struct Processor {
     secrets_cache: CacheWrapper<SecretsCache>,
     project_root: Option<PathBuf>,
     project_created: String,
+    /// Vault resolver configuration (feature = "vault").
+    ///
+    /// When `Some`, `decrypt_to_raw_with_path` runs the `⊳{}` resolution pass
+    /// (VFAIL-01/02).  `None` keeps pre-47 behaviour: markers pass through
+    /// unchanged.  The field is always `None` when the `vault` feature is off.
+    #[cfg(feature = "vault")]
+    vault_config: Option<crate::project::VaultConfig>,
+    /// When `true`, a per-reference miss (`⊲{}` or `⊳{}`) returns `Ok` with the
+    /// marker preserved verbatim (exit 0, `--keep-unresolved` semantics, VFAIL-04).
+    /// When `false` (the default), any miss is collected and reported as exit 3.
+    ///
+    /// `WholeOperation` failures are NEVER downgraded regardless of this flag
+    /// (T-48-12 contract).
+    keep_unresolved: bool,
 }
 
 impl Processor {
@@ -350,7 +400,7 @@ impl Processor {
 
     /// Convert an absolute path to a relative path from the project root
     /// Returns a path in the form "./dir/file.txt"
-    fn make_relative_path(&self, path: &Path) -> Result<String> {
+    pub(crate) fn make_relative_path(&self, path: &Path) -> Result<String> {
         let Some(ref project_root) = self.project_root else {
             return Ok(path.to_string_lossy().to_string());
         };
@@ -369,6 +419,11 @@ impl Processor {
     }
 
     /// Interpolate secrets: replace ⊲{secret} or <{secret} with values from secrets file
+    ///
+    /// Threads `self.keep_unresolved` into `interpolate_secrets` so the render path
+    /// (`keep_unresolved=false`, the default) routes misses to exit 3, while seal/open
+    /// and FUSE mount callers pass `keep_unresolved=true` directly to the free function
+    /// and do NOT go through this wrapper (their behaviour is byte-for-byte unchanged).
     fn interpolate_secrets(&self, content: &str, file_path: &Path) -> Result<String> {
         // If no project root is set, try to find it
         let project_root = if let Some(ref root) = self.project_root {
@@ -387,6 +442,7 @@ impl Processor {
                 &project_root,
                 &mut secrets_cache,
                 &StdFileSystemOps,
+                self.keep_unresolved,
             )
         }
         #[cfg(feature = "ninep")]
@@ -398,6 +454,7 @@ impl Processor {
                 &project_root,
                 &mut *secrets_cache,
                 &StdFileSystemOps,
+                self.keep_unresolved,
             )
         }
     }
@@ -434,6 +491,9 @@ impl Processor {
             repository_key,
             project_root: None,
             project_created: String::new(), // Will be set later if needed
+            #[cfg(feature = "vault")]
+            vault_config: None,
+            keep_unresolved: false,
         })
     }
 
@@ -485,6 +545,9 @@ impl Processor {
             repository_key,
             project_root: Some(project_root),
             project_created,
+            #[cfg(feature = "vault")]
+            vault_config: None,
+            keep_unresolved: false,
         })
     }
 
@@ -528,6 +591,9 @@ impl Processor {
             repository_key,
             project_root: Some(project_root),
             project_created: String::new(), // Will be set later if needed
+            #[cfg(feature = "vault")]
+            vault_config: None,
+            keep_unresolved: false,
         })
     }
 
@@ -539,6 +605,31 @@ impl Processor {
     /// Set the project root for secrets lookup
     pub fn set_project_root(&mut self, project_root: PathBuf) {
         self.project_root = Some(project_root);
+    }
+
+    /// Attach a `VaultConfig` so that `decrypt_to_raw_with_path` resolves `⊳{}`
+    /// markers (feature = "vault").
+    ///
+    /// When the vault feature is enabled, call this on the `Processor` before any
+    /// render operation.  Leave it unset (the default `None`) to keep pre-Phase-47
+    /// behaviour: `⊳{}` markers are preserved verbatim.
+    #[cfg(feature = "vault")]
+    pub fn set_vault_config(&mut self, config: crate::project::VaultConfig) {
+        self.vault_config = Some(config);
+    }
+
+    /// Set the `--keep-unresolved` flag (VFAIL-04).
+    ///
+    /// When `true`, a per-reference miss (`⊲{}` or `⊳{}`) returns `Ok` with the
+    /// marker left verbatim — exit 0.  When `false` (the default), any miss is
+    /// collected and routed to exit 3 at the command boundary.
+    ///
+    /// `WholeOperation` failures are NEVER downgraded regardless of this flag.
+    ///
+    /// Mirrors the pattern of [`set_vault_config`][Self::set_vault_config] —
+    /// least-invasive single setter, no constructor churn.
+    pub fn set_keep_unresolved(&mut self, v: bool) {
+        self.keep_unresolved = v;
     }
 
     /// Check if a file is a secrets file (ends with .secrets extension or named "secrets")
@@ -572,18 +663,21 @@ impl Processor {
             return Ok(format!("{trimmed}\n"));
         }
 
-        // Not encrypted yet, encrypt the content with deterministic nonce
-        let encrypted = if self.project_created.is_empty() {
-            // Fall back to random nonce if no project context
-            encrypt_to_base64(content, &self.repository_key)?
-        } else {
-            encrypt_to_base64_deterministic(
-                content,
-                &self.repository_key,
-                &self.project_created,
-                file_path,
-            )?
-        };
+        // Not encrypted yet, encrypt the content with deterministic nonce.
+        // A project timestamp is mandatory for deterministic sealing — a missing
+        // timestamp would silently produce a random-nonce ciphertext that violates
+        // the clean-diff invariant (REM-25/CRY-06).
+        if self.project_created.is_empty() {
+            return Err(anyhow!(
+                "cannot seal: no project timestamp available — run `sss init` to initialise a project first"
+            ));
+        }
+        let encrypted = encrypt_to_base64_deterministic(
+            content,
+            &self.repository_key,
+            &self.project_created,
+            file_path,
+        )?;
         // Add trailing newline for POSIX compliance
         Ok(format!("⊠{{{encrypted}}}\n"))
     }
@@ -615,19 +709,41 @@ impl Processor {
             };
             self.encrypt_secrets_file_content(content, &relative_path)
         } else {
-            // For regular files, encrypt markers with deterministic nonces
-            self.encrypt_content_with_path(content, file_path.to_str().unwrap_or("<path>"))
+            // For regular files, encrypt markers with deterministic nonces.
+            // Use make_relative_path (same canonical form used by reencrypt_single_file
+            // and open_content_with_path) so nonce derivation is consistent across
+            // seal → open → rotate → open.  Fall back to raw path when project_root
+            // is absent or the path cannot be canonicalized (e.g. the file does not
+            // yet exist on disk).
+            let path_str = if file_path.exists() {
+                self.make_relative_path(file_path)
+                    .unwrap_or_else(|_| file_path.to_string_lossy().into_owned())
+            } else {
+                file_path
+                    .to_str()
+                    .unwrap_or("<path>")
+                    .to_string()
+            };
+            self.encrypt_content_with_path(content, &path_str)
         }
     }
 
     /// Explicitly open (decrypt) content - used by open command
     pub fn open_content_with_path(&self, content: &str, file_path: &Path) -> Result<String> {
         if Self::is_secrets_file(file_path) {
-            // For .secrets files, decrypt entire content
+            // For .secrets files, decrypt entire content (exempt from REM-22 nonce check)
             self.decrypt_secrets_file_content(content)
         } else {
-            // For regular files, decrypt markers
-            self.decrypt_content(content)
+            // For regular files, decrypt markers with nonce-lineage check (REM-22).
+            // Use make_relative_path to get the same path form used at seal time
+            // (reencrypt_single_file seals with make_relative_path; we must open with
+            // the identical string so the re-derived nonce matches).  Fall back to
+            // to_string_lossy() when project_root is absent or canonicalize fails
+            // (e.g. ephemeral test paths that do not exist on disk).
+            let path_str = self
+                .make_relative_path(file_path)
+                .unwrap_or_else(|_| file_path.to_string_lossy().into_owned());
+            self.decrypt_content_with_path(content, &path_str)
         }
     }
 
@@ -691,14 +807,24 @@ impl Processor {
         //
         // Optimisation: scan content once for all marker prefixes and partition
         // the results by kind, avoiding a separate second full scan.
-        let all_markers =
-            find_balanced_markers_with_prefix(content, &["o+", "⊕", "⊠"]);
+        //
+        // Vault markers (⊳ / >) are included in the scan so the scanner is aware
+        // of them, but classify_prefix returns MarkerKind::Vault for those prefixes,
+        // so they contribute to NEITHER has_plaintext NOR has_ciphertext.  A vault-
+        // only file therefore routes to the (false, false) pass-through arm and is
+        // returned unchanged.  A file mixing ⊳{} with ⊠{} ciphertext routes to the
+        // decrypt arm without hitting the (true,true) both-markers error (T-46-01).
+        let all_markers = find_balanced_markers_with_prefix(
+            content,
+            &["o+", "⊕", "⊠", MARKER_VAULT_UTF8, MARKER_VAULT_ASCII],
+        );
         let has_plaintext = all_markers.iter().any(|(p, _)| classify_prefix(p) == MarkerKind::Plaintext);
         let has_ciphertext = all_markers.iter().any(|(p, _)| classify_prefix(p) == MarkerKind::Ciphertext);
 
         match (has_plaintext, has_ciphertext) {
             (true, false) => self.encrypt_content_with_path(content, file_path),
-            (false, true) => self.decrypt_content(content),
+            // REM-22: route through nonce-lineage check using the file_path already in scope.
+            (false, true) => self.decrypt_content_with_path(content, file_path),
             (true, true) => Err(anyhow!(
                 "File contains both plaintext and ciphertext markers. Please process separately."
             )),
@@ -715,10 +841,27 @@ impl Processor {
         // Fast-path: if content has no "<{" (common case), this borrows without allocating.
         let normalized_content = normalize_secrets_markers(content);
 
+        // Normalise vault ASCII alias >{ to the Unicode preferred form ⊳{.
+        // This mirrors exactly how normalize_secrets_markers handles <{ → ⊲{: same
+        // pass, same seal/encrypt path, no normalisation on open/decrypt (VREF-05).
+        // Chain: borrow from secrets-normalised Cow → vault-normalise → owned String
+        // so the final variable owns the (possibly doubly-normalised) content.
+        let normalized_content: String = normalize_vault_markers(&normalized_content).into_owned();
+
         let markers = find_plaintext_markers(&normalized_content);
 
         if markers.is_empty() {
-            return Ok(normalized_content.into_owned());
+            return Ok(normalized_content);
+        }
+
+        // A project timestamp is mandatory for deterministic sealing — a missing
+        // timestamp would silently produce a random-nonce ciphertext that violates
+        // the clean-diff invariant (REM-25/CRY-06). Guard once before the loop so
+        // the loop body can call encrypt_to_base64_deterministic unconditionally.
+        if self.project_created.is_empty() {
+            return Err(anyhow!(
+                "cannot seal: no project timestamp available — run `sss init` to initialise a project first"
+            ));
         }
 
         let mut result = String::with_capacity(normalized_content.len());
@@ -730,16 +873,12 @@ impl Processor {
 
             // Inline marker encryption directly into result to avoid intermediate String.
             if self.check_marker_size(&marker.content, "Plaintext") {
-                let encrypted_result = if self.project_created.is_empty() {
-                    encrypt_to_base64(&marker.content, &self.repository_key)
-                } else {
-                    encrypt_to_base64_deterministic(
-                        &marker.content,
-                        &self.repository_key,
-                        &self.project_created,
-                        file_path,
-                    )
-                };
+                let encrypted_result = encrypt_to_base64_deterministic(
+                    &marker.content,
+                    &self.repository_key,
+                    &self.project_created,
+                    file_path,
+                );
                 match encrypted_result {
                     Ok(encrypted) => {
                         // Push sealed marker directly into result — no intermediate String
@@ -808,6 +947,76 @@ impl Processor {
         Ok(result)
     }
 
+    /// Decrypt ciphertext markers and verify nonce lineage for each (REM-22).
+    ///
+    /// Mirrors `decrypt_content` exactly in marker handling, error formatting, and
+    /// empty-markers fast-path, but routes each per-marker decrypt through
+    /// `decrypt_from_base64_with_context` instead of the bare `decrypt_with_repository_key`.
+    ///
+    /// The `file_path` must be the same relative-path string that was passed to
+    /// `encrypt_to_base64_deterministic` at seal time (via `encrypt_content_with_path` /
+    /// `seal_content_with_path`) — typically the `make_relative_path` result (`./dir/file`).
+    ///
+    /// **Defensive fallback:** if `self.project_created` is empty (a context-free
+    /// `Processor::new()` instance reading legacy content), the method falls back to
+    /// plain `decrypt_content`. After REM-25 this branch is unreachable on any real
+    /// project read because the seal side enforces a non-empty timestamp, but the
+    /// fallback prevents a double error on pre-REM-25 files read by a context-free
+    /// processor (e.g., unit tests that construct bare `Processor::new()`).
+    pub fn decrypt_content_with_path(&self, content: &str, file_path: &str) -> Result<String> {
+        if self.project_created.is_empty() {
+            // No project context — fall back to plain decrypt (no nonce-lineage check).
+            // This branch is unreachable on a real project after REM-25; it exists only
+            // to avoid a double-error for context-free processors reading legacy content.
+            return self.decrypt_content(content);
+        }
+
+        let markers = find_ciphertext_markers(content);
+
+        if markers.is_empty() {
+            return Ok(content.to_string());
+        }
+
+        let mut result = String::with_capacity(content.len());
+        let mut last_end = 0;
+
+        for marker in markers {
+            result.push_str(&content[last_end..marker.start]);
+
+            if self.check_marker_size(&marker.content, "Ciphertext") {
+                match decrypt_from_base64_with_context(
+                    &marker.content,
+                    &self.repository_key,
+                    &self.project_created,
+                    file_path,
+                ) {
+                    Ok(decrypted) => {
+                        result.push_str(&format_marker("⊕", &decrypted));
+                    }
+                    Err(e) => {
+                        // Nonce-lineage mismatch indicates a ciphertext swap — propagate
+                        // as a hard error rather than silently leaving the ciphertext in
+                        // place. Any other decrypt failure (wrong key, corrupt data) is
+                        // logged as a warning and the original marker is preserved.
+                        let emsg = e.to_string();
+                        if emsg.contains("nonce lineage mismatch") {
+                            return Err(e);
+                        }
+                        let original = &content[marker.start..marker.end];
+                        result.push_str(&self.handle_decrypt_error(&e, original, ""));
+                    }
+                }
+            } else {
+                result.push_str(&content[marker.start..marker.end]);
+            }
+
+            last_end = marker.end;
+        }
+
+        result.push_str(&content[last_end..]);
+        Ok(result)
+    }
+
     pub fn prepare_for_editing(&self, content: &str) -> Result<String> {
         let markers = find_ciphertext_markers(content);
 
@@ -849,6 +1058,17 @@ impl Processor {
 
     pub fn finalise_after_editing(&self, content: &str) -> Result<String> {
         self.encrypt_content(content)
+    }
+
+    /// Finalise after editing, binding the re-encrypted ciphertext to `file_path`.
+    ///
+    /// Uses `encrypt_content_with_path` so the nonce is derived from the real relative
+    /// file path rather than the pseudo-path `"<content>"`.  This is the correct variant
+    /// for the `process --edit` and `edit` dispatchers (CR-01 fix: the sealed file can
+    /// then be opened by `open_content_with_path` with the same path without a
+    /// nonce-lineage mismatch).
+    pub fn finalise_after_editing_with_path(&self, content: &str, file_path: &str) -> Result<String> {
+        self.encrypt_content_with_path(content, file_path)
     }
 
     pub fn decrypt_to_raw(&self, content: &str) -> Result<String> {
@@ -902,12 +1122,115 @@ impl Processor {
     }
 
     /// Decrypt to raw text with secrets interpolation
+    ///
+    /// With the `vault` feature ON and a `VaultConfig` attached via
+    /// [`Self::set_vault_config`], this also resolves every `⊳{}` marker in the
+    /// content AFTER `interpolate_secrets` and BEFORE the final AEAD-decrypt pass.
+    ///
+    /// # Errors
+    ///
+    /// On a per-reference miss the error downcasts to
+    /// `crate::vault::VaultResolveError::MultiReferenceMiss` (command layer maps to
+    /// exit 3 — markers are preserved verbatim, no output is written).
+    /// On a whole-operation failure it downcasts to
+    /// `crate::vault::VaultResolveError::WholeOperation` (command layer maps to exit 4).
+    /// All other errors are standard `anyhow::Error`.
     pub fn decrypt_to_raw_with_path(&self, content: &str, file_path: &Path) -> Result<String> {
         // First, interpolate secrets (replace ⊲{secret}> with values from .secrets files)
         let content = self.interpolate_secrets(content, file_path)?;
 
-        // Then decrypt to raw (remove all markers)
+        // Vault reference resolution pass (feature = "vault"):
+        // After secrets-interpolation, before the AEAD decrypt pass.
+        // Only fires when a VaultConfig is attached AND the content contains a
+        // potential vault marker (cheap byte-scan guard so non-vault files pay nothing).
+        #[cfg(feature = "vault")]
+        let content = self.resolve_vault_refs_if_configured(content, file_path)?;
+
+        // Then decrypt to raw (remove all AEAD markers)
         self.decrypt_to_raw(&content)
+    }
+
+    /// Vault interpolation pass — called from `decrypt_to_raw_with_path` when
+    /// the `vault` feature is ON.  Extracted to its own method to keep
+    /// `decrypt_to_raw_with_path` at a manageable line count (clippy
+    /// `too_many_lines`).
+    ///
+    /// Returns the content unchanged (same allocation) when no vault config is
+    /// attached or the content contains no `⊳` / `>` marker.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `VaultResolveError` (as `anyhow::Error`) so the command layer
+    /// can downcast and map to exit 3 (per-reference miss) or exit 4
+    /// (whole-operation failure).
+    #[cfg(feature = "vault")]
+    fn resolve_vault_refs_if_configured(
+        &self,
+        content: String,
+        file_path: &Path,
+    ) -> Result<String> {
+        use crate::vault::resolver::{
+            interpolate_vault_refs_resolved, InterpolationOutcome, VaultRequestCache,
+            VaultResolveError, VaultResolver, VAULT_INTERPOLATION_REGEX,
+        };
+
+        let Some(vault_cfg) = self.vault_config.as_ref() else {
+            return Ok(content); // No vault config — preserve markers verbatim.
+        };
+
+        // Cheap guard: only enter the resolver when a vault marker is present.
+        if !VAULT_INTERPOLATION_REGEX.is_match(&content) {
+            return Ok(content);
+        }
+
+        let project_root = if let Some(ref root) = self.project_root {
+            root.clone()
+        } else {
+            crate::config::find_project_root()?
+        };
+
+        let secrets_cache = self.get_secrets_cache();
+
+        // Build resolver; constructor failures are whole-operation (exit 4).
+        let resolver = VaultResolver::new(vault_cfg, secrets_cache, file_path, &project_root)
+            .map_err(anyhow::Error::new)?;
+
+        let mut cache = VaultRequestCache::new();
+        let outcome = interpolate_vault_refs_resolved(&content, &resolver, &mut cache)
+            .map_err(anyhow::Error::new)?;
+
+        let InterpolationOutcome {
+            content: rendered,
+            unresolved,
+        } = outcome;
+
+        // Per-reference misses: the resolver preserved each bad marker verbatim in
+        // `rendered`.
+        //
+        // VFAIL-04: when `keep_unresolved` is true, a per-ref miss downgrades to
+        // exit 0 with the marker left in place (--keep-unresolved semantics).
+        // When false (the default), return a typed error so the command layer can
+        // (a) print the unresolved-references report to stderr and (b) exit 3
+        // without writing ANY output (all-or-nothing VREF-02 / T-47-12 contract).
+        //
+        // T-48-12: `WholeOperation` failures are NEVER downgraded — only the
+        // per-ref-miss branch is gated by `keep_unresolved`. The `map_err` above
+        // for `interpolate_vault_refs_resolved` already propagates WholeOperation
+        // via `?` unconditionally.
+        if !unresolved.is_empty() {
+            if self.keep_unresolved {
+                // Opt-in: leave markers verbatim, return Ok (exit 0).
+                return Ok(rendered);
+            }
+            return Err(anyhow::Error::new(VaultResolveError::MultiReferenceMiss {
+                references: unresolved,
+                // Carry the partially-resolved content for the command-layer report
+                // only — it is NEVER written to an output file.
+                partial: rendered,
+            }));
+        }
+
+        Ok(rendered)
     }
 
     /// Re-encrypt content from one repository key to another
@@ -918,6 +1241,28 @@ impl Processor {
 
         // Then encrypt with new key (self)
         self.encrypt_content(&decrypted)
+    }
+
+    /// Re-encrypt content from old key to new key, preserving nonce-lineage binding.
+    ///
+    /// Unlike `reencrypt_content` (which uses a path-free context `"<content>"`),
+    /// this method threads `file_path` through both the old decrypt and new encrypt
+    /// steps, so the re-encrypted ciphertext can be opened with the same path
+    /// under the new processor without triggering a nonce-lineage mismatch.
+    ///
+    /// Use this when the caller holds a real relative file path (e.g., during rotation).
+    pub fn reencrypt_content_with_path(
+        &self,
+        content: &str,
+        old_processor: &Processor,
+        file_path: &str,
+    ) -> Result<String> {
+        // Decrypt old ciphertext using the nonce-lineage check for the given path.
+        // If the old processor has no project context, falls back to bare decrypt.
+        let decrypted = old_processor.decrypt_content_with_path(content, file_path)?;
+
+        // Re-encrypt with new key, binding the new ciphertext to the same path.
+        self.encrypt_content_with_path(&decrypted, file_path)
     }
 
     /// Batch re-encrypt multiple files with progress reporting
@@ -1252,9 +1597,13 @@ mod tests {
         // Create a test file
         let test_file = project_root.join("config.txt");
 
-        // Create processor with project root
+        // Create processor with project root and a project timestamp (required for seal)
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, project_root.to_path_buf()).unwrap();
+        let processor = Processor::new_with_context(
+            key,
+            project_root.to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         // First create content with a plaintext marker and secrets interpolation marker
         let content_with_plaintext = "User: o+{myuser} at ⊲{host}";
@@ -1275,7 +1624,7 @@ mod tests {
     }
 
     #[test]
-    fn test_secrets_interpolation_missing_secret() {
+    fn test_secrets_interpolation_missing_secret_keep_unresolved() {
         use tempfile::tempdir;
 
         let temp_dir = tempdir().unwrap();
@@ -1288,9 +1637,13 @@ mod tests {
         // Create a test file
         let test_file = project_root.join("config.txt");
 
-        // Create processor with project root
+        // Create processor with project root, opt into keep_unresolved so that a
+        // missing ⊲{} reference does NOT produce an exit-3 error (VFAIL-05).
+        // This is the seal/open call-site contract: missing refs are preserved.
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, project_root.to_path_buf()).unwrap();
+        let mut processor =
+            Processor::new_with_project_root(key, project_root.to_path_buf()).unwrap();
+        processor.set_keep_unresolved(true);
 
         // Test with missing secret during render - should leave marker unchanged
         let content = "Known: ⊲{known_key} Unknown: ⊲{missing_key}";
@@ -1303,6 +1656,41 @@ mod tests {
     }
 
     #[test]
+    fn test_secrets_interpolation_missing_secret_keep_false_errors() {
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let project_root = temp_dir.path();
+
+        // Create a secrets file with only one secret
+        let secrets_file = project_root.join("secrets");
+        std::fs::write(&secrets_file, "known_key: value\n").unwrap();
+
+        // Create a test file
+        let test_file = project_root.join("config.txt");
+
+        // Default processor: keep_unresolved=false (render-path default).
+        // A missing ⊲{} reference must produce SecretsInterpolationError (VFAIL-05).
+        let key = RepositoryKey::new();
+        let processor =
+            Processor::new_with_project_root(key, project_root.to_path_buf()).unwrap();
+
+        let content = "Known: ⊲{known_key} Unknown: ⊲{missing_key}";
+        let result = processor.decrypt_to_raw_with_path(content, &test_file);
+        assert!(
+            result.is_err(),
+            "missing ⊲{{}} with keep_unresolved=false must error"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .downcast_ref::<crate::secrets::SecretsInterpolationError>()
+                .is_some(),
+            "error must be SecretsInterpolationError"
+        );
+    }
+
+    #[test]
     fn test_secrets_file_encryption() {
         use tempfile::tempdir;
 
@@ -1310,7 +1698,11 @@ mod tests {
         let secrets_file = temp_dir.path().join("config.secrets");
 
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, temp_dir.path().to_path_buf()).unwrap();
+        let processor = Processor::new_with_context(
+            key,
+            temp_dir.path().to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         // Create plaintext secrets file content
         let plaintext = "api_key: my_secret_key\npassword: my_password\n";
@@ -1337,7 +1729,11 @@ mod tests {
         let secrets_file = temp_dir.path().join("app.secrets");
 
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, temp_dir.path().to_path_buf()).unwrap();
+        let processor = Processor::new_with_context(
+            key,
+            temp_dir.path().to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         // Create plaintext secrets
         let plaintext = "token: secret_token_123\nurl: https://api.example.com\n";
@@ -1364,7 +1760,11 @@ mod tests {
         let secrets_file = temp_dir.path().join("test.secrets");
 
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, temp_dir.path().to_path_buf()).unwrap();
+        let processor = Processor::new_with_context(
+            key,
+            temp_dir.path().to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         let original = "# My secrets\nkey1: value1\nkey2: value2\n";
 
@@ -1428,7 +1828,11 @@ mod tests {
         let secrets_file = temp_dir.path().join("test.secrets");
 
         let key = RepositoryKey::new();
-        let processor = Processor::new_with_project_root(key, temp_dir.path().to_path_buf()).unwrap();
+        let processor = Processor::new_with_context(
+            key,
+            temp_dir.path().to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         let plaintext = "username: admin\npassword: secret123\n";
 
@@ -1587,7 +1991,11 @@ mod tests {
         let temp = tempdir().unwrap();
         let secrets_path = temp.path().join("secrets");
         let key = RepositoryKey::new();
-        let proc = Processor::new_with_project_root(key, temp.path().to_path_buf()).unwrap();
+        let proc = Processor::new_with_context(
+            key,
+            temp.path().to_path_buf(),
+            "2025-01-01T00:00:00Z".to_string(),
+        ).unwrap();
 
         let original = "a: abc\nb: def}\n";
 
@@ -1806,6 +2214,350 @@ mod tests {
         assert_eq!(
             ct_alpha, ct_alpha2,
             "Same path + same plaintext must yield identical ciphertext (deterministic nonce)"
+        );
+    }
+
+    // REM-25 (CRY-06): a Processor without project context must return a hard Err
+    // from both seal entry points; the error must mention the missing timestamp.
+    // A context-bearing Processor must still seal successfully (deterministic path unchanged).
+    #[test]
+    fn test_seal_without_project_context_errors() {
+        // --- no-context Processor ---
+        let key = RepositoryKey::new();
+        let no_ctx = Processor::new(key.clone()).unwrap();
+
+        // encrypt_secrets_file_content errors on no-context
+        let err = no_ctx
+            .encrypt_secrets_file_content("plaintext content", "config.env")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no project timestamp"),
+            "Expected 'no project timestamp' in error, got: {err}"
+        );
+
+        // encrypt_content_with_path errors on no-context
+        let err = no_ctx
+            .encrypt_content_with_path("⊕{some secret}", "config.yml")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no project timestamp"),
+            "Expected 'no project timestamp' in error, got: {err}"
+        );
+
+        // --- context-bearing Processor must succeed (deterministic path unchanged) ---
+        let ctx = Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let sealed = ctx
+            .encrypt_secrets_file_content("plaintext content", "config.env")
+            .unwrap();
+        assert!(sealed.starts_with("⊠{"), "Expected sealed marker in output");
+
+        let sealed2 = ctx
+            .encrypt_content_with_path("⊕{some secret}", "config.yml")
+            .unwrap();
+        assert!(sealed2.contains("⊠{"), "Expected sealed marker in marker output");
+    }
+
+    // -------------------------------------------------------------------------
+    // REM-22: nonce-lineage binding tests — decrypt_content_with_path + callers
+    // -------------------------------------------------------------------------
+
+    /// Build a context-bearing Processor for nonce-lineage tests.
+    fn make_nonce_lineage_processor() -> Processor {
+        let key = RepositoryKey::new();
+        Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2026-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_nonce_lineage_legitimate_roundtrip() {
+        // Seal under path A, open under path A → succeeds with the check always on.
+        let proc = make_nonce_lineage_processor();
+        let path_a = "config/production.yml";
+        let content_with_secret = "db_password = ⊕{hunter2-production}\nhost = prod.example.com\n";
+
+        // Seal (encrypt markers)
+        let sealed = proc
+            .encrypt_content_with_path(content_with_secret, path_a)
+            .unwrap();
+        assert!(sealed.contains("⊠{"), "sealed content must have ciphertext marker");
+        assert!(!sealed.contains("hunter2"), "sealed content must not contain plaintext secret");
+
+        // Open under the SAME path — must succeed
+        let opened = proc.decrypt_content_with_path(&sealed, path_a).unwrap();
+        assert!(
+            opened.contains("hunter2-production"),
+            "legitimate round-trip must recover plaintext secret"
+        );
+    }
+
+    #[test]
+    fn test_nonce_lineage_cross_path_swap_rejected() {
+        // The load-bearing REM-22 regression: seal under path A, present under path B → REJECTED.
+        let proc = make_nonce_lineage_processor();
+        let path_a = "config/production.yml";
+        let path_b = "config/staging.yml";
+        let content_with_secret = "api_key = ⊕{prod-api-key-value}\nenv = production\n";
+
+        // Seal under path A
+        let sealed_for_a = proc
+            .encrypt_content_with_path(content_with_secret, path_a)
+            .unwrap();
+        assert!(sealed_for_a.contains("⊠{"), "sealed content must have ciphertext marker");
+
+        // Extract the raw ciphertext block and splice it into a path-B-labelled content
+        // by presenting the sealed content to the path-B decrypt path.
+        let err = proc
+            .decrypt_content_with_path(&sealed_for_a, path_b)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonce lineage mismatch") || msg.contains("cross-context"),
+            "swap to a different path must produce a lineage-mismatch error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_nonce_lineage_secrets_file_exempt() {
+        // The .secrets whole-file decrypt path must NOT route through decrypt_content_with_path.
+        // It uses decrypt_secrets_file_content → decrypt_from_base64 (random-nonce) and
+        // must continue to work unchanged.
+        let proc = make_nonce_lineage_processor();
+        let secrets_path = std::path::Path::new(".secrets");
+        let plaintext = "DB_PASSWORD=hunter2\nAPI_KEY=abc123\n";
+
+        // Seal the whole .secrets file
+        let sealed = proc.seal_content_with_path(plaintext, secrets_path).unwrap();
+        assert!(sealed.trim().starts_with("⊠{"), ".secrets sealed form must start with ⊠{{");
+        assert!(!sealed.contains("hunter2"), "sealed .secrets must not expose plaintext");
+
+        // Open under the .secrets path — must succeed (uses exempt decrypt_secrets_file_content)
+        let opened = proc.open_content_with_path(&sealed, secrets_path).unwrap();
+        assert_eq!(opened, plaintext, ".secrets round-trip must recover exact content");
+    }
+
+    // =========================================================================
+    // CR-01 regression: process_content_with_path → open_content_with_path
+    // round-trip must pass the nonce-lineage check.
+    // Before this fix, process_content used "<content>" as the path, so the
+    // sealed nonce differed from what open_content_with_path re-derived from
+    // the real path → hard nonce-lineage reject.
+    // =========================================================================
+
+    #[test]
+    fn test_process_content_with_path_open_roundtrip() {
+        // Seal via process_content_with_path, open via open_content_with_path.
+        // Both use the same path string → nonce-lineage check passes.
+        let proc = make_nonce_lineage_processor();
+        let file_path = "config/production.yml";
+        let content = "db_pass = ⊕{hunter2}\nhost = prod.example.com\n";
+
+        // Simulate what the process dispatcher now does after the CR-01 fix.
+        let sealed = proc.process_content_with_path(content, file_path).unwrap();
+        assert!(sealed.contains("⊠{"), "process_content_with_path must produce ciphertext marker");
+        assert!(!sealed.contains("hunter2"), "sealed output must not expose plaintext");
+
+        // Open with the same path — must NOT produce a nonce-lineage error.
+        let opened = proc
+            .decrypt_content_with_path(&sealed, file_path)
+            .expect("open after process_content_with_path must succeed (nonce lineage matches)");
+        assert!(
+            opened.contains("hunter2"),
+            "process→open round-trip must recover plaintext secret"
+        );
+    }
+
+    #[test]
+    fn test_process_content_pseudo_path_cross_path_still_rejects() {
+        // Confirm that a ciphertext sealed with the pseudo-path "<content>"
+        // (the OLD broken behaviour) is correctly rejected when opened under
+        // a real path — proving the lineage check catches the mismatch.
+        let proc = make_nonce_lineage_processor();
+        let pseudo_path = "<content>";
+        let real_path = "config/production.yml";
+        let content = "api_key = ⊕{prod-api-key}\n";
+
+        // Seal under the pseudo-path (as the broken code path used to do).
+        let sealed_with_pseudo = proc.encrypt_content_with_path(content, pseudo_path).unwrap();
+
+        // Opening under the real path must fail with a nonce-lineage mismatch.
+        let err = proc
+            .decrypt_content_with_path(&sealed_with_pseudo, real_path)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonce lineage mismatch"),
+            "pseudo-path-sealed ciphertext opened under real path must produce lineage-mismatch, got: {msg}"
+        );
+    }
+
+    // ── Vault marker preservation tests (VREF-01, VREF-03, VREF-04, VREF-05) ──
+
+    /// A vault-only file passes through `process_content_with_path` unchanged
+    /// (routes to the (false, false) pass-through arm — not encrypt, not decrypt,
+    /// not the both-markers error).  T-46-01.
+    #[test]
+    fn vault_only_file_passes_through_unchanged() {
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let input = "name: ⊳{secret/prod#pw}";
+        let result = proc.process_content_with_path(input, "config.yaml").unwrap();
+        assert_eq!(result, input, "vault-only content must be returned byte-identical");
+    }
+
+    /// A file mixing a vault marker (⊳{}) with a ciphertext marker (⊠{}) routes
+    /// to the decrypt arm, and the ⊳{} marker survives byte-identical.
+    #[test]
+    fn vault_and_ciphertext_routes_to_decrypt_and_vault_survives() {
+        let key = RepositoryKey::new();
+        // Use the same file_path for both seal and open to satisfy nonce lineage.
+        let file_path = "config.yaml";
+        let proc = Processor::new_with_context(
+            key.clone(),
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        // Seal a plaintext marker to get a ciphertext marker bound to file_path.
+        let sealed = proc.encrypt_content_with_path("⊕{topsecret}", file_path).unwrap();
+        // Mix sealed ciphertext with a vault marker.
+        let mixed = format!("⊳{{secret/vault#key}} {sealed}");
+
+        // process_content_with_path should decrypt the ⊠{} marker and leave ⊳{} intact.
+        let result = proc.process_content_with_path(&mixed, file_path).unwrap();
+
+        assert!(
+            result.contains("⊳{secret/vault#key}"),
+            "vault marker must survive the decrypt pass byte-identical; got: {result}"
+        );
+        // The ciphertext should be decrypted back to the plaintext content.
+        assert!(
+            result.contains("topsecret"),
+            "ciphertext marker must be decrypted; got: {result}"
+        );
+    }
+
+    /// A file mixing a plaintext marker (⊕{}) with a vault marker (⊳{}) seals
+    /// only the ⊕{} marker; the ⊳{} marker is preserved byte-for-byte.
+    #[test]
+    fn seal_preserves_vault_marker_and_encrypts_plaintext() {
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let input = "name: ⊳{secret/prod#pw}\nkey: ⊕{topsecret}";
+        let sealed = proc.encrypt_content_with_path(input, "config.yaml").unwrap();
+
+        // Vault marker must be verbatim.
+        assert!(
+            sealed.contains("⊳{secret/prod#pw}"),
+            "vault marker must survive seal byte-identical; got: {sealed}"
+        );
+        // Plaintext marker must have become ciphertext.
+        assert!(
+            sealed.contains("⊠{"),
+            "plaintext marker must be encrypted; got: {sealed}"
+        );
+        assert!(
+            !sealed.contains("⊕{topsecret}"),
+            "original plaintext marker must not survive seal; got: {sealed}"
+        );
+    }
+
+    /// `>{` ASCII alias is normalised to `⊳{` on the seal/encrypt path.
+    /// This mirrors EXACTLY how `<{` is rewritten to `⊲{` by `normalize_secrets_markers`.
+    #[test]
+    fn vault_ascii_alias_normalised_to_unicode_on_seal() {
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        // Input with ASCII alias.
+        let input = "name: >{secret/prod#pw}";
+        let sealed = proc.encrypt_content_with_path(input, "config.yaml").unwrap();
+
+        // After seal the on-disk bytes must contain the Unicode form, mirroring
+        // the live `<{` → `⊲{` normalisation done by normalize_secrets_markers.
+        assert!(
+            sealed.contains("⊳{secret/prod#pw}"),
+            "vault ASCII alias >{{ must be normalised to ⊳{{ on seal; got: {sealed}"
+        );
+        assert!(
+            !sealed.contains(">{secret/prod#pw}"),
+            "ASCII alias must not remain in sealed output; got: {sealed}"
+        );
+    }
+
+    /// `open` (decrypt path) leaves a preserved `⊳{}` marker byte-identical;
+    /// no normalisation happens on the decrypt path (VREF-05).
+    #[test]
+    fn open_preserves_vault_marker_verbatim_no_normalisation() {
+        let key = RepositoryKey::new();
+        let file_path = "cfg";
+        let proc = Processor::new_with_context(
+            key.clone(),
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        // Seal content that contains both a plaintext marker and a vault marker.
+        let input = "⊳{secret/prod#pw} ⊕{mysecret}";
+        let sealed = proc.encrypt_content_with_path(input, file_path).unwrap();
+
+        // The sealed file should have ⊳{} preserved and ⊠{} where ⊕{} was.
+        assert!(sealed.contains("⊳{secret/prod#pw}"), "vault marker not preserved after seal");
+        assert!(sealed.contains("⊠{"), "plaintext must have been sealed");
+
+        // Now open (decrypt) — vault marker must still be byte-identical.
+        let opened = proc.process_content_with_path(&sealed, file_path).unwrap();
+        assert!(
+            opened.contains("⊳{secret/prod#pw}"),
+            "vault marker must survive open byte-identical; got: {opened}"
+        );
+    }
+
+    /// `decrypt_to_raw` skips vault markers entirely — they are not ciphertext and
+    /// are not plaintext.  The vault marker text passes through unchanged.
+    #[test]
+    fn decrypt_to_raw_skips_vault_marker() {
+        let key = RepositoryKey::new();
+        let proc = Processor::new_with_context(
+            key,
+            std::path::PathBuf::from("."),
+            "2025-01-01T00:00:00Z".to_string(),
+        )
+        .unwrap();
+
+        let input = "⊳{secret#f}";
+        let result = proc.decrypt_to_raw(input).unwrap();
+        assert_eq!(
+            result, input,
+            "decrypt_to_raw must return vault marker unchanged"
         );
     }
 }

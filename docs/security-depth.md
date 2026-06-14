@@ -341,6 +341,34 @@ exercise the v2.2 additions via the `ManuallyDrop<Zeroizing<[u8; N]>>`
 pattern with raw-ptr `ptr::read_volatile` after drop — the same shape miri
 validates in § Miri Coverage above.
 
+### Zeroise regression tests under `--release` and the LTO caveat (REM-29 / CRY-15)
+
+CI runs `cargo test --all-features --release` (`.github/workflows/test.yml` line 36),
+which means the `ManuallyDrop + ptr::read_volatile` zeroise tests in
+`tests/zeroisation_drop_tests.rs` and the in-source drop tests in
+`src/crypto/hybrid.rs` already execute under `opt-level=3` on every push.
+The `ptr::read_volatile` barrier prevents the compiler from treating the
+zeroise loop as a dead store and eliding it at this optimisation level.
+
+**Accepted limitation — full LTO (`lto = "fat"`):** Full link-time optimisation
+is **not** enabled for test builds. No `[profile.test]` or `[profile.release]`
+`lto = ...` entry exists in `Cargo.toml`.  Under true fat-LTO, LLVM performs
+cross-module inlining, which in principle could reorder or elide `write_volatile`
+calls across crate boundaries.  Adding `lto = "fat"` to a test profile would
+dramatically slow the full test suite and is rejected as the cost/benefit is
+unfavourable at v2.6.
+
+The relied-upon mitigation is the `zeroize` crate's `write_volatile`-based
+implementation, which is specifically designed to survive release-mode
+dead-store elimination.  This accepted LTO limitation follows the
+`REM-20`-style honest-call precedent used elsewhere in this document (see §
+Miri Coverage — "sss is miri-clean on pure-Rust paths only").
+
+**Cross-reference:** The in-house trelis `ZeroizeOnDrop` regression tests
+(REM-30, `tests/zeroisation_drop_tests.rs` Tests 5–7, Phase 42 Plan 05) also
+run under `--release` as part of the same CI step.  The authoritative check
+for trelis nested-field zeroise behaviour remains AUDIT-01 (backlog).
+
 ### `mem::forget` grep gate (belt-and-braces)
 
 Phase 21's `[lints.clippy]` block already denies `clippy::mem_forget` at

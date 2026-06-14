@@ -299,8 +299,13 @@ version = "2.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.fuser]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+
+[[exemptions.fuser]]
 version = "0.16.0"
 criteria = "safe-to-deploy"
+notes = "Phase 29 fuser bump — exempted Phase 47 supply-chain review; 30-day audit SLA per D-VET-1"
 
 [[exemptions.futures]]
 version = "0.3.31"
@@ -385,6 +390,16 @@ criteria = "safe-to-run"
 [[exemptions.home]]
 version = "0.5.12"
 criteria = "safe-to-deploy"
+
+[[exemptions.http]]
+version = "1.4.2"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; HTTP types crate (MIT/Apache-2.0); 30-day audit SLA per D-VET-1"
+
+[[exemptions.httparse]]
+version = "1.10.1"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; HTTP/1 parser (MIT/Apache-2.0); 30-day audit SLA per D-VET-1"
 
 [[exemptions.hybrid-array]]
 version = "0.4.10"
@@ -497,6 +512,7 @@ criteria = "safe-to-deploy"
 [[exemptions.nix]]
 version = "0.29.0"
 criteria = "safe-to-deploy"
+notes = "Phase 29 fuser bump transitive — exempted Phase 47 supply-chain review; 30-day audit SLA per D-VET-1"
 
 [[exemptions.nix]]
 version = "0.30.1"
@@ -541,6 +557,11 @@ criteria = "safe-to-deploy"
 [[exemptions.pem-rfc7468]]
 version = "0.7.0"
 criteria = "safe-to-deploy"
+
+[[exemptions.percent-encoding]]
+version = "2.3.2"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; URL encoding utility (MIT/Apache-2.0); 30-day audit SLA per D-VET-1"
 
 [[exemptions.pin-utils]]
 version = "0.1.0"
@@ -670,6 +691,11 @@ criteria = "safe-to-deploy"
 version = "0.8.8"
 criteria = "safe-to-deploy"
 
+[[exemptions.ring]]
+version = "0.17.14"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; carries C/assembly unsafe (BoringSSL-derived); RUSTSEC-2025-0007 history noted; 30-day audit SLA per D-VET-1"
+
 [[exemptions.rpassword]]
 version = "7.4.0"
 criteria = "safe-to-deploy"
@@ -685,6 +711,21 @@ criteria = "safe-to-deploy"
 [[exemptions.rustix]]
 version = "1.1.2"
 criteria = "safe-to-deploy"
+
+[[exemptions.rustls]]
+version = "0.23.40"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; TLS 1.2+1.3 (Apache-2.0/MIT/ISC); RUSTSEC-2023-0052 history (fixed in 0.21.1+); 30-day audit SLA per D-VET-1"
+
+[[exemptions.rustls-pki-types]]
+version = "1.14.1"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; shared PKI types (MIT/Apache-2.0); 30-day audit SLA per D-VET-1"
+
+[[exemptions.rustls-webpki]]
+version = "0.103.13"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; cert verification (ISC); RUSTSEC-2023-0053 history (CPU exhaustion, fixed in 0.101.1+); 30-day audit SLA per D-VET-1"
 
 [[exemptions.rustversion]]
 version = "1.0.22"
@@ -882,6 +923,26 @@ criteria = "safe-to-deploy"
 version = "0.5.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.untrusted]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; ring input-validation crate (ISC); 30-day audit SLA per D-VET-1"
+
+[[exemptions.ureq]]
+version = "3.3.0"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; blocking HTTP client (MIT); forbid(unsafe_code) policy; 30-day audit SLA per D-VET-1"
+
+[[exemptions.ureq-proto]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; internal HTTP framing for ureq (MIT); 30-day audit SLA per D-VET-1"
+
+[[exemptions.utf8-zero]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; zero-copy UTF-8 slicing (MIT/Apache-2.0); 30-day audit SLA per D-VET-1"
+
 [[exemptions.uuid]]
 version = "1.18.1"
 criteria = "safe-to-deploy"
@@ -937,6 +998,11 @@ criteria = "safe-to-deploy"
 [[exemptions.web-sys]]
 version = "0.3.82"
 criteria = "safe-to-run"
+
+[[exemptions.webpki-roots]]
+version = "1.0.7"
+criteria = "safe-to-deploy"
+notes = "vault feature — Phase 47 supply-chain review; Mozilla root CA bundle (CDLA-Permissive-2.0); 30-day audit SLA per D-VET-1"
 
 [[exemptions.which]]
 version = "4.4.2"

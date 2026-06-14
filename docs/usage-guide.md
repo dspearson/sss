@@ -18,8 +18,9 @@ collaboration, and git integration. For configuration reference, see
 8. [Key Management](#key-management)
 9. [Team Collaboration](#team-collaboration)
 10. [Git Integration](#git-integration)
-11. [Secrets Files](#secrets-files)
-12. [Stdin Support](#stdin-support)
+11. [Git Hooks](#git-hooks)
+12. [Secrets Files](#secrets-files)
+13. [Stdin Support](#stdin-support)
 
 ---
 
@@ -421,6 +422,72 @@ machine):
 ```bash
 sss hooks install --template
 ```
+
+---
+
+## Git Hooks
+
+This section documents the behaviour of the three hooks installed by `sss hooks install`,
+their concurrency serialisation, and the `FORCE_COMMIT` escape hatch.
+
+### What Each Hook Does
+
+| Hook | Trigger | Behaviour |
+|------|---------|-----------|
+| `pre-commit` | `git commit` | Seals all staged files that contain `⊕{...}` or `o+{...}` plaintext markers (in-place, then re-stages). After sealing, checks that no previously encrypted file has been fully rendered (all `⊠{...}` markers removed) — a sign that `sss render -x` was run on a file that should remain sealed. Blocks the commit if a security violation is detected. |
+| `post-merge` | `git merge`, `git pull` | Runs `sss render --project` (if auto-render is enabled) so working-tree files are up to date after the merge. |
+| `post-checkout` | `git checkout`, `git switch` | Same as `post-merge` — renders project files after a checkout. |
+
+### Concurrency Serialisation (Advisory flock)
+
+The pre-commit, post-merge, and post-checkout hooks all acquire an advisory exclusive lock
+on `$GIT_DIR/sss-hook.lock` before invoking `sss` or `git`. This serialises concurrent
+invocations — for example, an IDE running a background commit at the same time as a
+terminal `git pull` — so that a partial seal cannot be read by a concurrent render.
+
+The lock is **advisory, bounded, and fail-open**: if the lock file cannot be opened (no
+write permission to `$GIT_DIR`) or if the `flock` utility is unavailable (macOS without
+util-linux), the hook continues without the lock rather than blocking the git operation.
+When the lock IS successfully acquired, it serialises concurrent hook invocations until the
+holding process finishes or exits. All three hooks enforce a **30-second timeout**: if the
+lock holder has not released within 30 seconds (for example, a `sss seal` waiting on a
+passphrase prompt in a non-interactive terminal), the waiting hook times out and proceeds
+without the lock — a stalled lock holder never blocks `git checkout`, `git pull`, or
+`git commit` indefinitely.
+
+`$GIT_DIR` is resolved via `git rev-parse --git-dir`, which returns the correct path in
+both regular repositories and git worktrees (where `.git` is a file, not a directory).
+
+### FORCE_COMMIT Escape Hatch
+
+The pre-commit hook blocks commits where an encrypted file has been fully rendered
+(plaintext secrets visible in staged content). In rare emergency situations — for
+example, to commit a documentation update when you cannot re-seal a file immediately —
+you can bypass this check:
+
+```bash
+FORCE_COMMIT=true git commit
+```
+
+**This is an intentional escape hatch with serious security implications:**
+
+- **Plaintext secrets may be committed.** The bypassed check exists to prevent exactly
+  this. Any staged file that passed the security-violation check only because of
+  `FORCE_COMMIT=true` may contain plaintext secrets.
+- **Risk from CI/CD environments.** If `FORCE_COMMIT=true` is set as a CI environment
+  variable (globally, in `.envrc`, `.env`, or a CI secret), every commit in that
+  environment will silently bypass the check. Audit your CI configuration regularly.
+- **Social engineering risk.** An instruction to set `FORCE_COMMIT=true` before
+  committing should be treated as a red flag — it bypasses the primary secret-leakage
+  guard.
+
+**Preferred alternative:** `git commit --no-verify` explicitly skips all pre-commit
+hooks and makes the bypass visible in the command history. Use this instead of
+`FORCE_COMMIT=true` when you need to bypass the hook for a legitimate reason (for
+example, committing a file that has no sss markers and is triggering a false positive).
+
+After any `FORCE_COMMIT=true` commit, audit the staged content and re-seal affected
+files (`sss seal -x <file>`) before pushing to a shared branch.
 
 ---
 

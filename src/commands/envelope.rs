@@ -1,19 +1,15 @@
 //! `sss envelope` subcommand group (Phase 19, D-11, PQSIG-06).
 //!
-//! Currently exposes a single verb: `sss envelope upgrade-sig`, which retro-fits
-//! a hybrid AND-composition signature onto a legacy un-signed (`format_version=1`)
-//! `.sss.toml` envelope, promoting it to `format_version=2` in place, atomically.
+//! Exposes: `sss envelope upgrade-sig`, which retro-fits a hybrid AND-composition
+//! signature onto a legacy un-signed (`format_version=1`) `.sss.toml` envelope,
+//! promoting it to `format_version=2` (no vault) or `format_version=3` (vault
+//! present) atomically. Idempotent; refuses a silent version downgrade.
 //!
 //! Future verbs (rotate-sig, dump-sig) can join this group cleanly per D-11.
 
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 
-use crate::commands::utils::{get_password_if_protected, get_system_username};
-use crate::config::write_atomic;
-use crate::envelope_sig;
-use crate::keystore::Keystore;
-use crate::project::{EnvelopeMeta, ProjectConfig};
+use crate::project::ProjectConfig;
 
 /// Dispatch `sss envelope <subcommand>` from `main.rs`.
 ///
@@ -36,95 +32,64 @@ pub fn handle_envelope(
 
 /// `sss envelope upgrade-sig` — retro-fit a hybrid signature onto a v1 envelope.
 ///
-/// Idempotency: if `format_version >= 2` the envelope is already signed; prints a
-/// one-liner and exits 0 without touching the file. The on-disk bytes are left
-/// byte-identical so `mtime` is preserved across re-runs.
+/// ## Version selection (VCFG-04)
+///
+/// - `[vault]` table absent → target `format_version = 2` (classic signed envelope).
+/// - `[vault]` table present → target `format_version = 3` (vault-fields covered).
+///
+/// ## Idempotency
+///
+/// If the current version already equals the target, prints "already signed at
+/// `format_version={N}`; nothing to do" and exits 0 without touching the file
+/// (mtime preserved).
+///
+/// ## Downgrade rejection
+///
+/// If the current version EXCEEDS the target (e.g. a v3 file whose `[vault]` table
+/// was removed so the target would now be 2) this command returns a non-zero error
+/// instructing the user to act — the file is left unchanged (T-46-23).
 fn handle_envelope_upgrade_sig() -> Result<()> {
     let config_path = crate::config::get_project_config_path()
         .context("could not locate .sss.toml in current or parent directory")?;
 
-    // Load via the production loader.
-    //   format_version == 1, classic: Ok — no sig enforced.
-    //   format_version == 1, hybrid:  Err — PQSIG-06 actionable error (correct
-    //       behaviour; the user must first be in the right directory and have a
-    //       keystore). We want to intercept v1 BEFORE the loader rejects hybrid v1.
-    //
-    // Because the production loader (plan 19-03) rejects hybrid v1 envelopes with
-    // the PQSIG-06 error, we must bypass the format_version gate for the upgrade
-    // path. Use load_from_file_unverified so we can read the current state and
-    // decide whether to sign it.
+    // Use load_from_file_unverified so we can read a v1 OR a v2 envelope that
+    // the production loader would reject (e.g. hybrid v1, or a v2 sig under the
+    // old context that is being re-signed to v3).  The whole point of upgrade-sig
+    // is to read the raw state and THEN sign it correctly.
     let mut cfg = ProjectConfig::load_from_file_unverified(&config_path)
         .context("failed to read .sss.toml")?;
 
-    // Idempotency check: already signed → clean exit, no file touch.
-    if cfg.format_version >= 2 {
+    // Target version depends on whether a [vault] table is present (VCFG-04).
+    let target_version: u32 = if cfg.vault.is_some() { 3 } else { 2 };
+
+    // Idempotency: already at the correct target version → clean exit, no file touch.
+    if cfg.format_version == target_version {
         println!(
-            "{}: already signed (format_version={}); nothing to do",
+            "{}: already signed at format_version={}; nothing to do",
             config_path.display(),
-            cfg.format_version
+            target_version
         );
         return Ok(());
     }
 
-    // Resolve the writing user via the system-username heuristic (Pitfall 1):
-    //   SSS_USER > config default username > USER/USERNAME env var.
-    let writer_username = get_system_username()
-        .context("could not determine invoking username for upgrade-sig")?;
-
-    // Ensure the writer is actually listed in the envelope.
-    if !cfg.users.contains_key(&writer_username) {
+    // Downgrade guard (T-46-23): refuse a silent version downgrade.
+    // Example: file is v3 (has [vault]), user removed [vault] manually → target
+    // would be 2, but we must NOT silently strip vault-field coverage.
+    if cfg.format_version > target_version {
         return Err(anyhow!(
-            "user '{}' is not present in {}; cannot sign as an unlisted user",
-            writer_username,
-            config_path.display()
+            "{}: current format_version={} exceeds target {}; \
+            to downgrade, remove [vault] from .sss.toml first and confirm you \
+            want to lose vault-field signature coverage",
+            config_path.display(),
+            cfg.format_version,
+            target_version,
         ));
     }
 
-    // Open the keystore and load the sig keypair.
-    let keystore = Keystore::new()
-        .context("failed to open keystore for upgrade-sig")?;
+    // Promote to the target version and delegate all sign-on-write work to the
+    // shared helper (T-46-20: no copied sign body, no unsigned write path).
+    cfg.format_version = target_version;
+    crate::envelope_sig::sign_and_write_atomic(&mut cfg, &config_path)?;
 
-    let password_str = get_password_if_protected(
-        &keystore,
-        "Enter your passphrase to sign the envelope (or press Enter if none): ",
-    )
-    .context("could not obtain passphrase for upgrade-sig")?;
-
-    let (ed_sk, pq_sk) = keystore
-        .load_sig_keypair(&writer_username, password_str.as_deref())
-        .context("failed to load sig keypair from keystore")?;
-
-    // Promote envelope to format_version=2.
-    cfg.format_version = 2;
-
-    // Populate writer's per-user sig pubkeys (Option<String> base64, D-06).
-    // Use the same API that users.rs uses: sk.verifying_key().as_bytes().
-    if let Some(u) = cfg.users.get_mut(&writer_username) {
-        if u.sig_ed448_public.is_none() {
-            u.sig_ed448_public = Some(BASE64_STANDARD.encode(ed_sk.verifying_key().as_bytes()));
-        }
-        if u.sig_mldsa65_public.is_none() {
-            u.sig_mldsa65_public = Some(BASE64_STANDARD.encode(pq_sk.verifying_key().as_bytes()));
-        }
-    }
-
-    // Build canonical payload (payload-first per locked plan 19-00, Pitfall 9).
-    let payload = envelope_sig::build_envelope_payload(&cfg);
-    let sig = envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)
-        .context("envelope signing failed during upgrade-sig")?;
-
-    // Set cfg.envelope.sig (envelope is Option<EnvelopeMeta>, Pitfall 7).
-    cfg.envelope
-        .get_or_insert_with(EnvelopeMeta::default)
-        .sig = Some(sig);
-
-    write_atomic(&cfg, &config_path)
-        .context("atomic write of upgraded envelope failed")?;
-
-    println!(
-        "{}: upgraded to format_version=2, signed by '{}'",
-        config_path.display(),
-        writer_username
-    );
     Ok(())
 }

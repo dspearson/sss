@@ -153,7 +153,7 @@ export class SSSWrapper {
 
             child.on('close', async (code) => {
                 if (code === 0) {
-                    this.log(`Success: ${stdout}`);
+                    this.log(`Success (exit 0, ${stdout.length} bytes)`);
                     resolve({ stdout, stderr });
                 } else {
                     this.log(`Error (code ${code}): ${stderr}`);

@@ -804,9 +804,10 @@ fn test_upgrade_v1_to_v2_signed_load_succeeds() -> Result<()> {
     // Upgrade in place.
     keystore.upgrade_keypair_in_place(&key_id, Some(password))?;
 
-    // On-disk shape: v2 + sig fields populated.
+    // On-disk shape: v3 + sig fields populated.
+    // Phase 38-03 (REM-04): upgrade_keypair_in_place now produces format_version=3.
     let v2 = read_stored(temp_dir.path(), &key_id);
-    assert_eq!(v2.format_version, 2, "post-upgrade format_version must be 2");
+    assert_eq!(v2.format_version, 3, "post-upgrade format_version must be 3");
     assert!(v2.sig_ed448_public_key.is_some(), "Ed448 pubkey must be present");
     assert!(v2.sig_mldsa65_public_key.is_some(), "ML-DSA-65 pubkey must be present");
     assert!(v2.sig_ed448_encrypted_secret_key.is_some(), "Ed448 SK must be present");
@@ -824,7 +825,9 @@ fn test_upgrade_v1_to_v2_signed_load_succeeds() -> Result<()> {
     Ok(())
 }
 
-/// Test 2: upgrading an already-signed (v2) entry refuses with `already signed`.
+/// Test 2: upgrading an already-signed (v3) entry refuses with `already signed`.
+/// Phase 38-03 (REM-04): `store_dual_keypair` now produces `format_version=3` directly;
+/// upgrading a v3 entry must still surface as "already signed" (upgrade is a no-op).
 #[cfg(feature = "hybrid")]
 #[test]
 fn test_upgrade_v2_refuses_with_already_signed_error() -> Result<()> {
@@ -833,12 +836,12 @@ fn test_upgrade_v2_refuses_with_already_signed_error() -> Result<()> {
     let hybrid = HybridKeyPair::generate()?;
     let password = "v2_pw";
 
-    // store_dual_keypair writes format_version=2.
+    // store_dual_keypair now writes format_version=3.
     let key_id = keystore.store_dual_keypair(Some(&classic), Some(&hybrid), Some(password))?;
 
     let err = keystore
         .upgrade_keypair_in_place(&key_id, Some(password))
-        .expect_err("upgrade on v2 must error");
+        .expect_err("upgrade on v3 must error");
     let msg = err.to_string();
     assert!(
         msg.contains("already signed"),
@@ -940,8 +943,9 @@ fn test_upgrade_passwordless_v1_to_v2() -> Result<()> {
     // Upgrade with password=None (passwordless path skips KEK probe).
     keystore.upgrade_keypair_in_place(&key_id, None)?;
 
+    // Phase 38-03 (REM-04): upgrade_keypair_in_place now produces format_version=3.
     let v2 = read_stored(temp_dir.path(), &key_id);
-    assert_eq!(v2.format_version, 2);
+    assert_eq!(v2.format_version, 3);
     assert!(!v2.is_password_protected, "is_password_protected must be preserved");
     assert!(v2.signature.is_some());
 

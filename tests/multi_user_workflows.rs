@@ -122,7 +122,15 @@ fn test_multi_user_shared_repository_key() -> anyhow::Result<()> {
 #[test]
 fn test_alice_encrypts_bob_decrypts() -> anyhow::Result<()> {
     let project = MultiUserProject::new(&["alice", "bob"])?;
-    let processor = Processor::new(project.repository_key.clone())?;
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically; Alice and Bob still share the
+    // same processor/key, which is the property under test.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Alice encrypts a message
     let alice_message = "Secret from Alice: ⊕{alice_secret_123}";
@@ -141,7 +149,15 @@ fn test_alice_encrypts_bob_decrypts() -> anyhow::Result<()> {
 #[test]
 fn test_multiple_users_collaborate_on_file() -> anyhow::Result<()> {
     let project = MultiUserProject::new(&["alice", "bob", "charlie"])?;
-    let processor = Processor::new(project.repository_key.clone())?;
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically; all three users still share
+    // the same processor/key, which is the property under test.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Simulate a shared config file with secrets from multiple users
     let shared_config = r"# Team Configuration
@@ -251,7 +267,15 @@ fn test_cannot_remove_last_user() -> anyhow::Result<()> {
 #[test]
 fn test_encrypted_content_persists_across_user_changes() -> anyhow::Result<()> {
     let project = MultiUserProject::new(&["alice", "bob"])?;
-    let processor = Processor::new(project.repository_key.clone())?;
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically; the test then verifies the
+    // ciphertext still decrypts after the user roster changes.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Create and encrypt content
     let content = "Database password: ⊕{super_secret_pass}";
@@ -328,8 +352,15 @@ fn test_large_team_collaboration() -> anyhow::Result<()> {
     // Verify all users are in the project
     assert_eq!(config.list_users().len(), 10);
 
-    // All users should be able to use the same processor
-    let processor = Processor::new(project.repository_key.clone())?;
+    // All users should be able to use the same processor.
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically across the whole team.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     let content = "Shared secret: ⊕{team_password}";
     let encrypted = processor.process_content(content)?;
@@ -407,7 +438,14 @@ fn test_project_config_persistence() -> anyhow::Result<()> {
 #[test]
 fn test_concurrent_file_operations() -> anyhow::Result<()> {
     let project = MultiUserProject::new(&["alice", "bob"])?;
-    let processor = Processor::new(project.repository_key.clone())?;
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Simulate multiple operations on the same content
     let original = "Secret: ⊕{test123}";
@@ -415,10 +453,15 @@ fn test_concurrent_file_operations() -> anyhow::Result<()> {
     let encrypted1 = processor.process_content(original)?;
     let encrypted2 = processor.process_content(original)?;
 
-    // Different encryptions due to random nonces
-    assert_ne!(encrypted1, encrypted2);
+    // REM-25/CRY-06: nonces are now deterministically derived from
+    // (project timestamp, path, plaintext, key) — the random-nonce fallback this
+    // assertion was written against has been removed. Sealing the same content
+    // through the same processor/path therefore produces IDENTICAL ciphertext
+    // (the clean-diff invariant). The repeated-seal-is-safe intent is preserved:
+    // both seals succeed and both round-trip below.
+    assert_eq!(encrypted1, encrypted2);
 
-    // But both decrypt to the same thing
+    // Both decrypt to the original plaintext.
     let decrypted1 = processor.process_content(&encrypted1)?;
     let decrypted2 = processor.process_content(&encrypted2)?;
 
@@ -466,7 +509,15 @@ fn test_user_info_retrieval() -> anyhow::Result<()> {
 fn test_complex_multiuser_workflow() -> anyhow::Result<()> {
     // Simulate a realistic workflow
     let project = MultiUserProject::new(&["alice", "bob"])?;
-    let processor = Processor::new(project.repository_key.clone())?;
+    // REM-25/CRY-06: sealing requires a project timestamp (random-nonce fallback
+    // removed). Use the project's on-disk root + a stable test timestamp so the
+    // shared repository key seals deterministically through the seal → write →
+    // read → open → modify → reseal → open round-trip exercised below.
+    let processor = Processor::new_with_context(
+        project.repository_key.clone(),
+        project.project_path().to_path_buf(),
+        "2025-01-01T00:00:00Z".to_string(),
+    )?;
 
     // Alice creates a config file with secrets
     let config_content = r"

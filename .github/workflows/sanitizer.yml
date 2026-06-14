@@ -80,10 +80,16 @@
 name: Sanitizers
 
 on:
-  # Automatic triggers (push / pull_request / schedule) disabled — manual
-  # workflow_dispatch only. Run the equivalent checks locally to verify
-  # before pushing; preserves the free GitHub Actions allocation until
-  # self-hosted runners are available.
+  # Scheduled-only — weekly Saturday 03:00 UTC. miri.yml runs Sunday
+  # 03:00 UTC (CONTEXT.md cron lock); sanitizer.yml takes Saturday so the
+  # two scheduled-only workflows do not collide on the runner queue.
+  # No `push:` or `pull_request:` triggers; ASan workspace runs ~3-5x
+  # slower than plain `cargo test` and would be too noisy on every push.
+  schedule:
+    - cron: "0 3 * * 6"
+  # Manual trigger for iterating on the workflow itself or for re-running
+  # after a known-fix lands without waiting up to 7 days for the next cron.
+  # Mirrors miri.yml convention.
   workflow_dispatch:
 
 # No `permissions:` block — defaults to read-only repo access (matches
@@ -158,6 +164,27 @@ jobs:
       - name: ASan — workspace test (default features, no hybrid)
         run: cargo +nightly-2026-04-15 test --workspace --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
 
+      # REM-47 / Phase 45-02: ASan instrumentation of the fuse unsafe surface.
+      #
+      # HONEST COVERAGE LIMIT (accepted grey area — do not overclaim):
+      #   FULL compile-time ASan: all 75 unsafe blocks in src/fuse/fs.rs are
+      #   compiled under AddressSanitizer instrumentation by this step.
+      #   PARTIAL runtime only: the TempFileGuard RAII tests (libc::open/close/
+      #   unlinkat on tempfiles, no /dev/fuse required) run under ASan and
+      #   exercise the RAII-path unsafe blocks. The 70+ filesystem-callback
+      #   unsafe blocks (getattr/read/write/lookup) are exercised only by
+      #   #[ignore] integration tests that require a real FUSE mount (/dev/fuse).
+      #   Those are compiled (so ASan instruments them) but NOT run in CI.
+      #   This cell is therefore NOT full runtime ASan coverage of all fuse blocks.
+      #
+      # --features hybrid,fuse: compiles both the hybrid crypto machinery (matches
+      # the primary asan step) AND the fuse feature, so all 75 fuse unsafe blocks
+      # get instrumented. --lib fuse:: scopes test execution to fuse unit tests
+      # (avoids running mount-requiring integration tests that would fail without
+      # /dev/fuse on the runner). Load-bearing flags identical to other asan steps.
+      - name: ASan — fuse unsafe surface (--features hybrid,fuse)
+        run: cargo +nightly-2026-04-15 test --features hybrid,fuse --lib --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast
+
   tsan:
     name: "tsan / linux-x86_64"
     # Linux-x86_64 only per D-SAN-1 (matches asan job).
@@ -228,3 +255,24 @@ jobs:
       # `--no-fail-fast` lets TSan surface ALL findings in one workflow run.
       - name: TSan — soak_agent + stress_render --features hybrid,slow-tests
         run: cargo +nightly-2026-04-15 test --features hybrid,slow-tests --target x86_64-unknown-linux-gnu -Zbuild-std --test soak_agent --test stress_render --no-fail-fast
+
+      # REM-47 / Phase 45-02 (TSan companion to the ASan fuse cell above):
+      # TSan instrumentation of the fuse unsafe surface.
+      #
+      # HONEST COVERAGE LIMIT (same boundary as ASan fuse cell — do not overclaim):
+      #   FULL compile-time TSan: all 75 unsafe blocks in src/fuse/fs.rs are
+      #   compiled under ThreadSanitizer instrumentation by this step.
+      #   PARTIAL runtime only: the TempFileGuard RAII tests (libc::open/close/
+      #   unlinkat on tempfiles) run and are the only fuse tests that execute
+      #   without /dev/fuse. These tests are non-concurrent (single-threaded RAII)
+      #   so TSan adds compile coverage but minimal new runtime signal vs ASan here.
+      #   The 70+ filesystem-callback unsafe blocks require a real FUSE mount
+      #   (#[ignore] integration tests) — NOT run in CI. TSan is included because
+      #   ROADMAP criterion 2 requires both sanitizers on the fuse surface and to
+      #   catch any future concurrent use of the fuse RAII path.
+      #   This cell is therefore NOT full runtime TSan coverage of all fuse blocks.
+      #
+      # --features hybrid,fuse: same rationale as ASan fuse cell. --lib runs the
+      # library unit tests only (no /dev/fuse needed on the CI runner).
+      - name: TSan — fuse unsafe surface (--features hybrid,fuse)
+        run: cargo +nightly-2026-04-15 test --features hybrid,fuse --lib --target x86_64-unknown-linux-gnu -Zbuild-std --no-fail-fast

@@ -240,6 +240,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(miri))] // Salt::new() is stubbed to all-zero under miri (FFI randombytes_buf no-op)
     fn test_salt_generation() {
         let salt1 = Salt::new();
         let salt2 = Salt::new();

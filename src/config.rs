@@ -126,13 +126,28 @@ pub fn load_project_config_from(start_dir: &Path) -> Result<(PathBuf, ProjectCon
     Ok((config_path, config))
 }
 
-/// Check if a config file exists and determine its format
+/// Check if a config file exists and determine its format.
+///
+/// `allow_unsigned_vault_config` is forwarded to `load_from_file_with_opts` so
+/// that a `format_version=1` config with a [vault] section is not rejected by the
+/// VCFG-05 gate when the caller has passed `--allow-unsigned`.  The default
+/// `detect_config_format` wrapper uses `false`; opts-aware callers use
+/// `detect_config_format_opts` with the user-supplied flag.
 pub fn detect_config_format<P: AsRef<Path>>(config_path: P) -> Result<ConfigFormat> {
+    detect_config_format_opts(config_path, false)
+}
+
+/// Like `detect_config_format` but with explicit `allow_unsigned_vault_config`.
+pub fn detect_config_format_opts<P: AsRef<Path>>(
+    config_path: P,
+    allow_unsigned_vault_config: bool,
+) -> Result<ConfigFormat> {
     if !config_path.as_ref().exists() {
         return Ok(ConfigFormat::Missing);
     }
 
-    let config = ProjectConfig::load_from_file(&config_path)?;
+    let config =
+        ProjectConfig::load_from_file_with_opts(&config_path, allow_unsigned_vault_config, false)?;
 
     if config.is_legacy_format() {
         Ok(ConfigFormat::Legacy)
@@ -152,29 +167,43 @@ pub enum ConfigFormat {
     Empty,  // New format but no users yet
 }
 
-/// Atomically write a `ProjectConfig` to `target` via a temp file in the same
-/// directory (D-13). Prevents torn-file state under concurrent access or crash.
+/// Atomically write arbitrary bytes to `target` via a temp file in the **same
+/// parent directory** (avoids cross-device rename on Docker / NFS mounts).
 ///
-/// Called by every sign-on-write site in this crate (init, user add/remove,
-/// migrate). Implemented once here to avoid divergence (Pitfall 8 / 19-02).
-// Why: all callers (commands::envelope, commands::users sign-on-write, the
-// init-time sign block here) are #[cfg(feature = "hybrid")] gated. Under the
-// default no-hybrid build this function has no callers — dead_code is correct
-// in that arm but the function is load-bearing for the hybrid feature.
-#[cfg_attr(not(feature = "hybrid"), allow(dead_code))]
-pub(crate) fn write_atomic(cfg: &ProjectConfig, target: &Path) -> Result<()> {
+/// On any failure the original `target` is left untouched; the temp file is
+/// cleaned up automatically when `NamedTempFile` drops.
+///
+/// Used by: `write_atomic` (project config), `VaultLockFile::write_atomic`
+/// (lockfile), and the render `-o / --in-place` paths (VFAIL-03 / VFAIL-06).
+pub(crate) fn write_atomic_bytes(bytes: &[u8], target: &Path) -> Result<()> {
     use std::io::Write as _;
     let parent = target
         .parent()
         .ok_or_else(|| anyhow!("target has no parent directory"))?;
-    let toml = crate::toml_helpers::serialize_toml(cfg, "project config")?;
     let mut tmp = tempfile::NamedTempFile::new_in(parent)
         .map_err(|e| anyhow!("failed to create temp file for atomic write: {e}"))?;
-    tmp.write_all(toml.as_bytes())
-        .map_err(|e| anyhow!("failed to write config to temp file: {e}"))?;
+    tmp.write_all(bytes)
+        .map_err(|e| anyhow!("failed to write bytes to temp file: {e}"))?;
     tmp.persist(target)
-        .map_err(|e| anyhow!("atomic rename failed: {e}"))?;
+        .map_err(|e| anyhow!("atomic rename failed: {}", e.error))?;
     Ok(())
+}
+
+/// Atomically write a `ProjectConfig` to `target` via a temp file in the same
+/// directory (D-13). Prevents torn-file state under concurrent access or crash.
+///
+/// Called by every sign-on-write site in this crate (init, user add/remove,
+/// migrate). Delegates to `write_atomic_bytes` so the atomic-rename logic lives
+/// in exactly one place.
+// Why: callers (commands::envelope, commands::users sign-on-write, the
+// init-time sign block, commands::migrate) are all #[cfg(feature = "hybrid")]
+// gated.  Under the default no-hybrid build this function has no callers —
+// dead_code is correct in that arm but the function is load-bearing for the
+// hybrid feature.
+#[cfg_attr(not(feature = "hybrid"), allow(dead_code))]
+pub(crate) fn write_atomic(cfg: &ProjectConfig, target: &Path) -> Result<()> {
+    let toml = crate::toml_helpers::serialize_toml(cfg, "project config")?;
+    write_atomic_bytes(toml.as_bytes(), target)
 }
 
 /// Initialize a new project configuration.
@@ -245,8 +274,11 @@ pub fn init_project_config<P: AsRef<Path>>(
         }
 
         // Build canonical payload and sign with both legs (AND-composition).
+        // Sign under the context matching config.format_version (=2 here, set above):
+        // a non-vault init stays at fv=2 and signs/verifies under the v2 context (VSIG-01,
+        // no force-bump to v3).
         let payload = crate::envelope_sig::build_envelope_payload(&config);
-        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload, config.format_version)?;
 
         // Set cfg.envelope.sig (envelope is Option<EnvelopeMeta> — Pitfall 3).
         config
@@ -292,6 +324,21 @@ fn load_project_config_internal<P: AsRef<Path>>(
     search_for_root: bool,
     use_agent: bool,
 ) -> Result<(ProjectConfig, crate::crypto::RepositoryKey, Option<PathBuf>)> {
+    load_project_config_internal_opts(config_path, search_for_root, use_agent, false)
+}
+
+// Why: same reasoning as load_project_config_internal — this is the unified
+// dispatcher and splitting it further would re-introduce the duplication it exists
+// to prevent; the extra allow_unsigned_vault_config parameter adds no lines of
+// its own beyond the single detect_config_format_opts call and load_from_file_with_opts
+// expansion that replace the unsigned variants.
+#[allow(clippy::too_many_lines)]
+fn load_project_config_internal_opts<P: AsRef<Path>>(
+    config_path: P,
+    search_for_root: bool,
+    use_agent: bool,
+    allow_unsigned_vault_config: bool,
+) -> Result<(ProjectConfig, crate::crypto::RepositoryKey, Option<PathBuf>)> {
     let config_path = config_path.as_ref();
 
     // If search_for_root is true and config_path is just the filename, search for project root
@@ -313,7 +360,7 @@ fn load_project_config_internal<P: AsRef<Path>>(
         None
     };
 
-    let format = detect_config_format(&actual_config_path)?;
+    let format = detect_config_format_opts(&actual_config_path, allow_unsigned_vault_config)?;
 
     match format {
         ConfigFormat::Missing => Err(anyhow!(
@@ -327,7 +374,11 @@ fn load_project_config_internal<P: AsRef<Path>>(
             "Project configuration exists but has no users. Add yourself with 'sss user add'."
         )),
         ConfigFormat::Modern => {
-            let config = ProjectConfig::load_from_file(&actual_config_path)?;
+            let config = ProjectConfig::load_from_file_with_opts(
+                &actual_config_path,
+                allow_unsigned_vault_config,
+                false,
+            )?;
             config.validate()?;
 
             let keystore = crate::keystore::Keystore::new()?;
@@ -450,6 +501,21 @@ pub fn load_project_config_with_repository_key<P: AsRef<Path>>(
     let (config, repository_key, project_root) = load_project_config_internal(config_path, true, true)?;
     // WR-02 fix: replace unwrap() with a proper error — future callers with search_for_root=false
     // would get a confusing panic rather than a clear message without this guard.
+    Ok((config, repository_key, project_root.ok_or_else(|| anyhow!("Project root could not be resolved — ensure you are inside an SSS project directory"))?))
+}
+
+/// Like `load_project_config_with_repository_key` but with explicit `allow_unsigned_vault_config`.
+///
+/// Used by CLI callers that expose `--allow-unsigned` for vault-bearing `format_version=1`
+/// projects (VCFG-05 opt-in).  The standard `load_project_config_with_repository_key`
+/// wrapper hardcodes `allow_unsigned_vault_config=false`; this variant passes the
+/// caller-supplied flag through to `ProjectConfig::load_from_file_with_opts`.
+pub fn load_project_config_with_repository_key_opts<P: AsRef<Path>>(
+    config_path: P,
+    allow_unsigned_vault_config: bool,
+) -> Result<(ProjectConfig, crate::crypto::RepositoryKey, PathBuf)> {
+    let (config, repository_key, project_root) =
+        load_project_config_internal_opts(config_path, true, true, allow_unsigned_vault_config)?;
     Ok((config, repository_key, project_root.ok_or_else(|| anyhow!("Project root could not be resolved — ensure you are inside an SSS project directory"))?))
 }
 

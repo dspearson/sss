@@ -14,6 +14,8 @@ use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+use zeroize::Zeroizing;
+
 use crate::crypto::{ClassicKeyPair, KeyPair, PublicKey, SecretKey};
 use crate::kdf::{DerivedKey, KdfParams, Salt};
 use crate::keyring_support;
@@ -191,7 +193,8 @@ impl Keystore {
             let derived_key = DerivedKey::derive_with_params(password, &salt, &self.kdf_params)
                 .map_err(|e| anyhow!("keystore: kdf-derive (store_keypair): {e}"))?;
 
-            let secret_key_str = keypair.secret_key()?.to_base64();
+            let secret_key_str: Zeroizing<String> =
+                Zeroizing::new(keypair.secret_key()?.to_base64());
             let encrypted_secret_key =
                 crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
                     .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_keypair): {e}"))?;
@@ -222,7 +225,8 @@ impl Keystore {
         // Handle keyring storage if enabled and no password provided
         let (final_encrypted_key, in_keyring) = if self.use_keyring && password.is_none() {
             // Store in system keyring instead of file
-            let secret_key_b64 = keypair.secret_key()?.to_base64();
+            let secret_key_b64: Zeroizing<String> =
+                Zeroizing::new(keypair.secret_key()?.to_base64());
             keyring_support::store_key_in_keyring(&key_id, &secret_key_b64)
                 .map_err(|e| anyhow!("keystore: keyring-store for key_id={key_id}: {e}"))?;
             eprintln!("✓ Private key stored in system keyring");
@@ -354,6 +358,9 @@ impl Keystore {
             .map_err(|e| anyhow!("keystore: parse-stored-toml for key_id={key_id}: {e}"))?;
 
         // Phase 18 / D-10 format_version dispatch.
+        // Phase 38-03 (REM-04): format_version=3 is the new signed format —
+        // KDF params (kdf_ops_limit, kdf_mem_limit) are included in the
+        // payload. Dispatch arm mirrors format_version=2.
         match stored_keypair.format_version {
             1 => {
                 if !allow_unsigned {
@@ -363,7 +370,7 @@ impl Keystore {
                 }
                 // Proceed without verify.
             }
-            2 => {
+            2 | 3 => {
                 #[cfg(feature = "hybrid")]
                 {
                     self.verify_stored_signature(&stored_keypair, &key_file)?;
@@ -371,7 +378,8 @@ impl Keystore {
                 #[cfg(not(feature = "hybrid"))]
                 {
                     return Err(anyhow!(
-                        "keystore: entry {key_id} is signed (format_version=2) but the current build does not include the `hybrid` feature; rebuild with --features hybrid"
+                        "keystore: entry {key_id} is signed (format_version={}) but the current build does not include the `hybrid` feature; rebuild with --features hybrid",
+                        stored_keypair.format_version
                     ));
                 }
             }
@@ -469,6 +477,11 @@ impl Keystore {
     /// * `key_id` - The ID of the key to modify
     /// * `old_password` - Current password (None if key is not protected)
     /// * `new_password` - New password to set
+    // Why: set_passphrase performs a complete re-encryption cycle — load old key,
+    // re-derive new KDF, AEAD-encrypt, rebuild StoredKeyPair, re-sign (hybrid),
+    // and atomic-write.  The logic is a linear sequence with no natural split
+    // point that wouldn't require passing ~6 intermediate values.
+    #[allow(clippy::too_many_lines)]
     pub fn set_passphrase(
         &self,
         key_id: &str,
@@ -493,7 +506,8 @@ impl Keystore {
         let salt = Salt::new();
         let derived_key = DerivedKey::derive_with_params(new_password, &salt, &self.kdf_params)
             .map_err(|e| anyhow!("keystore: kdf-derive (new passphrase) for key_id={key_id}: {e}"))?;
-        let secret_key_str = keypair.secret_key()?.to_base64();
+        let secret_key_str: Zeroizing<String> =
+            Zeroizing::new(keypair.secret_key()?.to_base64());
         let encrypted_secret_key =
             crate::crypto::encrypt_to_base64(&secret_key_str, &derived_key.to_encryption_key())
                 .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (set_passphrase) for key_id={key_id}: {e}"))?;
@@ -531,13 +545,135 @@ impl Keystore {
                 Zeroizing::new(BASE64_STANDARD.decode(enc_hybrid_b64)
                     .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (set_passphrase, passwordless) for key_id={key_id}: {e}"))?)
             };
-            let hybrid_sk_b64 = BASE64_STANDARD.encode(&raw_hybrid[..]);
+            let hybrid_sk_b64: Zeroizing<String> =
+                Zeroizing::new(BASE64_STANDARD.encode(&raw_hybrid[..]));
             let new_enc = crate::crypto::encrypt_to_base64(
                 &hybrid_sk_b64,
                 &derived_key.to_encryption_key(),
             )
                 .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (set_passphrase) for key_id={key_id}: {e}"))?;
             stored.hybrid_encrypted_secret_key = Some(new_enc);
+        }
+
+        // CR-02 (Phase 38-04): re-encrypt sig SKs and re-sign under updated KDF params
+        // BEFORE stored.salt is overwritten. For format_version=3 entries, the signed
+        // payload includes kdf_ops_limit/kdf_mem_limit keyed off is_password_protected.
+        // After this function, is_password_protected becomes true and the KDF sentinel
+        // changes from 0/0 to real params — the stored signature must be updated, or
+        // the entry will fail verification on the next load.
+        //
+        // The sig SKs are also encrypted under the KEK; they must be re-encrypted here
+        // (same pattern as hybrid_encrypted_secret_key above) so decrypt_sig_keys
+        // in load_keypair can still read them after the salt changes.
+        #[cfg(feature = "hybrid")]
+        if stored.format_version >= 3 {
+            use base64::prelude::BASE64_STANDARD;
+            use crate::keystore::sig::{build_signed_payload, sign_entry};
+            use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+            use zeroize::Zeroizing;
+
+            let ed448_enc_field = stored
+                .sig_ed448_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_ed448_encrypted_secret_key missing on v3 entry {key_id}"))?
+                .clone();
+            let mldsa_enc_field = stored
+                .sig_mldsa65_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_mldsa65_encrypted_secret_key missing on v3 entry {key_id}"))?
+                .clone();
+
+            // Decrypt sig SKs under the OLD KEK (before salt is overwritten).
+            let (ed448_sk_raw, mldsa_sk_raw): (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) =
+                if let Some(old_pw) = old_password {
+                    // Was password-protected — decrypt with old password + old salt.
+                    let old_salt_str = stored
+                        .salt
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("keystore: salt missing for protected v3 entry {key_id} (set_passphrase)"))?;
+                    let old_salt = Salt::from_base64(old_salt_str)
+                        .map_err(|e| anyhow!("keystore: salt-decode-sig (set_passphrase, old) for key_id={key_id}: {e}"))?;
+                    let old_dk = DerivedKey::derive_with_params(old_pw, &old_salt, &self.kdf_params)
+                        .map_err(|e| anyhow!("keystore: kdf-derive-sig (set_passphrase, old) for key_id={key_id}: {e}"))?;
+                    let old_enc_key = old_dk.to_encryption_key();
+
+                    let enc_ed448 = BASE64_STANDARD.decode(&ed448_enc_field)
+                        .map_err(|e| anyhow!("keystore: b64-decode-sig-ed448 (set_passphrase) for key_id={key_id}: {e}"))?;
+                    let dec_ed448_b64 = Zeroizing::new(
+                        crate::crypto::decrypt(&enc_ed448, &old_enc_key)
+                            .map_err(|_| anyhow!("keystore: aead-decrypt-sig-ed448 (set_passphrase) for {key_id}"))?,
+                    );
+                    let ed448_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(
+                            std::str::from_utf8(&dec_ed448_b64)
+                                .map_err(|e| anyhow!("keystore: sig-ed448-utf8 (set_passphrase): {e}"))?,
+                        )
+                            .map_err(|e| anyhow!("keystore: sig-ed448-b64inner (set_passphrase): {e}"))?,
+                    );
+
+                    let enc_mldsa = BASE64_STANDARD.decode(&mldsa_enc_field)
+                        .map_err(|e| anyhow!("keystore: b64-decode-sig-mldsa65 (set_passphrase) for key_id={key_id}: {e}"))?;
+                    let dec_mldsa_b64 = Zeroizing::new(
+                        crate::crypto::decrypt(&enc_mldsa, &old_enc_key)
+                            .map_err(|_| anyhow!("keystore: aead-decrypt-sig-mldsa65 (set_passphrase) for {key_id}"))?,
+                    );
+                    let mldsa_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(
+                            std::str::from_utf8(&dec_mldsa_b64)
+                                .map_err(|e| anyhow!("keystore: sig-mldsa65-utf8 (set_passphrase): {e}"))?,
+                        )
+                            .map_err(|e| anyhow!("keystore: sig-mldsa65-b64inner (set_passphrase): {e}"))?,
+                    );
+
+                    (ed448_raw, mldsa_raw)
+                } else {
+                    // Was passwordless — sig SKs stored as plain base64 of raw bytes.
+                    let ed448_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(&ed448_enc_field)
+                            .map_err(|e| anyhow!("keystore: b64-decode-sig-ed448-plain (set_passphrase): {e}"))?,
+                    );
+                    let mldsa_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(&mldsa_enc_field)
+                            .map_err(|e| anyhow!("keystore: b64-decode-sig-mldsa65-plain (set_passphrase): {e}"))?,
+                    );
+                    (ed448_raw, mldsa_raw)
+                };
+
+            // Re-encrypt sig SKs under the NEW KEK (new password + new salt).
+            let new_enc_key = derived_key.to_encryption_key();
+            let ed448_sk_b64: Zeroizing<String> =
+                Zeroizing::new(BASE64_STANDARD.encode(&ed448_sk_raw[..]));
+            let new_enc_ed448 = crate::crypto::encrypt_to_base64(&ed448_sk_b64, &new_enc_key)
+                .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (set_passphrase) for key_id={key_id}: {e}"))?;
+            let mldsa_sk_b64: Zeroizing<String> =
+                Zeroizing::new(BASE64_STANDARD.encode(&mldsa_sk_raw[..]));
+            let new_enc_mldsa = crate::crypto::encrypt_to_base64(&mldsa_sk_b64, &new_enc_key)
+                .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (set_passphrase) for key_id={key_id}: {e}"))?;
+            stored.sig_ed448_encrypted_secret_key = Some(new_enc_ed448);
+            stored.sig_mldsa65_encrypted_secret_key = Some(new_enc_mldsa);
+
+            // Reconstruct signing-key objects and re-sign with is_password_protected=true
+            // and the new KDF cost params.
+            let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_raw)
+                .map_err(|e| anyhow!("keystore: ed448-sk-from-bytes (set_passphrase) for {key_id}: {e}"))?;
+            let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_raw)
+                .map_err(|e| anyhow!("keystore: mldsa65-sk-from-bytes (set_passphrase) for {key_id}: {e}"))?;
+
+            // After the update below, is_password_protected=true → use real KDF params.
+            let payload = build_signed_payload(
+                &stored.uuid,
+                &stored.public_key,
+                stored.hybrid_public_key.as_deref(),
+                stored.sig_ed448_public_key.as_deref(),
+                stored.sig_mldsa65_public_key.as_deref(),
+                &stored.created_at.to_rfc3339(),
+                self.kdf_params.ops_limit,
+                self.kdf_params.mem_limit,
+            );
+            stored.signature = Some(
+                sign_entry(&ed448_sk, &mldsa_sk, &payload)
+                    .map_err(|e| anyhow!("keystore: sign-entry (set_passphrase) for key_id={key_id}: {e}"))?,
+            );
         }
 
         // Update the stored keypair
@@ -574,6 +710,10 @@ impl Keystore {
     /// # Arguments
     /// * `key_id` - The ID of the key to modify
     /// * `current_password` - Current password protecting the key
+    // Why: remove_passphrase performs AEAD-decrypt, rebuild of a passwordless
+    // StoredKeyPair (with all optional sig fields), re-sign (hybrid), and
+    // atomic-write — a linear sequence with no clean helper boundary.
+    #[allow(clippy::too_many_lines)]
     pub fn remove_passphrase(&self, key_id: &str, current_password: &str) -> Result<()> {
         // Load the keypair with the current password.
         // 18-03: pass `allow_unsigned: true` — passphrase removal MUST work on
@@ -617,8 +757,106 @@ impl Keystore {
                     .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (remove_passphrase) for key_id={key_id}: {e}"))?);
         }
 
-        // Store secret key as plaintext (base64 encoded)
-        stored.encrypted_secret_key = keypair.secret_key()?.to_base64();
+        // CR-02 (Phase 38-04): re-decrypt sig SKs under the current KEK, store them as
+        // plain base64 (passwordless form), and re-sign under the updated 0/0 KDF sentinel
+        // BEFORE stored.salt is cleared. For format_version=3 entries, the signed payload
+        // includes kdf_ops_limit/kdf_mem_limit. After removal, is_password_protected=false
+        // → the verifier reconstructs the payload with 0/0. The stored signature still
+        // covers the real params — verification fails permanently unless re-signed here.
+        #[cfg(feature = "hybrid")]
+        if stored.format_version >= 3 {
+            use base64::prelude::BASE64_STANDARD;
+            use crate::keystore::sig::{build_signed_payload, sign_entry};
+            use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+            use zeroize::Zeroizing;
+
+            let ed448_enc_field = stored
+                .sig_ed448_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_ed448_encrypted_secret_key missing on v3 entry {key_id}"))?
+                .clone();
+            let mldsa_enc_field = stored
+                .sig_mldsa65_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_mldsa65_encrypted_secret_key missing on v3 entry {key_id}"))?
+                .clone();
+
+            // Decrypt sig SKs under the current KEK (salt still valid here).
+            let salt_str = stored
+                .salt
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: salt missing for protected v3 entry {key_id} (remove_passphrase)"))?;
+            let salt_obj = Salt::from_base64(salt_str)
+                .map_err(|e| anyhow!("keystore: salt-decode-sig (remove_passphrase) for key_id={key_id}: {e}"))?;
+            let dk = DerivedKey::derive_with_params(current_password, &salt_obj, &self.kdf_params)
+                .map_err(|e| anyhow!("keystore: kdf-derive-sig (remove_passphrase) for key_id={key_id}: {e}"))?;
+            let enc_key = dk.to_encryption_key();
+
+            let enc_ed448 = BASE64_STANDARD.decode(&ed448_enc_field)
+                .map_err(|e| anyhow!("keystore: b64-decode-sig-ed448 (remove_passphrase) for key_id={key_id}: {e}"))?;
+            let dec_ed448_b64 = Zeroizing::new(
+                crate::crypto::decrypt(&enc_ed448, &enc_key)
+                    .map_err(|_| anyhow!("keystore: aead-decrypt-sig-ed448 (remove_passphrase) for {key_id}"))?,
+            );
+            let ed448_sk_raw = Zeroizing::new(
+                BASE64_STANDARD.decode(
+                    std::str::from_utf8(&dec_ed448_b64)
+                        .map_err(|e| anyhow!("keystore: sig-ed448-utf8 (remove_passphrase): {e}"))?,
+                )
+                    .map_err(|e| anyhow!("keystore: sig-ed448-b64inner (remove_passphrase): {e}"))?,
+            );
+
+            let enc_mldsa = BASE64_STANDARD.decode(&mldsa_enc_field)
+                .map_err(|e| anyhow!("keystore: b64-decode-sig-mldsa65 (remove_passphrase) for key_id={key_id}: {e}"))?;
+            let dec_mldsa_b64 = Zeroizing::new(
+                crate::crypto::decrypt(&enc_mldsa, &enc_key)
+                    .map_err(|_| anyhow!("keystore: aead-decrypt-sig-mldsa65 (remove_passphrase) for {key_id}"))?,
+            );
+            let mldsa_sk_raw = Zeroizing::new(
+                BASE64_STANDARD.decode(
+                    std::str::from_utf8(&dec_mldsa_b64)
+                        .map_err(|e| anyhow!("keystore: sig-mldsa65-utf8 (remove_passphrase): {e}"))?,
+                )
+                    .map_err(|e| anyhow!("keystore: sig-mldsa65-b64inner (remove_passphrase): {e}"))?,
+            );
+
+            // Switch sig SK storage to passwordless form (plain base64 of raw bytes).
+            stored.sig_ed448_encrypted_secret_key =
+                Some(BASE64_STANDARD.encode(&ed448_sk_raw[..]));
+            stored.sig_mldsa65_encrypted_secret_key =
+                Some(BASE64_STANDARD.encode(&mldsa_sk_raw[..]));
+
+            // Re-sign with is_password_protected=false → 0/0 sentinel.
+            let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_raw)
+                .map_err(|e| anyhow!("keystore: ed448-sk-from-bytes (remove_passphrase) for {key_id}: {e}"))?;
+            let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_raw)
+                .map_err(|e| anyhow!("keystore: mldsa65-sk-from-bytes (remove_passphrase) for {key_id}: {e}"))?;
+
+            // Passwordless sentinel: kdf_ops_limit=0, kdf_mem_limit=0.
+            let payload = build_signed_payload(
+                &stored.uuid,
+                &stored.public_key,
+                stored.hybrid_public_key.as_deref(),
+                stored.sig_ed448_public_key.as_deref(),
+                stored.sig_mldsa65_public_key.as_deref(),
+                &stored.created_at.to_rfc3339(),
+                0u64,
+                0usize,
+            );
+            stored.signature = Some(
+                sign_entry(&ed448_sk, &mldsa_sk, &payload)
+                    .map_err(|e| anyhow!("keystore: sign-entry (remove_passphrase) for key_id={key_id}: {e}"))?,
+            );
+        }
+
+        // Store secret key as plaintext (base64 encoded).
+        // REM-21 / CR-03: wrap the to_base64() return in Zeroizing so the secret-key
+        // bytes are volatile-overwritten when the temporary drops, rather than lingering
+        // in heap pages. The clone into stored.encrypted_secret_key is unavoidable for
+        // the on-disk TOML write path; only the intermediate is zeroed here.
+        let secret_key_b64: zeroize::Zeroizing<String> =
+            zeroize::Zeroizing::new(keypair.secret_key()?.to_base64());
+        stored.encrypted_secret_key.clone_from(&*secret_key_b64);
         stored.salt = None;
         stored.is_password_protected = false;
 
@@ -689,7 +927,7 @@ impl Keystore {
         }
 
         // Sort by creation time (most recent first)
-        keys.sort_by_key(|b| std::cmp::Reverse(b.1.created_at));
+        keys.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
 
         Ok(keys)
     }
@@ -829,31 +1067,31 @@ impl Keystore {
                     let enc_key = dk.to_encryption_key();
 
                     // Classic secret — standard path (32-byte key, base64 string)
-                    let classic_sk_b64 =
-                        KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
+                    let classic_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(KeyPair::Classic(classic.clone()).secret_key()?.to_base64());
                     let enc_classic =
                         crate::crypto::encrypt_to_base64(&classic_sk_b64, &enc_key)
                             .map_err(|e| anyhow!("keystore: aead-encrypt-secret-key (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     // Hybrid secret — encode directly from Zeroizing<[u8; N]> to
                     // avoid copying into a non-Zeroizing buffer (T-03-02).
-                    let hybrid_sk_b64 =
-                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                    let hybrid_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref()));
                     let enc_hybrid =
                         crate::crypto::encrypt_to_base64(&hybrid_sk_b64, &enc_key)
                             .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
                     // Sig secrets — encrypted under the same KEK (D-07)
-                    let sig_ed448_sk_b64 =
-                        BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                    let sig_ed448_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(&ed448_sk_bytes[..]));
                     let enc_sig_ed448 = crate::crypto::encrypt_to_base64(
                         &sig_ed448_sk_b64,
                         &enc_key,
                     )
                         .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
 
-                    let sig_mldsa_sk_b64 =
-                        BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                    let sig_mldsa_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(&mldsa_sk_bytes[..]));
                     let enc_sig_mldsa = crate::crypto::encrypt_to_base64(
                         &sig_mldsa_sk_b64,
                         &enc_key,
@@ -875,19 +1113,19 @@ impl Keystore {
                     eprintln!("   ~/.config/sss/keys/");
                     eprintln!("\n   Consider using password protection (recommended)\n");
 
-                    let classic_sk_b64 =
-                        KeyPair::Classic(classic.clone()).secret_key()?.to_base64();
-                    let hybrid_sk_b64 =
-                        BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
-                    let sig_ed448_sk_b64 =
-                        BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
-                    let sig_mldsa_sk_b64 =
-                        BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                    let classic_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(KeyPair::Classic(classic.clone()).secret_key()?.to_base64());
+                    let hybrid_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref()));
+                    let sig_ed448_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(&ed448_sk_bytes[..]));
+                    let sig_mldsa_sk_b64: Zeroizing<String> =
+                        Zeroizing::new(BASE64_STANDARD.encode(&mldsa_sk_bytes[..]));
                     (
-                        classic_sk_b64,
-                        hybrid_sk_b64,
-                        sig_ed448_sk_b64,
-                        sig_mldsa_sk_b64,
+                        (*classic_sk_b64).clone(),
+                        (*hybrid_sk_b64).clone(),
+                        (*sig_ed448_sk_b64).clone(),
+                        (*sig_mldsa_sk_b64).clone(),
                         None,
                         false,
                     )
@@ -900,6 +1138,15 @@ impl Keystore {
                 let hybrid_public_key_b64 = BASE64_STANDARD.encode(hybrid.public_bytes);
 
                 // D-08 / D-19 canonical payload (identity-bearing public fields only)
+                // REM-04 (Phase 38-03): fields 7-8 = KDF cost params.
+                // For password-protected entries: sign the actual Argon2id cost.
+                // For passwordless entries: sign the 0/0 sentinel (no KDF applied).
+                let (kdf_ops, kdf_mem) = if is_protected {
+                    (self.kdf_params.ops_limit, self.kdf_params.mem_limit)
+                } else {
+                    // Passwordless sentinel: 0/0 (no KDF was applied).
+                    (0u64, 0usize)
+                };
                 let payload = build_signed_payload(
                     &key_id,
                     &public_key_b64,
@@ -907,6 +1154,8 @@ impl Keystore {
                     Some(&ed448_pk_b64),
                     Some(&mldsa_pk_b64),
                     &created_at.to_rfc3339(),
+                    kdf_ops,
+                    kdf_mem,
                 );
                 let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
                     .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case A) for key_id={key_id}: {e}"))?;
@@ -922,7 +1171,8 @@ impl Keystore {
                     hybrid_public_key: Some(hybrid_public_key_b64),
                     hybrid_encrypted_secret_key: Some(enc_hybrid),
                     // Phase 18 / PQSIG-02 — sign-on-write (D-10 v2)
-                    format_version: 2,
+                    // Phase 38-03 / REM-04 — format_version=3 for new entries with KDF params signed
+                    format_version: 3,
                     sig_ed448_public_key: Some(ed448_pk_b64),
                     sig_ed448_encrypted_secret_key: Some(enc_sig_ed448),
                     sig_mldsa65_public_key: Some(mldsa_pk_b64),
@@ -1016,24 +1266,24 @@ impl Keystore {
                             .map_err(|e| anyhow!("keystore: kdf-derive (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
                         let enc_key = dk.to_encryption_key();
 
-                        let hybrid_sk_b64 =
-                            BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref());
+                        let hybrid_sk_b64: Zeroizing<String> =
+                            Zeroizing::new(BASE64_STANDARD.encode(hybrid.secret_bytes.as_ref()));
                         let enc_h = crate::crypto::encrypt_to_base64(
                             &hybrid_sk_b64,
                             &enc_key,
                         )
                             .map_err(|e| anyhow!("keystore: aead-encrypt-hybrid (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
-                        let sig_ed448_sk_b64 =
-                            BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
+                        let sig_ed448_sk_b64: Zeroizing<String> =
+                            Zeroizing::new(BASE64_STANDARD.encode(&ed448_sk_bytes[..]));
                         let enc_e = crate::crypto::encrypt_to_base64(
                             &sig_ed448_sk_b64,
                             &enc_key,
                         )
                             .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
 
-                        let sig_mldsa_sk_b64 =
-                            BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
+                        let sig_mldsa_sk_b64: Zeroizing<String> =
+                            Zeroizing::new(BASE64_STANDARD.encode(&mldsa_sk_bytes[..]));
                         let enc_m = crate::crypto::encrypt_to_base64(
                             &sig_mldsa_sk_b64,
                             &enc_key,
@@ -1058,7 +1308,8 @@ impl Keystore {
                 stored.hybrid_encrypted_secret_key = Some(enc_hybrid);
 
                 // Phase 18 / PQSIG-02 — sign-on-write (D-10 v2)
-                stored.format_version = 2;
+                // Phase 38-03 / REM-04 — format_version=3 for new entries with KDF params signed
+                stored.format_version = 3;
                 stored.sig_ed448_public_key = Some(ed448_pk_b64.clone());
                 stored.sig_ed448_encrypted_secret_key = Some(enc_sig_ed448);
                 stored.sig_mldsa65_public_key = Some(mldsa_pk_b64.clone());
@@ -1066,6 +1317,15 @@ impl Keystore {
 
                 // D-08 / D-19 canonical payload (identity-bearing public fields only)
                 // Pitfall 1 — use the SAME `created_at` already on the struct, not a new now()
+                // REM-04 (Phase 38-03): fields 7-8 = KDF cost params.
+                // For password-protected entries: sign the actual Argon2id cost.
+                // For passwordless entries: sign the 0/0 sentinel (no KDF applied).
+                let (kdf_ops_b, kdf_mem_b) = if stored.is_password_protected {
+                    (self.kdf_params.ops_limit, self.kdf_params.mem_limit)
+                } else {
+                    // Passwordless sentinel: 0/0 (no KDF was applied).
+                    (0u64, 0usize)
+                };
                 let payload = build_signed_payload(
                     &stored.uuid,
                     &stored.public_key,
@@ -1073,6 +1333,8 @@ impl Keystore {
                     Some(&ed448_pk_b64),
                     Some(&mldsa_pk_b64),
                     &stored.created_at.to_rfc3339(),
+                    kdf_ops_b,
+                    kdf_mem_b,
                 );
                 let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
                     .map_err(|e| anyhow!("keystore: sign-entry (store_dual_keypair Case B) for key_id={key_id}: {e}"))?;
@@ -1111,9 +1373,16 @@ impl Keystore {
     /// - `format_version == 1` + `allow_unsigned == false` → hard error.
     /// - `format_version == 1` + `allow_unsigned == true`  → proceed (legacy read).
     /// - `format_version == 2` → invoke `verify_stored_signature` (D-11).
-    /// - `format_version >= 3` → hard error.
+    /// - `format_version == 3` → invoke `verify_stored_signature` (Phase 38-03 / REM-04).
+    /// - `format_version >= 4` → hard error.
     ///
     /// Returns `Err` if the file has no hybrid material, or if decryption fails.
+    // Why: load_hybrid_keypair handles format_version dispatch (1/2/3/≥4),
+    // conditional AEAD-decrypt or base64-decode, signature verification for v2/v3,
+    // and secret-material reconstruction with zeroisation.  Each branch
+    // depends on intermediate decrypted material; extracting helpers would
+    // require passing zeroizing buffers across call boundaries.
+    #[cfg_attr(feature = "hybrid", allow(clippy::too_many_lines))]
     #[cfg(feature = "hybrid")]
     pub fn load_hybrid_keypair(
         &self,
@@ -1137,6 +1406,7 @@ impl Keystore {
             .map_err(|e| anyhow!("keystore: parse-stored-toml (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
 
         // Phase 18 / D-10 format_version dispatch (mirrors load_keypair).
+        // Phase 38-03 (REM-04): format_version=3 added — KDF params in payload.
         match stored.format_version {
             1 => {
                 if !allow_unsigned {
@@ -1146,7 +1416,7 @@ impl Keystore {
                 }
                 // Proceed without verify.
             }
-            2 => {
+            2 | 3 => {
                 self.verify_stored_signature(&stored, &key_file)?;
             }
             v => {
@@ -1167,9 +1437,10 @@ impl Keystore {
             anyhow!("hybrid encrypted secret key missing from identity file")
         })?;
 
-        // Decrypt the hybrid secret material using the same path as classic.
-        // All intermediates are Zeroizing so secret bytes don't linger on the heap (WR-03).
-        let raw_secret_bytes: Zeroizing<Vec<u8>> = if stored.is_password_protected {
+        // Derive the key-encryption key (KEK) once, shared across hybrid + sig
+        // slot decryption and the REM-03 re-derivation checks.
+        // For passwordless entries: `kek = None` — keys stored as plain base64.
+        let kek: Option<crate::crypto::RepositoryKey> = if stored.is_password_protected {
             let pw = password.ok_or_else(|| {
                 anyhow!("Password required for encrypted key")
             })?;
@@ -1178,25 +1449,42 @@ impl Keystore {
             })?;
             let salt = crate::kdf::Salt::from_base64(salt_str)
                 .map_err(|e| anyhow!("keystore: salt-decode (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
-            let dk = crate::kdf::DerivedKey::derive_with_params(
-                pw, &salt, &self.kdf_params,
-            )
+            let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
                 .map_err(|e| anyhow!("keystore: kdf-derive (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
-            let enc_bytes = BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
-            let decrypted = Zeroizing::new(crate::crypto::decrypt(&enc_bytes, &dk.to_encryption_key())
-                .map_err(|e| anyhow!("keystore: aead-decrypt-hybrid (load_hybrid_keypair) for key_id={key_id}: {e}"))?);
-            // decrypted is the base64 string of the raw secret bytes
-            Zeroizing::new(BASE64_STANDARD.decode(
-                std::str::from_utf8(&decrypted)
-                    .map_err(|e| anyhow!("keystore: utf8-decrypted-hybrid (load_hybrid_keypair) for key_id={key_id}: {e}"))?
-            )
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-inner (load_hybrid_keypair) for key_id={key_id}: {e}"))?)
+            Some(dk.to_encryption_key())
         } else {
-            // Passwordless — stored as raw base64
-            Zeroizing::new(BASE64_STANDARD.decode(&hybrid_enc_sk_b64)
-                .map_err(|e| anyhow!("keystore: base64-decode-hybrid-secret-key (load_hybrid_keypair, passwordless) for key_id={key_id}: {e}"))?)
+            None
         };
+
+        // Decrypt helper: given a base64-encoded (possibly AEAD-encrypted) field,
+        // return raw key bytes in a Zeroizing buffer. Mirrors load_sig_keypair.
+        let decrypt_field = |field_b64: &str, label: &str| -> Result<Zeroizing<Vec<u8>>> {
+            if let Some(ref enc_key) = kek {
+                let enc_bytes = BASE64_STANDARD.decode(field_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-{label} (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
+                let decrypted = Zeroizing::new(
+                    crate::crypto::decrypt(&enc_bytes, enc_key)
+                        .map_err(|e| anyhow!("keystore: aead-decrypt-{label} (load_hybrid_keypair) for key_id={key_id}: {e}"))?
+                );
+                // decrypted is the base64 string of the raw key bytes
+                let inner_b64 = std::str::from_utf8(&decrypted)
+                    .map_err(|e| anyhow!("keystore: utf8-{label} (load_hybrid_keypair) for key_id={key_id}: {e}"))?;
+                Ok(Zeroizing::new(
+                    BASE64_STANDARD.decode(inner_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-{label}-inner (load_hybrid_keypair) for key_id={key_id}: {e}"))?
+                ))
+            } else {
+                // Passwordless — plain base64
+                Ok(Zeroizing::new(
+                    BASE64_STANDARD.decode(field_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-{label} (load_hybrid_keypair, passwordless) for key_id={key_id}: {e}"))?
+                ))
+            }
+        };
+
+        // Decrypt the hybrid secret material.
+        // All intermediates are Zeroizing so secret bytes don't linger on the heap (WR-03).
+        let raw_secret_bytes = decrypt_field(&hybrid_enc_sk_b64, "hybrid-sk")?;
 
         if raw_secret_bytes.len() != HYBRID_SECRET_KEY_SIZE {
             return Err(anyhow!(
@@ -1218,6 +1506,73 @@ impl Keystore {
         }
         let mut public_bytes = [0u8; HYBRID_PUBLIC_KEY_SIZE];
         public_bytes.copy_from_slice(&pub_bytes_raw);
+
+        // REM-03 (CRY-09) — Hybrid KEM slot: re-derive the public key from the
+        // recovered secret bytes and verify it matches the stored (signed) field.
+        {
+            use trelis_hybrid::kem::HybridKemKeypair;
+            use subtle::ConstantTimeEq;
+
+            let kem_check = HybridKemKeypair::from_bytes(&raw_secret_bytes[..])
+                .map_err(|e| anyhow!("keystore: hybrid KEM reconstruct (rederive check) for key_id={key_id}: {e}"))?;
+            let derived_pk_bytes = kem_check.public_key().to_bytes();
+            if derived_pk_bytes.as_ref().len() != pub_bytes_raw.len()
+                || derived_pk_bytes.as_ref().ct_eq(&pub_bytes_raw).unwrap_u8() != 1
+            {
+                return Err(anyhow!(
+                    "keystore entry corrupt or tampered: public key mismatch (hybrid slot)"
+                ));
+            }
+        }
+
+        // REM-03 (CRY-09) — Ed448 + ML-DSA-65 sig slots (if present in this
+        // entry). Classic-only entries have these fields as None; guard with
+        // `if let Some(...)` so they are not falsely rejected.
+        //
+        // The sig public keys are signed (part of `StoredKeyPair.signature`), so
+        // an attacker who swaps the sig-encrypted-secret-key ciphertext would be
+        // caught here: we decrypt the ciphertext, re-derive the verifying key, and
+        // compare it to the signed stored public key.
+        {
+            use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
+            use subtle::ConstantTimeEq;
+
+            if let Some(stored_ed448_pk_b64) = stored.sig_ed448_public_key.as_deref()
+                && let Some(enc_ed448_sk_b64) = stored.sig_ed448_encrypted_secret_key.as_deref() {
+                    let ed448_sk_bytes = decrypt_field(enc_ed448_sk_b64, "sig-ed448-sk")?;
+                    let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_bytes)
+                        .map_err(|e| anyhow!("keystore: parse-ed448-sk (rederive) for key_id={key_id}: {e}"))?;
+                    let vk = Ed448Standard::verifying_key(&ed448_sk);
+                    let derived_ed448_pk = Ed448Standard::verifying_key_to_bytes(&vk);
+                    let stored_ed448_pk = BASE64_STANDARD.decode(stored_ed448_pk_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-ed448-pk (rederive) for key_id={key_id}: {e}"))?;
+                    if derived_ed448_pk.as_ref().len() != stored_ed448_pk.len()
+                        || derived_ed448_pk.as_ref().ct_eq(&stored_ed448_pk).unwrap_u8() != 1
+                    {
+                        return Err(anyhow!(
+                            "keystore entry corrupt or tampered: public key mismatch (Ed448 slot)"
+                        ));
+                    }
+                }
+
+            if let Some(stored_mldsa_pk_b64) = stored.sig_mldsa65_public_key.as_deref()
+                && let Some(enc_mldsa_sk_b64) = stored.sig_mldsa65_encrypted_secret_key.as_deref() {
+                    let mldsa_sk_bytes = decrypt_field(enc_mldsa_sk_b64, "sig-mldsa65-sk")?;
+                    let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_bytes)
+                        .map_err(|e| anyhow!("keystore: parse-mldsa65-sk (rederive) for key_id={key_id}: {e}"))?;
+                    let vk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+                    let derived_mldsa_pk = MlDsa65Fips204::verifying_key_to_bytes(&vk);
+                    let stored_mldsa_pk = BASE64_STANDARD.decode(stored_mldsa_pk_b64)
+                        .map_err(|e| anyhow!("keystore: base64-decode-mldsa65-pk (rederive) for key_id={key_id}: {e}"))?;
+                    if derived_mldsa_pk.as_ref().len() != stored_mldsa_pk.len()
+                        || derived_mldsa_pk.as_ref().ct_eq(&stored_mldsa_pk).unwrap_u8() != 1
+                    {
+                        return Err(anyhow!(
+                            "keystore entry corrupt or tampered: public key mismatch (ML-DSA-65 slot)"
+                        ));
+                    }
+                }
+        }
 
         // Reconstruct secret bytes into Zeroizing<[u8; N]> (T-03-05)
         let mut secret_array = [0u8; HYBRID_SECRET_KEY_SIZE];
@@ -1242,6 +1597,11 @@ impl Keystore {
     ///
     /// Returns `Err` if the current key has no sig material (`format_version` < 2 or
     /// fields absent) or if decryption / key-parse fails.
+    // Why: load_sig_keypair handles both password-protected and passwordless
+    // paths for two key types (Ed448 + ML-DSA-65), each needing AEAD-decrypt
+    // or base64-decode followed by key-parse.  Splitting would require passing
+    // zeroizing intermediate buffers across call boundaries without clarity gain.
+    #[cfg_attr(feature = "hybrid", allow(clippy::too_many_lines))]
     #[cfg(feature = "hybrid")]
     pub fn load_sig_keypair(
         &self,
@@ -1268,6 +1628,14 @@ impl Keystore {
 
         // Guard: sig material only exists in format_version >= 2 entries.
         // format_version == 1 entries were created before Phase 18 sig keys.
+        //
+        // IN-01 (Phase 38-04): The `< 2` bound is intentionally asymmetric with the
+        // `2 | 3` arms used elsewhere in the dispatch ladder. Using `< 2` here
+        // (rather than `== 1`) is forward-compatible: any future format_version still
+        // has sig material (Phase 18 established sig keys from v2 onwards), so the
+        // guard correctly admits v4+ entries without a code change. The `2 | 3` arms
+        // in load_keypair / verify_stored_signature are explicit because they dispatch
+        // on payload schema differences — this guard only tests presence of sig fields.
         if stored.format_version < 2 {
             return Err(anyhow!(
                 "keystore: entry {} has no sig keypair (format_version={}); \
@@ -1343,18 +1711,61 @@ impl Keystore {
         let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_bytes)
             .map_err(|e| anyhow!("keystore: parse-mldsa65-sig-signing-key for key_id={key_id}: {e}"))?;
 
+        // REM-03 (CRY-09) — Ed448 + ML-DSA-65 sig slots: re-derive each
+        // verifying key from the recovered signing key bytes and compare against
+        // the stored (signed) public key fields.
+        //
+        // load_sig_keypair already requires format_version >= 2 (guard at the top
+        // of this function), so sig_*_public_key fields are expected to be Some
+        // for all entries that reach this point. The `if let Some(...)` guards
+        // handle any edge cases where fields might be absent despite format_version=2.
+        {
+            use subtle::ConstantTimeEq;
+
+            if let Some(stored_ed448_pk_b64) = stored.sig_ed448_public_key.as_deref() {
+                let vk = Ed448Standard::verifying_key(&ed448_sk);
+                let derived_ed448_pk = Ed448Standard::verifying_key_to_bytes(&vk);
+                let stored_ed448_pk = BASE64_STANDARD.decode(stored_ed448_pk_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-ed448-pk (rederive, load_sig_keypair) for key_id={key_id}: {e}"))?;
+                if derived_ed448_pk.as_ref().len() != stored_ed448_pk.len()
+                    || derived_ed448_pk.as_ref().ct_eq(&stored_ed448_pk).unwrap_u8() != 1
+                {
+                    return Err(anyhow!(
+                        "keystore entry corrupt or tampered: public key mismatch (Ed448 slot)"
+                    ));
+                }
+            }
+
+            if let Some(stored_mldsa_pk_b64) = stored.sig_mldsa65_public_key.as_deref() {
+                let vk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+                let derived_mldsa_pk = MlDsa65Fips204::verifying_key_to_bytes(&vk);
+                let stored_mldsa_pk = BASE64_STANDARD.decode(stored_mldsa_pk_b64)
+                    .map_err(|e| anyhow!("keystore: base64-decode-mldsa65-pk (rederive, load_sig_keypair) for key_id={key_id}: {e}"))?;
+                if derived_mldsa_pk.as_ref().len() != stored_mldsa_pk.len()
+                    || derived_mldsa_pk.as_ref().ct_eq(&stored_mldsa_pk).unwrap_u8() != 1
+                {
+                    return Err(anyhow!(
+                        "keystore entry corrupt or tampered: public key mismatch (ML-DSA-65 slot)"
+                    ));
+                }
+            }
+        }
+
         Ok((ed448_sk, mldsa_sk))
     }
 
-    /// Re-sign a `format_version=1` (legacy unsigned) entry in place,
-    /// promoting it to `format_version=2` (signed) without changing identity.
+    /// Re-sign a `format_version=1` or `format_version=2` entry in place,
+    /// promoting it to `format_version=3` without changing identity.
     ///
-    /// Phase 18-04 / PQSIG-03 transition path. Generates fresh per-entry
-    /// Ed448 + ML-DSA-65 sig keypairs, encrypts the sig SKs under the
-    /// EXISTING KEK (D-07; passwordless entries store base64 raw), bumps
-    /// `format_version` to 2, populates the four sig fields, builds the
-    /// canonical signed payload (D-08), and produces an AND-composition
-    /// signature via `keystore::sig::sign_entry`.
+    /// Phase 18-04 / PQSIG-03 transition path, updated Phase 38-03 (REM-04).
+    /// For v1 → v3: generates fresh per-entry Ed448 + ML-DSA-65 sig keypairs,
+    /// encrypts the sig SKs under the EXISTING KEK (D-07; passwordless entries
+    /// store base64 raw), bumps `format_version` to 3, populates the four sig
+    /// fields, builds the 8-field payload (including KDF params), and signs.
+    /// For v2 → v3: reuses the existing sig keypairs (no rotation), re-signs
+    /// with the updated 8-field payload after verifying the existing v2 signature.
+    /// The canonical signed payload (D-08) is rebuilt in all cases and an
+    /// AND-composition signature is produced via `keystore::sig::sign_entry`.
     ///
     /// Atomic write via `tempfile::NamedTempFile::new_in(parent).persist(target)`
     /// so a crash mid-write never produces a half-written entry (D-15).
@@ -1362,7 +1773,7 @@ impl Keystore {
     /// to `/tmp` which is a different filesystem on most Linux installs and
     /// `.persist()` would fail with `EXDEV` (cross-device link).
     ///
-    /// Refuses (without writing) if `format_version >= 2`; the caller (CLI)
+    /// Refuses (without writing) if `format_version >= 3`; the caller (CLI)
     /// surfaces this as a no-op message. Refuses if `format_version` is
     /// neither 1 nor 2 (future schema). Probes the existing KEK by
     /// decrypting `encrypted_secret_key` so a wrong passphrase fails BEFORE
@@ -1404,17 +1815,19 @@ impl Keystore {
         let mut stored: StoredKeyPair = toml::from_str(&content)
             .map_err(|e| anyhow!("keystore: parse-stored-toml (upgrade) for key_id={key_id}: {e}"))?;
 
-        // Refuse already-signed entries (D-17): upgrade IS the upgrade path
-        // for v1 → v2; there is no v2 → v2 re-sign mode.
-        if stored.format_version >= 2 {
+        // Refuse already-signed v3 entries (D-17): upgrade is the migration path
+        // for v1/v2 → v3; there is no v3 → v3 re-sign mode.
+        // Phase 38-03 (REM-04): v2 entries are re-signed to v3 (adds KDF params
+        // to the signed payload); v1 entries generate fresh sig keypairs then sign.
+        if stored.format_version >= 3 {
             return Err(anyhow!(
                 "keystore: entry {} is already signed (format_version={}); upgrade is a no-op",
                 key_id, stored.format_version
             ));
         }
-        if stored.format_version != 1 {
+        if stored.format_version != 1 && stored.format_version != 2 {
             return Err(anyhow!(
-                "keystore: unsupported format_version {} for upgrade (expected 1)",
+                "keystore: unsupported format_version {} for upgrade (expected 1 or 2)",
                 stored.format_version
             ));
         }
@@ -1443,69 +1856,178 @@ impl Keystore {
             );
         }
 
-        // Generate fresh per-entry sig keypairs (D-06).
-        let ed448_sk = Ed448Standard::generate()
-            .map_err(|e| anyhow!("keystore: Ed448 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
-        let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
-        let ed448_pk_b64 =
-            BASE64_STANDARD.encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
-        let ed448_sk_bytes =
-            Zeroizing::new(Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec());
+        // Phase 38-03 (REM-04): branch on source version.
+        //
+        // v1 → v3: generate fresh per-entry sig keypairs (D-06), encrypt them,
+        //          populate sig fields, build 8-field payload, sign.
+        // v2 → v3: reuse the existing sig keypairs (no rotation) — decrypt the
+        //          stored sig SKs, build the new 8-field payload (adds KDF params),
+        //          re-sign. Sig pub keys are unchanged; only `format_version` and
+        //          the signature blob are updated.
+        let (ed448_sk, mldsa_sk) = if stored.format_version == 1 {
+            // ── v1 → v3: generate fresh sig keypairs ─────────────────────────
 
-        let mldsa_sk = MlDsa65Fips204::generate()
-            .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
-        let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
-        let mldsa_pk_b64 =
-            BASE64_STANDARD.encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
-        let mldsa_sk_bytes =
-            Zeroizing::new(MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk).to_vec());
+            let ed448_sk = Ed448Standard::generate()
+                .map_err(|e| anyhow!("keystore: Ed448 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
+            let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+            let ed448_pk_b64 =
+                BASE64_STANDARD.encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
+            let ed448_sk_bytes =
+                Zeroizing::new(Ed448Standard::signing_key_to_bytes(&ed448_sk).to_vec());
 
-        // Encrypt sig SKs under the existing KEK (protected) or store base64
-        // raw (passwordless) — matches the precedent in store_dual_keypair
-        // Case A/B for D-07 consistency.
-        let (sig_ed448_sk_field, sig_mldsa_sk_field) = if stored.is_password_protected {
-            // Re-derive KEK (we already validated the passphrase above).
-            // Why: password and salt are validated as Some(_) in the preceding
-            // is_password_protected branch (see passphrase validation earlier in
-            // this fn body). HARDEN-01 / 08-01.
-            #[allow(clippy::expect_used)]
-            let pw = password.expect("checked above");
-            #[allow(clippy::expect_used)]
-            let salt_str = stored.salt.as_ref().expect("checked above");
-            let salt = crate::kdf::Salt::from_base64(salt_str)
-                .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={key_id}: {e}"))?;
-            let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
-                .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade) for key_id={key_id}: {e}"))?;
-            let enc_key = dk.to_encryption_key();
+            let mldsa_sk = MlDsa65Fips204::generate()
+                .map_err(|e| anyhow!("keystore: ML-DSA-65 sig keygen (upgrade) for key_id={key_id}: {e}"))?;
+            let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+            let mldsa_pk_b64 =
+                BASE64_STANDARD.encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
+            let mldsa_sk_bytes =
+                Zeroizing::new(MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk).to_vec());
 
-            let sig_ed448_sk_b64 = BASE64_STANDARD.encode(&ed448_sk_bytes[..]);
-            let enc_sig_ed448 =
-                crate::crypto::encrypt_to_base64(&sig_ed448_sk_b64, &enc_key)
-                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (upgrade) for key_id={key_id}: {e}"))?;
+            // Encrypt sig SKs under the existing KEK (protected) or store
+            // base64 raw (passwordless) — matches store_dual_keypair D-07.
+            let (sig_ed448_sk_field, sig_mldsa_sk_field) = if stored.is_password_protected {
+                // Re-derive KEK. password and salt already validated above.
+                #[allow(clippy::expect_used)]
+                let pw = password.expect("checked above");
+                #[allow(clippy::expect_used)]
+                let salt_str = stored.salt.as_ref().expect("checked above");
+                let salt = crate::kdf::Salt::from_base64(salt_str)
+                    .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade) for key_id={key_id}: {e}"))?;
+                let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
+                    .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade) for key_id={key_id}: {e}"))?;
+                let enc_key = dk.to_encryption_key();
 
-            let sig_mldsa_sk_b64 = BASE64_STANDARD.encode(&mldsa_sk_bytes[..]);
-            let enc_sig_mldsa =
-                crate::crypto::encrypt_to_base64(&sig_mldsa_sk_b64, &enc_key)
-                    .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (upgrade) for key_id={key_id}: {e}"))?;
+                let sig_ed448_sk_b64: Zeroizing<String> =
+                    Zeroizing::new(BASE64_STANDARD.encode(&ed448_sk_bytes[..]));
+                let enc_sig_ed448 =
+                    crate::crypto::encrypt_to_base64(&sig_ed448_sk_b64, &enc_key)
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-ed448 (upgrade) for key_id={key_id}: {e}"))?;
 
-            (enc_sig_ed448, enc_sig_mldsa)
+                let sig_mldsa_sk_b64: Zeroizing<String> =
+                    Zeroizing::new(BASE64_STANDARD.encode(&mldsa_sk_bytes[..]));
+                let enc_sig_mldsa =
+                    crate::crypto::encrypt_to_base64(&sig_mldsa_sk_b64, &enc_key)
+                        .map_err(|e| anyhow!("keystore: aead-encrypt-sig-mldsa65 (upgrade) for key_id={key_id}: {e}"))?;
+
+                (enc_sig_ed448, enc_sig_mldsa)
+            } else {
+                (
+                    BASE64_STANDARD.encode(&ed448_sk_bytes[..]),
+                    BASE64_STANDARD.encode(&mldsa_sk_bytes[..]),
+                )
+            };
+
+            // Populate sig fields (v1 had none).
+            stored.sig_ed448_public_key = Some(ed448_pk_b64);
+            stored.sig_ed448_encrypted_secret_key = Some(sig_ed448_sk_field);
+            stored.sig_mldsa65_public_key = Some(mldsa_pk_b64);
+            stored.sig_mldsa65_encrypted_secret_key = Some(sig_mldsa_sk_field);
+
+            (ed448_sk, mldsa_sk)
         } else {
-            (
-                BASE64_STANDARD.encode(&ed448_sk_bytes[..]),
-                BASE64_STANDARD.encode(&mldsa_sk_bytes[..]),
-            )
+            // ── v2 → v3: decrypt existing sig keypairs (no rotation) ─────────
+            // T-38-03: sig pub keys are unchanged; only the signed payload
+            // (now including KDF params) and the signature blob are updated.
+
+            // WR-03 (Phase 38-04): verify the existing v2 signature BEFORE re-signing.
+            // Without this check, an attacker who crafted a format_version=2 entry with
+            // arbitrary sig keypairs (skipping the v1-context verification) could cause
+            // `upgrade` to promote their chosen keys to v3 without any integrity check.
+            // `verify_stored_signature` now dispatches on format_version=2 → v1 context,
+            // so this call correctly verifies the 6-field, v1-context signature.
+            self.verify_stored_signature(&stored, &key_file)
+                .map_err(|e| anyhow!("keystore: v2 signature verification failed for {key_id} (WR-03 guard): {e}"))?;
+
+            let ed448_enc_field = stored
+                .sig_ed448_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_ed448_encrypted_secret_key missing on v2 entry {key_id}"))?;
+            let mldsa_enc_field = stored
+                .sig_mldsa65_encrypted_secret_key
+                .as_ref()
+                .ok_or_else(|| anyhow!("keystore: sig_mldsa65_encrypted_secret_key missing on v2 entry {key_id}"))?;
+
+            let (ed448_sk_bytes, mldsa_sk_bytes): (Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>) =
+                if stored.is_password_protected {
+                    // Decrypt sig SKs using the existing KEK.
+                    #[allow(clippy::expect_used)]
+                    let pw = password.expect("checked above");
+                    #[allow(clippy::expect_used)]
+                    let salt_str = stored.salt.as_ref().expect("checked above");
+                    let salt = crate::kdf::Salt::from_base64(salt_str)
+                        .map_err(|e| anyhow!("keystore: salt-decode-2 (upgrade-v2) for key_id={key_id}: {e}"))?;
+                    let dk = crate::kdf::DerivedKey::derive_with_params(pw, &salt, &self.kdf_params)
+                        .map_err(|e| anyhow!("keystore: kdf-derive-2 (upgrade-v2) for key_id={key_id}: {e}"))?;
+                    let enc_key = dk.to_encryption_key();
+
+                    let enc_ed448 = BASE64_STANDARD.decode(ed448_enc_field)
+                        .map_err(|e| anyhow!("keystore: base64-decode-sig-ed448 (upgrade-v2) for key_id={key_id}: {e}"))?;
+                    let dec_ed448_b64_bytes = Zeroizing::new(
+                        crate::crypto::decrypt(&enc_ed448, &enc_key)
+                            .map_err(|_| anyhow!("keystore: aead-decrypt-sig-ed448 (upgrade-v2) for {key_id}"))?,
+                    );
+                    // The plaintext is base64(raw_sk_bytes); decode it.
+                    let dec_ed448_b64_str = std::str::from_utf8(&dec_ed448_b64_bytes)
+                        .map_err(|e| anyhow!("keystore: sig-ed448-utf8 (upgrade-v2): {e}"))?;
+                    let ed448_sk_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(dec_ed448_b64_str)
+                            .map_err(|e| anyhow!("keystore: sig-ed448-b64decode-inner (upgrade-v2): {e}"))?,
+                    );
+
+                    let enc_mldsa = BASE64_STANDARD.decode(mldsa_enc_field)
+                        .map_err(|e| anyhow!("keystore: base64-decode-sig-mldsa65 (upgrade-v2) for key_id={key_id}: {e}"))?;
+                    let dec_mldsa_b64_bytes = Zeroizing::new(
+                        crate::crypto::decrypt(&enc_mldsa, &enc_key)
+                            .map_err(|_| anyhow!("keystore: aead-decrypt-sig-mldsa65 (upgrade-v2) for {key_id}"))?,
+                    );
+                    let dec_mldsa_b64_str = std::str::from_utf8(&dec_mldsa_b64_bytes)
+                        .map_err(|e| anyhow!("keystore: sig-mldsa65-utf8 (upgrade-v2): {e}"))?;
+                    let mldsa_sk_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(dec_mldsa_b64_str)
+                            .map_err(|e| anyhow!("keystore: sig-mldsa65-b64decode-inner (upgrade-v2): {e}"))?,
+                    );
+
+                    (ed448_sk_raw, mldsa_sk_raw)
+                } else {
+                    // Passwordless: sig SKs are stored as plain base64 of raw bytes.
+                    let ed448_sk_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(ed448_enc_field)
+                            .map_err(|e| anyhow!("keystore: base64-decode-sig-ed448-plain (upgrade-v2): {e}"))?,
+                    );
+                    let mldsa_sk_raw = Zeroizing::new(
+                        BASE64_STANDARD.decode(mldsa_enc_field)
+                            .map_err(|e| anyhow!("keystore: base64-decode-sig-mldsa65-plain (upgrade-v2): {e}"))?,
+                    );
+                    (ed448_sk_raw, mldsa_sk_raw)
+                };
+
+            // Reconstruct signing-key objects from raw bytes.
+            let ed448_sk = Ed448Standard::signing_key_from_bytes(&ed448_sk_bytes)
+                .map_err(|e| anyhow!("keystore: ed448-sk-from-bytes (upgrade-v2) for {key_id}: {e}"))?;
+            let mldsa_sk = MlDsa65Fips204::signing_key_from_bytes(&mldsa_sk_bytes)
+                .map_err(|e| anyhow!("keystore: mldsa65-sk-from-bytes (upgrade-v2) for {key_id}: {e}"))?;
+
+            (ed448_sk, mldsa_sk)
         };
 
-        // Bump schema + populate sig fields.
-        stored.format_version = 2;
-        stored.sig_ed448_public_key = Some(ed448_pk_b64.clone());
-        stored.sig_ed448_encrypted_secret_key = Some(sig_ed448_sk_field);
-        stored.sig_mldsa65_public_key = Some(mldsa_pk_b64.clone());
-        stored.sig_mldsa65_encrypted_secret_key = Some(sig_mldsa_sk_field);
+        // Bump schema to v3 (the version that carries KDF params in the payload).
+        stored.format_version = 3;
 
         // Canonical D-08 payload (identity-bearing public fields only).
         // T-18-04-05: uuid + public_key + hybrid_public_key + created_at
-        // are byte-preserved from the v1 entry.
+        // are byte-preserved from the v1/v2 entry.
+        //
+        // REM-04 (Phase 38-03): fields 7-8 = KDF cost params. For password-protected
+        // entries, sign the actual Argon2id cost (self.kdf_params). For passwordless
+        // entries (is_password_protected=false), no KDF was applied — sign the 0/0
+        // sentinel (kdf_ops_limit=0, kdf_mem_limit=0). This must match the sentinel
+        // logic in verify_stored_signature.
+        let (kdf_ops, kdf_mem) = if stored.is_password_protected {
+            (self.kdf_params.ops_limit, self.kdf_params.mem_limit)
+        } else {
+            // Passwordless sentinel: 0/0 (no KDF applied).
+            (0u64, 0usize)
+        };
         let payload = build_signed_payload(
             &stored.uuid,
             &stored.public_key,
@@ -1513,6 +2035,8 @@ impl Keystore {
             stored.sig_ed448_public_key.as_deref(),
             stored.sig_mldsa65_public_key.as_deref(),
             &stored.created_at.to_rfc3339(),
+            kdf_ops,
+            kdf_mem,
         );
         let sig = sign_entry(&ed448_sk, &mldsa_sk, &payload)
             .map_err(|e| anyhow!("keystore: sign-entry (upgrade) for key_id={key_id}: {e}"))?;
@@ -1573,7 +2097,11 @@ impl Keystore {
         stored: &StoredKeyPair,
         file: &std::path::Path,
     ) -> Result<()> {
-        use crate::keystore::sig::{build_signed_payload, verify_entry};
+        use crate::keystore::sig::{
+            build_signed_payload, build_signed_payload_v1,
+            verify_entry_with_context,
+            KEYSTORE_SIG_CONTEXT, KEYSTORE_SIG_CONTEXT_V1,
+        };
         use base64::prelude::BASE64_STANDARD;
         use trelis_primitives::{Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme};
 
@@ -1610,18 +2138,75 @@ impl Keystore {
         let mldsa_pk = MlDsa65Fips204::verifying_key_from_bytes(&mldsa_pk_bytes)
             .map_err(|_| canonical_err())?;
 
-        // Pitfall 1: pass `created_at.to_rfc3339()` — same encoding used in
-        // `store_dual_keypair`. Deterministic; round-trips via chrono::serde.
-        let payload = build_signed_payload(
-            &stored.uuid,
-            &stored.public_key,
-            stored.hybrid_public_key.as_deref(),
-            stored.sig_ed448_public_key.as_deref(),
-            stored.sig_mldsa65_public_key.as_deref(),
-            &stored.created_at.to_rfc3339(),
-        );
-
-        verify_entry(&ed448_pk, &mldsa_pk, &payload, sig).map_err(|_| canonical_err())
+        // CR-01 (Phase 38-04): dispatch on format_version to choose the correct
+        // payload schema AND context bytes.
+        //
+        // format_version=2 entries were signed BEFORE REM-04 extended the payload
+        // to 8 fields and bumped the context to v2. They MUST be verified with:
+        //   - the 6-field payload (no kdf_ops, no kdf_mem)
+        //   - KEYSTORE_SIG_CONTEXT_V1 ("sss-keystore-entry-sig-v1")
+        // Applying the v2 context to a v2 entry is a guaranteed failure; the
+        // format_version field on disk is the authoritative indicator.
+        //
+        // format_version=3 entries (REM-04) use:
+        //   - the 8-field payload (includes kdf_ops_limit, kdf_mem_limit)
+        //   - KEYSTORE_SIG_CONTEXT ("sss-keystore-entry-sig-v2")
+        //
+        // This dispatch makes format_version=2 entries loadable so `sss keys upgrade`
+        // can promote them to v3; without it they would be permanently inaccessible.
+        match stored.format_version {
+            2 => {
+                // 6-field payload, v1 context — the schema signed by Phase 18 binaries.
+                let payload = build_signed_payload_v1(
+                    &stored.uuid,
+                    &stored.public_key,
+                    stored.hybrid_public_key.as_deref(),
+                    stored.sig_ed448_public_key.as_deref(),
+                    stored.sig_mldsa65_public_key.as_deref(),
+                    &stored.created_at.to_rfc3339(),
+                );
+                verify_entry_with_context(
+                    &ed448_pk, &mldsa_pk, &payload, sig, KEYSTORE_SIG_CONTEXT_V1,
+                )
+                .map_err(|_| canonical_err())
+            }
+            3 => {
+                // 8-field payload, v2 context — the schema signed by Phase 38+ binaries.
+                // Pitfall 1: pass `created_at.to_rfc3339()` — same encoding used in
+                // `store_dual_keypair`. Deterministic; round-trips via chrono::serde.
+                //
+                // REM-04 (Phase 38-03): fields 7-8 = KDF cost params. For password-protected
+                // entries, sign the actual Argon2id cost (self.kdf_params). For passwordless
+                // entries (is_password_protected=false), no KDF was applied — sign the 0/0
+                // sentinel. The same sentinel logic is applied in all signing paths
+                // (upgrade_keypair_in_place, store_dual_keypair) so signer and verifier agree.
+                let (kdf_ops, kdf_mem) = if stored.is_password_protected {
+                    (self.kdf_params.ops_limit, self.kdf_params.mem_limit)
+                } else {
+                    // Passwordless sentinel: kdf_ops_limit=0, kdf_mem_limit=0 (no KDF applied).
+                    (0u64, 0usize)
+                };
+                let payload = build_signed_payload(
+                    &stored.uuid,
+                    &stored.public_key,
+                    stored.hybrid_public_key.as_deref(),
+                    stored.sig_ed448_public_key.as_deref(),
+                    stored.sig_mldsa65_public_key.as_deref(),
+                    &stored.created_at.to_rfc3339(),
+                    kdf_ops,
+                    kdf_mem,
+                );
+                verify_entry_with_context(
+                    &ed448_pk, &mldsa_pk, &payload, sig, KEYSTORE_SIG_CONTEXT,
+                )
+                .map_err(|_| canonical_err())
+            }
+            // format_version=1 entries do not reach here (load_keypair dispatches
+            // on format_version before calling verify_stored_signature); format_version
+            // >= 4 entries are also rejected by load_keypair before reaching here.
+            // This arm is unreachable in correct call sequences but is kept defensive.
+            _ => Err(canonical_err()),
+        }
     }
 
     /// Decrypt a stored keypair
@@ -1673,6 +2258,65 @@ impl Keystore {
             SecretKey::from_base64(&stored.encrypted_secret_key)
                 .map_err(|e| anyhow!("keystore: parse-secret-key (decrypt_stored_keypair, passwordless) for key_id={}: {}", stored.uuid, e))?
         };
+
+        // REM-03 (CRY-09): Re-derive the X25519 public key from the recovered
+        // secret key and assert it matches the stored (signed) public_key field.
+        // A substituted AEAD ciphertext whose recovered secret does not match the
+        // stored public key is rejected here before any further use.
+        //
+        // Guard: `stored.public_key` is always present (it is not Option); the
+        // classic slot is always populated, so we do not guard with `if let`.
+        {
+            use base64::prelude::BASE64_STANDARD;
+            use subtle::ConstantTimeEq;
+
+            let stored_pk_bytes = BASE64_STANDARD
+                .decode(&stored.public_key)
+                .map_err(|e| anyhow!("keystore: base64-decode-public-key (rederive classic) for key_id={}: {}", stored.uuid, e))?;
+
+            let mut derived_pk = [0u8; libsodium_sys::crypto_scalarmult_BYTES as usize];
+            // SAFETY: `derived_pk` is a 32-byte output buffer matching
+            // `crypto_scalarmult_BYTES`. `secret_key.as_bytes()` is a valid
+            // 32-byte scalar (`SECRET_KEY_SIZE == crypto_box_SECRETKEYBYTES ==
+            // 32`). libsodium is initialised by `ensure_sodium_init()` which is
+            // called in every generate/from_seed path; the keystore itself
+            // initialises it at construction time. Returns 0 on success.
+            #[cfg(not(miri))]
+            let rc = unsafe {
+                libsodium_sys::crypto_scalarmult_base(
+                    derived_pk.as_mut_ptr(),
+                    secret_key.as_bytes().as_ptr(),
+                )
+            };
+            // Miri stub: crypto_scalarmult_base is FFI; ASAN (Phase 23
+            // MEMSAFE-03) covers this path under non-miri builds. Under miri
+            // the derived key stays zero-initialised and `rc=0` so the check
+            // is a no-op (identity postcondition; acceptable because we are not
+            // testing libsodium under miri).
+            #[cfg(miri)]
+            let rc: i32 = 0;
+
+            if rc != 0 {
+                return Err(anyhow!(
+                    "keystore entry corrupt or tampered: public key re-derivation failed (classic slot)"
+                ));
+            }
+
+            let len_ok = stored_pk_bytes.len() == derived_pk.len();
+            let bytes_ok = if len_ok {
+                derived_pk
+                    .ct_eq(stored_pk_bytes.as_slice())
+                    .unwrap_u8()
+                    == 1
+            } else {
+                false
+            };
+            if !len_ok || !bytes_ok {
+                return Err(anyhow!(
+                    "keystore entry corrupt or tampered: public key mismatch (classic slot)"
+                ));
+            }
+        }
 
         Ok(KeyPair::Classic(ClassicKeyPair {
             public_key,
@@ -2358,6 +3002,10 @@ mldsa65 = "ml-sig"
     }
 
     /// Wrong password must fail `load_sig_keypair` (AEAD authentication failure).
+    // Why: HybridKeyPair contains Ed448SigningKey which doesn't impl Debug, so
+    // expect_err() (which requires T: Debug) cannot be used here. The is_err()
+    // assertion on the preceding line makes the .err().expect() infallible.
+    #[allow(clippy::err_expect)]
     #[cfg(feature = "hybrid")]
     #[test]
     fn load_sig_keypair_wrong_password_fails() {
@@ -2379,5 +3027,398 @@ mldsa65 = "ml-sig"
             err.to_string().contains("aead") || err.to_string().contains("decrypt"),
             "wrong password must produce AEAD error, got: {err}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 38-02 / REM-03 — ciphertext-substitution rejection tests
+    //
+    // Each test generates two entries with the SAME password so AEAD decryption
+    // succeeds after the swap; detection relies entirely on the post-decrypt
+    // public-key re-derivation check added in Tasks 1 and 2.
+    // A positive control (unmodified entry) opens Ok in each test.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// REM-03 / T-38-06: substituting the classic `encrypted_secret_key` (and its
+    /// `salt` + `is_password_protected`) with material from a different classic
+    /// entry (same password) must be rejected with "public key mismatch (classic
+    /// slot)".  An unmodified entry still opens Ok (positive control).
+    #[test]
+    fn classic_ciphertext_substitution_rejected() -> Result<()> {
+        let (keystore, _tmp) = create_temp_keystore_interactive()?;
+        let pw = "test-substitution-pw";
+
+        // Positive control: generate entry A and verify it opens normally.
+        let kp_a = ClassicKeyPair::generate()?;
+        let id_a = keystore
+            .store_keypair(&KeyPair::Classic(kp_a.clone()), Some(pw))
+            .expect("store A");
+        let loaded_ok = keystore.load_keypair(&id_a, Some(pw), true);
+        assert!(
+            loaded_ok.is_ok(),
+            "positive control must open Ok before substitution"
+        );
+
+        // Generate entry B with the same password (so its ciphertext decrypts
+        // under the same KEK derivation that A would use).
+        let kp_b = ClassicKeyPair::generate()?;
+        let id_b = keystore
+            .store_keypair(&KeyPair::Classic(kp_b), Some(pw))
+            .expect("store B");
+
+        // Read both TOML files from disk.
+        let path_a = keystore.keys_dir.join(format!("{id_a}.toml"));
+        let path_b = keystore.keys_dir.join(format!("{id_b}.toml"));
+        let content_a = std::fs::read_to_string(&path_a)?;
+        let content_b = std::fs::read_to_string(&path_b)?;
+        let mut stored_a: StoredKeyPair = toml::from_str(&content_a)?;
+        let stored_b: StoredKeyPair = toml::from_str(&content_b)?;
+
+        // Substitute: overwrite A's ciphertext fields with B's.
+        stored_a.encrypted_secret_key = stored_b.encrypted_secret_key.clone();
+        stored_a.salt = stored_b.salt.clone();
+        stored_a.is_password_protected = stored_b.is_password_protected;
+
+        // Write tampered A back to disk.
+        let tampered = toml::to_string_pretty(&stored_a)?;
+        std::fs::write(&path_a, tampered)?;
+
+        // Attempt to open: AEAD decryption succeeds (same password / KEK),
+        // but re-derivation must catch the mismatch and return Err.
+        let result = keystore.load_keypair(&id_a, Some(pw), true);
+        assert!(
+            result.is_err(),
+            "substituted classic ciphertext must be rejected"
+        );
+        let err = result.expect_err("checked is_err above");
+        assert!(
+            err.to_string().contains("classic slot"),
+            "error must name the classic slot, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("mismatch") || err.to_string().contains("corrupt"),
+            "error must indicate mismatch/corruption, got: {err}"
+        );
+
+        Ok(())
+    }
+
+    /// REM-03 / T-38-08: substituting one entry's `sig_ed448_encrypted_secret_key`
+    /// with the corresponding field from a different passwordless dual-suite entry
+    /// must be rejected with "public key mismatch (Ed448 slot)".
+    ///
+    /// Passwordless entries store sig keys as plain base64 (no AEAD), so the
+    /// substituted bytes decode cleanly; detection relies entirely on the
+    /// post-decrypt re-derivation check.  An unmodified entry opens Ok
+    /// (positive control).
+    // Why: HybridKeyPair contains Ed448SigningKey which doesn't impl Debug, so
+    // expect_err() (which requires T: Debug) cannot be used here. The is_err()
+    // assertion on the preceding line makes the .err().expect() infallible.
+    #[allow(clippy::err_expect)]
+    #[cfg(feature = "hybrid")]
+    #[test]
+    fn sig_ciphertext_substitution_rejected() -> Result<()> {
+        use crate::crypto::hybrid::HybridKeyPair;
+
+        let (keystore, _tmp) = create_temp_keystore_interactive()?;
+
+        // Create two passwordless dual-suite entries (sig keys stored as plain
+        // base64 — no AEAD wrapping, so swapping them is a pure re-derivation
+        // failure rather than an AEAD failure).
+        let classic_a = ClassicKeyPair::generate()?;
+        let hybrid_a = HybridKeyPair::generate()?;
+        let id_a = keystore
+            .store_dual_keypair(Some(&classic_a), Some(&hybrid_a), None)
+            .expect("store dual A passwordless");
+
+        let classic_b = ClassicKeyPair::generate()?;
+        let hybrid_b = HybridKeyPair::generate()?;
+        let id_b = keystore
+            .store_dual_keypair(Some(&classic_b), Some(&hybrid_b), None)
+            .expect("store dual B passwordless");
+
+        // Positive control: set current to A and verify it opens normally.
+        keystore
+            .set_current_key(&id_a)
+            .expect("set current to A for positive control");
+        let ok_before = keystore.load_sig_keypair("alice", None);
+        assert!(
+            ok_before.is_ok(),
+            "positive control — entry A must load before substitution; err={:?}",
+            ok_before.err()
+        );
+
+        // Read both TOML files.
+        let path_a = keystore.keys_dir.join(format!("{id_a}.toml"));
+        let path_b = keystore.keys_dir.join(format!("{id_b}.toml"));
+        let content_a = std::fs::read_to_string(&path_a)?;
+        let content_b = std::fs::read_to_string(&path_b)?;
+
+        let mut stored_a: StoredKeyPair = toml::from_str(&content_a)?;
+        let stored_b: StoredKeyPair = toml::from_str(&content_b)?;
+
+        // Substitute B's Ed448 sig key (plain base64) into A's entry.
+        // A's sig_ed448_public_key remains A's; the recovered secret from B
+        // will re-derive B's verifying key, causing the mismatch.
+        stored_a.sig_ed448_encrypted_secret_key = stored_b.sig_ed448_encrypted_secret_key.clone();
+
+        let tampered = toml::to_string_pretty(&stored_a)?;
+        std::fs::write(&path_a, tampered)?;
+
+        // Entry A is already "current"; load_sig_keypair must now reject it.
+        let result = keystore.load_sig_keypair("alice", None);
+        assert!(
+            result.is_err(),
+            "substituted Ed448 sig key must be rejected"
+        );
+        let err = result.err().expect("checked is_err above");
+        assert!(
+            err.to_string().contains("Ed448 slot"),
+            "error must name the Ed448 slot, got: {err}"
+        );
+        assert!(
+            err.to_string().contains("mismatch") || err.to_string().contains("corrupt"),
+            "error must indicate mismatch/corruption, got: {err}"
+        );
+
+        let _ = id_b; // suppress unused warning
+        Ok(())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 38-04 — CR-01 / CR-02 regression tests
+    //
+    // CR-01: format_version=2 entries (signed with v1 context, 6-field payload)
+    //        must remain loadable under the v1 verification path and must be
+    //        upgradeable to format_version=3.
+    //
+    // CR-02: changing the passphrase or removing it from a format_version=3
+    //        entry must re-sign the entry so it loads successfully afterwards
+    //        (without --allow-unsigned).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// CR-01 regression: a synthetic `format_version=2` entry (signed with v1 context
+    /// and the 6-field payload) must load successfully via `load_keypair` without
+    /// triggering the D-20 rejection error.
+    ///
+    /// After loading, `upgrade_keypair_in_place` must promote it to `format_version=3`
+    /// and the upgraded entry must load under the v2 verification path.
+    // Why: end-to-end regression for v2→v3 upgrade path; requires synthetic v2 entry
+    // construction, load, upgrade, and re-verify — splitting would break the shared
+    // keypair state.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn cr01_format_version_2_loads_and_upgrades() -> Result<()> {
+        use crate::keystore::sig::{
+            build_signed_payload_v1, KeystoreEntrySig,
+            KEYSTORE_SIG_CONTEXT_V1,
+        };
+        use base64::prelude::BASE64_STANDARD;
+        use trelis_primitives::{
+            Ed448Scheme, Ed448Standard, MlDsa65Fips204, MlDsaScheme,
+        };
+
+        let (keystore, _tmp) = create_temp_keystore_interactive()?;
+
+        // Build a realistic format_version=2 entry. Sign it with the v1 context
+        // (b"sss-keystore-entry-sig-v1") and the 6-field payload — exactly how
+        // Phase 18 binaries signed entries before REM-04.
+        let classic_kp = crate::crypto::ClassicKeyPair::generate()?;
+        let ed448_sk = Ed448Standard::generate()
+            .map_err(|e| anyhow!("Ed448 keygen: {e}"))?;
+        let ed448_pk = Ed448Standard::verifying_key(&ed448_sk);
+        let ed448_pk_b64 = BASE64_STANDARD.encode(Ed448Standard::verifying_key_to_bytes(&ed448_pk));
+        let mldsa_sk = MlDsa65Fips204::generate()
+            .map_err(|e| anyhow!("ML-DSA keygen: {e}"))?;
+        let mldsa_pk = MlDsa65Fips204::verifying_key(&mldsa_sk);
+        let mldsa_pk_b64 = BASE64_STANDARD.encode(MlDsa65Fips204::verifying_key_to_bytes(&mldsa_pk));
+
+        let uuid = uuid::Uuid::new_v4().to_string();
+        // ClassicKeyPair has pub fields (not methods); access directly.
+        let public_key_b64 = classic_kp.public_key.to_base64();
+        // Use a plain base64 secret key (passwordless entry) so we avoid KDF overhead.
+        let secret_key_b64 = classic_kp.secret_key.to_base64();
+        let created_at = chrono::Utc::now();
+        let created_at_rfc3339 = created_at.to_rfc3339();
+
+        // 6-field payload (v1 schema — no kdf_ops, no kdf_mem).
+        let payload_v1 = build_signed_payload_v1(
+            &uuid,
+            &public_key_b64,
+            None, // no hybrid in this synthetic entry
+            Some(&ed448_pk_b64),
+            Some(&mldsa_pk_b64),
+            &created_at_rfc3339,
+        );
+
+        // Sign with v1 context (b"sss-keystore-entry-sig-v1") via the raw
+        // trelis_primitives API — mirroring what Phase 18 sign_entry used before
+        // REM-04 changed the context constant.
+        let ed448_sig_bytes = Ed448Standard::sign_with_context(&ed448_sk, &payload_v1, KEYSTORE_SIG_CONTEXT_V1)
+            .map_err(|e| anyhow!("Ed448 sign v1: {e}"))?;
+        let mldsa_sig_bytes = MlDsa65Fips204::sign_with_context(&mldsa_sk, &payload_v1, KEYSTORE_SIG_CONTEXT_V1)
+            .map_err(|e| anyhow!("ML-DSA sign v1: {e}"))?;
+        let sig = KeystoreEntrySig {
+            ed448: BASE64_STANDARD.encode(Ed448Standard::signature_to_bytes(&ed448_sig_bytes)),
+            mldsa65: BASE64_STANDARD.encode(MlDsa65Fips204::signature_to_bytes(&mldsa_sig_bytes)),
+        };
+
+        // Construct and write the format_version=2 TOML file.
+        let stored_v2 = StoredKeyPair {
+            uuid: uuid.clone(),
+            public_key: public_key_b64.clone(),
+            encrypted_secret_key: secret_key_b64.clone(),
+            salt: None,
+            created_at,
+            is_password_protected: false,
+            in_keyring: false,
+            hybrid_public_key: None,
+            hybrid_encrypted_secret_key: None,
+            format_version: 2, // the version under test
+            signature: Some(sig),
+            sig_ed448_public_key: Some(ed448_pk_b64.clone()),
+            sig_ed448_encrypted_secret_key: Some(
+                BASE64_STANDARD.encode(Ed448Standard::signing_key_to_bytes(&ed448_sk))
+            ),
+            sig_mldsa65_public_key: Some(mldsa_pk_b64.clone()),
+            sig_mldsa65_encrypted_secret_key: Some(
+                BASE64_STANDARD.encode(MlDsa65Fips204::signing_key_to_bytes(&mldsa_sk))
+            ),
+        };
+
+        let toml_content = toml::to_string_pretty(&stored_v2)?;
+        let key_file = keystore.keys_dir.join(format!("{uuid}.toml"));
+        std::fs::write(&key_file, &toml_content)?;
+
+        // Point the current-key pointer at this entry.
+        let current_key_file = keystore.keys_dir.join("current_key");
+        std::fs::write(&current_key_file, &uuid)?;
+
+        // CR-01 assertion: load_keypair must succeed under format_version=2 verification.
+        let loaded = keystore.load_keypair(&uuid, None, false);
+        assert!(
+            loaded.is_ok(),
+            "CR-01: format_version=2 entry must load successfully; got: {:?}",
+            loaded.err()
+        );
+
+        // CR-01 + WR-03 assertion: upgrade must succeed (verifies v2 sig before re-signing)
+        // and result in a loadable format_version=3 entry.
+        keystore.upgrade_keypair_in_place(&uuid, None)?;
+        let upgraded_content = std::fs::read_to_string(&key_file)?;
+        let upgraded: StoredKeyPair = toml::from_str(&upgraded_content)?;
+        assert_eq!(
+            upgraded.format_version, 3,
+            "CR-01: upgrade_keypair_in_place must produce format_version=3"
+        );
+
+        let after_upgrade = keystore.load_keypair(&uuid, None, false);
+        assert!(
+            after_upgrade.is_ok(),
+            "CR-01: upgraded format_version=3 entry must load successfully; got: {:?}",
+            after_upgrade.err()
+        );
+
+        // T-38-03 (a): sig keys must be UNCHANGED — v2→v3 upgrade must not rotate
+        // sig keypairs; only the signed payload gains KDF params.
+        assert_eq!(
+            upgraded.sig_ed448_public_key.as_deref(),
+            Some(ed448_pk_b64.as_str()),
+            "CR-01/T-38-03: Ed448 sig pub key must be UNCHANGED after v2→v3 upgrade"
+        );
+        assert_eq!(
+            upgraded.sig_mldsa65_public_key.as_deref(),
+            Some(mldsa_pk_b64.as_str()),
+            "CR-01/T-38-03: ML-DSA-65 sig pub key must be UNCHANGED after v2→v3 upgrade"
+        );
+
+        // T-38-03 (b): second upgrade call must return the no-op error — a v3 entry
+        // is already at the latest format version and must not be re-upgraded.
+        let second_upgrade = keystore.upgrade_keypair_in_place(&uuid, None);
+        assert!(
+            second_upgrade.is_err(),
+            "CR-01/T-38-03: second upgrade on a v3 entry must return the no-op error"
+        );
+        let err_msg = second_upgrade.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("already") && err_msg.contains("no-op"),
+            "CR-01/T-38-03: no-op error must mention 'already' and 'no-op'; got: {err_msg}"
+        );
+
+        Ok(())
+    }
+
+    /// CR-02 regression: removing a passphrase from a `format_version=3` entry must
+    /// produce an entry that loads under the strict (`allow_unsigned=false`) path.
+    /// Before this fix, `remove_passphrase` did not re-sign, so the stored signature
+    /// covered real KDF params (e.g. ops=3) while the verifier reconstructed 0/0
+    /// — a guaranteed mismatch that permanently locked the key.
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn cr02_remove_passphrase_entry_still_loads() -> Result<()> {
+        use crate::crypto::hybrid::HybridKeyPair;
+
+        let (keystore, _tmp) = create_temp_keystore_interactive()?;
+        let classic_kp = crate::crypto::ClassicKeyPair::generate()?;
+        let hybrid_kp = HybridKeyPair::generate()?;
+        let pw = "test-passphrase-cr02";
+
+        // store_dual_keypair writes a format_version=3 entry with a real signature.
+        let key_id = keystore
+            .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), Some(pw))?;
+
+        // Sanity: should load before passphrase removal.
+        keystore.load_keypair(&key_id, Some(pw), false)
+            .expect("CR-02: entry must load before remove_passphrase");
+
+        // Remove passphrase — this MUST re-sign under the 0/0 sentinel.
+        keystore.remove_passphrase(&key_id, pw)
+            .expect("CR-02: remove_passphrase must succeed");
+
+        // After removal, load without password under strict verification.
+        // Without the CR-02 fix this fails with the D-20 signature error.
+        let loaded = keystore.load_keypair(&key_id, None, false);
+        assert!(
+            loaded.is_ok(),
+            "CR-02: entry must load after remove_passphrase without --allow-unsigned; got: {:?}",
+            loaded.err()
+        );
+
+        Ok(())
+    }
+
+    /// CR-02 regression (`set_passphrase`): adding a passphrase to a passwordless
+    /// `format_version=3` entry must produce an entry that loads under the strict path.
+    /// The stored signature previously covered the 0/0 KDF sentinel; after
+    /// `set_passphrase` it must cover the real KDF params.
+    #[test]
+    #[cfg(feature = "hybrid")]
+    fn cr02_set_passphrase_entry_still_loads() -> Result<()> {
+        use crate::crypto::hybrid::HybridKeyPair;
+
+        let (keystore, _tmp) = create_temp_keystore_interactive()?;
+        let classic_kp = crate::crypto::ClassicKeyPair::generate()?;
+        let hybrid_kp = HybridKeyPair::generate()?;
+
+        // Start passwordless so format_version=3 signature covers 0/0 sentinel.
+        let key_id = keystore
+            .store_dual_keypair(Some(&classic_kp), Some(&hybrid_kp), None)?;
+
+        keystore.load_keypair(&key_id, None, false)
+            .expect("CR-02: passwordless entry must load before set_passphrase");
+
+        let new_pw = "new-passphrase-cr02";
+        keystore.set_passphrase(&key_id, None, new_pw)
+            .expect("CR-02: set_passphrase must succeed");
+
+        // After adding passphrase, load with password under strict verification.
+        let loaded = keystore.load_keypair(&key_id, Some(new_pw), false);
+        assert!(
+            loaded.is_ok(),
+            "CR-02: entry must load after set_passphrase without --allow-unsigned; got: {:?}",
+            loaded.err()
+        );
+
+        Ok(())
     }
 }

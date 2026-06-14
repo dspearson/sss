@@ -7,11 +7,29 @@ pub const MARKER_PLAINTEXT_UTF8: &str = "⊕";
 pub const MARKER_PLAINTEXT_ASCII: &str = "o+";
 pub const MARKER_CIPHERTEXT: &str = "⊠";
 
+/// Vault reference marker — Unicode preferred form (U+22B3 CONTAINS AS NORMAL SUBGROUP).
+/// Mirror of `MARKER_PLAINTEXT_UTF8` / ⊲ (U+22B2); mnemonic: "value comes from out there".
+/// Stable wire-format identifier — if this changes, existing ⊳{} markers become unlookable.
+/// NOT feature-gated: non-vault peers must parse and preserve ⊳{} verbatim (R4 / VREF-01).
+pub const MARKER_VAULT_UTF8: &str = "⊳";   // U+22B3
+/// Vault reference marker — ASCII input alias (single character '>').
+/// Normalised to ⊳{} on the seal/encrypt path only; preserved verbatim on open/decrypt.
+/// Mirrors how '<' (one character) aliases ⊲{} in `SECRETS_INTERPOLATION_REGEX`.
+/// NOT feature-gated: must compile in every build configuration.
+pub const MARKER_VAULT_ASCII: &str = ">";  // single char '>'
+
 // Security limits to prevent DoS attacks
 pub const MAX_FILE_SIZE: usize = 100 * 1024 * 1024; // 100MB
 pub const MAX_MARKER_CONTENT_SIZE: usize = 100 * 1024 * 1024; // 100MB per marker
 pub const MAX_BASE64_KEY_LENGTH: usize = 100; // Max characters for base64 encoded keys
 pub const MAX_BASE64_CIPHERTEXT_LENGTH: usize = 140_000_000; // Max characters for base64 ciphertext (~100MB encrypted)
+/// Maximum permitted size for `.sss.toml` project config files.
+/// Guards the config read path against allocation `DoS` before the TOML parser fires.
+/// Config files are typically < 1 KB; 1 MB is generous (REM-32, PAR-01).
+pub const MAX_TOML_SIZE: usize = 1024 * 1024; // 1 MB
+/// Maximum permitted brace-nesting depth in a marker.
+/// Bounds CPU in `parse_balanced_braces` without affecting any real-world marker (REM-33, PAR-04).
+pub const MAX_BRACE_DEPTH: u32 = 64;
 
 // Editor fallbacks in order of preference
 pub const EDITOR_FALLBACKS: &[&str] = &["nano", "vim", "emacs", "vi"];

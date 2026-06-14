@@ -169,10 +169,34 @@ not retroactively. The vendoring decision is an audit-discoverable
 choice; reviewers reading this doc see what we chose and why for each
 non-crates.io dep.
 
+## crates.io-pinned: `vault` feature deps
+
+**What:** 12 crates introduced by the `vault` feature in Phase 47
+(`ureq 3.3.0`, `ureq-proto 0.6.0`, `rustls 0.23.40`, `rustls-webpki 0.103.13`,
+`rustls-pki-types 1.14.1`, `ring 0.17.14`, `untrusted 0.9.0`, `webpki-roots 1.0.7`,
+`http 1.4.2`, `httparse 1.10.1`, `percent-encoding 2.3.2`, `utf8-zero 0.8.1`).
+
+**Why NOT vendored:** All 12 crates are active crates.io releases (not
+unmaintained or git-only), and `ureq` + `rustls` + `ring` receive regular
+upstream patches. Standard crates.io channel applies — no exception needed.
+
+**Pinned via:** `Cargo.lock` (committed, per BUILD-01) + `cargo-vet`
+exemptions in `supply-chain/config.toml` (D-VET-1 30-day SLA).
+
+**Refresh expectation:** Deliberate `cargo update -p ureq` (or equivalent)
+with a new supply-chain review. Bumping the rustls crypto backend from `ring`
+to `aws-lc-rs` is deferred to v3.1 (per STACK.md §1 rationale).
+
+**cargo-deny handling:** `deny.toml` `[graph] features` includes `"vault"`;
+`"OpenSSL"` + `"CDLA-Permissive-2.0"` added to `[licenses] allow`; ring has
+a `[[licenses.clarify]]` stanza. See `docs/SUPPLY-CHAIN.md § Vault Feature
+Dependency Surface` for the full rationale.
+
 ## See Also
 
 - `docs/SUPPLY-CHAIN.md` — broader supply-chain policy (cargo-deny,
-  cargo-vet, supply-chain.yml gate suite).
+  cargo-vet, supply-chain.yml gate suite). See the "Vault Feature Dependency
+  Surface" section for vault-specific treatment.
 - `docs/CRYPTOGRAPHY.md` — trelis cryptographic primitives reference;
   cross-referenced for the trelis-pin rationale.
 - `supply-chain/config.toml` — `[policy.<crate>]` blocks with

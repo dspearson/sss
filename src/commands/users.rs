@@ -198,8 +198,10 @@ fn handle_users_add(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> Resu
             }
         }
         config.format_version = 2;
+        // Sign under the context matching config.format_version (=2): users add keeps the
+        // repo at fv=2 (no force-bump to v3) and signs/verifies under the v2 context (VSIG-01).
         let payload = build_envelope_payload(&config);
-        let sig = sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        let sig = sign_envelope(&ed_sk, &pq_sk, &payload, config.format_version)?;
         config.envelope.get_or_insert_with(EnvelopeMeta::default).sig = Some(sig);
         crate::config::write_atomic(&config, &config_path)?;
     }
@@ -333,8 +335,10 @@ fn handle_users_remove(main_matches: &ArgMatches, sub_matches: &ArgMatches) -> R
             }
         }
         rotated.format_version = 2;
+        // Sign under the context matching rotated.format_version (=2): users remove keeps
+        // the repo at fv=2 (no force-bump to v3) and signs/verifies under the v2 context.
         let payload = build_envelope_payload(&rotated);
-        let sig = sign_envelope(&ed_sk, &pq_sk, &payload)?;
+        let sig = sign_envelope(&ed_sk, &pq_sk, &payload, rotated.format_version)?;
         rotated.envelope.get_or_insert_with(EnvelopeMeta::default).sig = Some(sig);
         crate::config::write_atomic(&rotated, &config_path)?;
     }
@@ -614,8 +618,12 @@ mod tests {
         }
 
         cfg.format_version = 2;
+        // Sign under the context matching cfg.format_version (=2). The fixture is written
+        // to disk and re-loaded by the production loader, whose `2 =>` arm verifies under
+        // the v2 context — signing fv=2 under v2 is what makes these handler tests load
+        // the fixture successfully (closes the 8 commands::users regressions).
         let payload = crate::envelope_sig::build_envelope_payload(&cfg);
-        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload)
+        let sig = crate::envelope_sig::sign_envelope(&ed_sk, &pq_sk, &payload, cfg.format_version)
             .expect("sign_fixture_envelope: sign_envelope");
         cfg.envelope
             .get_or_insert_with(crate::project::EnvelopeMeta::default)
@@ -633,6 +641,9 @@ mod tests {
             .get_matches_from(["add", username, public_key])
     }
 
+    // Why: only used by the `hybrid`-gated remove tests above; unused on the
+    // default build, so gate to match and avoid a dead_code warning under `-D warnings`.
+    #[cfg(feature = "hybrid")]
     fn build_remove_matches(username: &str) -> ArgMatches {
         use clap::{Arg, Command};
         Command::new("remove")
@@ -792,6 +803,10 @@ mod tests {
 
     #[test]
     #[serial]
+    // Why: exercises signed-envelope (`require_signed`) removal behaviour via
+    // `setup_users_fixture`, which signs the fixture — only available under `hybrid`.
+    // Mirrors the gate on the sibling remove tests above.
+    #[cfg(feature = "hybrid")]
     fn test_handle_users_remove_unknown_user_errors() -> Result<()> {
         let _g = CwdGuard::new()?;
         let (tmp, _kp) = setup_users_fixture("alice");
@@ -808,6 +823,9 @@ mod tests {
 
     #[test]
     #[serial]
+    // Why: exercises signed-envelope (`require_signed`) removal behaviour via
+    // `setup_users_fixture`, which signs the fixture — only available under `hybrid`.
+    #[cfg(feature = "hybrid")]
     fn test_handle_users_remove_last_user_errors() -> Result<()> {
         // Error-message regression: cannot remove last user.
         let _g = CwdGuard::new()?;

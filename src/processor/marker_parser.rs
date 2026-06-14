@@ -1,3 +1,12 @@
+// REM-33: compile-time sanity check that MAX_BRACE_DEPTH is a reasonable value.
+// `depth` is typed as `u32` so the comparison `depth > MAX_BRACE_DEPTH` is
+// always type-safe without any cast.  This assert catches accidental changes
+// that would make the constant nonsensically large.
+const _: () = assert!(
+    crate::constants::MAX_BRACE_DEPTH < u32::MAX,
+    "MAX_BRACE_DEPTH must be < u32::MAX"
+);
+
 /// Marker match structure for brace-counting parser
 ///
 /// Represents a matched marker in content with its position and captured content.
@@ -114,12 +123,19 @@ fn parse_balanced_braces(content: &str, marker_start: usize, prefix_len: usize) 
 
     byte_pos += 1; // Move past '{'
     let content_start = byte_pos;
-    let mut depth = 1;
+    let mut depth: u32 = 1;
 
     // Track brace depth to find matching closing brace
     for (char_offset, ch) in content[byte_pos..].char_indices() {
         match ch {
-            '{' => depth += 1,
+            '{' => {
+                depth += 1;
+                // REM-33: reject adversarially deep nesting — treats over-nested
+                // marker as literal text (same semantics as unbalanced braces).
+                if depth > crate::constants::MAX_BRACE_DEPTH {
+                    return None;
+                }
+            }
             '}' => {
                 depth -= 1;
                 if depth == 0 {
@@ -291,5 +307,54 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].content, "日本語");
         assert_eq!(matches[1].content, "emoji:🎉");
+    }
+
+    // ── REM-33 brace-depth cap tests ──────────────────────────────────────
+
+    #[test]
+    fn test_brace_depth_64_succeeds() {
+        // A marker nested exactly at the cap (depth 64 after opening brace +
+        // 63 additional `{`) must parse successfully.
+        // depth starts at 1 for the first `{`; each subsequent `{` increments it.
+        // To reach depth 64 we need 64 opening braces: "o+" + "{" * 64 + content + "}" * 64.
+        use crate::constants::MAX_BRACE_DEPTH;
+        let opens: String = "{".repeat(MAX_BRACE_DEPTH as usize);
+        let closes: String = "}".repeat(MAX_BRACE_DEPTH as usize);
+        let input = format!("o+{opens}x{closes}");
+        let matches = find_balanced_markers(&input, &["o+"]);
+        assert_eq!(
+            matches.len(),
+            1,
+            "A marker at exactly MAX_BRACE_DEPTH ({MAX_BRACE_DEPTH}) must parse"
+        );
+    }
+
+    #[test]
+    fn test_brace_depth_65_returns_none() {
+        // One level deeper than the cap — must produce zero matches.
+        use crate::constants::MAX_BRACE_DEPTH;
+        let n = MAX_BRACE_DEPTH as usize + 1;
+        let opens: String = "{".repeat(n);
+        let closes: String = "}".repeat(n);
+        let input = format!("o+{opens}x{closes}");
+        let matches = find_balanced_markers(&input, &["o+"]);
+        assert!(
+            matches.is_empty(),
+            "A marker nested at depth {n} (> MAX_BRACE_DEPTH) must yield zero matches"
+        );
+    }
+
+    #[test]
+    fn test_max_brace_depth_returns_none() {
+        // Pathologically deep nesting (200 levels) — must also yield zero matches.
+        let n = 200usize;
+        let opens: String = "{".repeat(n);
+        let closes: String = "}".repeat(n);
+        let input = format!("o+{opens}x{closes}");
+        let matches = find_balanced_markers(&input, &["o+"]);
+        assert!(
+            matches.is_empty(),
+            "A marker nested at depth {n} must yield zero matches (MAX_BRACE_DEPTH exceeded)"
+        );
     }
 }

@@ -72,12 +72,20 @@ fn init_project_with_alice(
 fn test_complete_multi_user_lifecycle() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let project_root = temp_dir.path();
-    let project_created = "2025-01-01T00:00:00Z";
 
     // ------------------------------------------------------------------
     // Phase 1: Initialise project with Alice
     // ------------------------------------------------------------------
     let (alice_keypair, repository_key, config_path) = init_project_with_alice(project_root)?;
+
+    // Read the actual project_created from the saved config so that all processors
+    // built in this test derive nonces from the same epoch that is stored on disk.
+    // Using a hardcoded timestamp would diverge from config.created (set to Utc::now()
+    // by ProjectConfig::new) and cause nonce-lineage mismatches under REM-22.
+    let project_created = {
+        let config = ProjectConfig::load_from_file(&config_path)?;
+        config.created.clone()
+    };
 
     {
         let config = ProjectConfig::load_from_file(&config_path)?;
@@ -121,7 +129,7 @@ fn test_complete_multi_user_lifecycle() -> Result<()> {
     // Write plaintext, then seal in-place
     fs::write(&secret_file, original_plaintext)?;
     {
-        let proc = make_processor(repository_key.clone(), project_root, project_created)?;
+        let proc = make_processor(repository_key.clone(), project_root, &project_created)?;
         let sealed_content = proc.seal_content_with_path(original_plaintext, &secret_file)?;
 
         // The sealed content must differ from plaintext and contain ciphertext markers
@@ -149,7 +157,7 @@ fn test_complete_multi_user_lifecycle() -> Result<()> {
         let bob_repo_key = open_repository_key(&bob_sealed_repo_key, &bob_keypair)?;
 
         // Bob creates a processor with the recovered key and decrypts the file
-        let proc = make_processor(bob_repo_key, project_root, project_created)?;
+        let proc = make_processor(bob_repo_key, project_root, &project_created)?;
         let sealed_content = fs::read_to_string(&secret_file)?;
         let decrypted = proc.open_content_with_path(&sealed_content, &secret_file)?;
 
@@ -223,7 +231,7 @@ fn test_complete_multi_user_lifecycle() -> Result<()> {
             "Alice's new repo key must differ from the original"
         );
 
-        let proc = make_processor(alice_new_key, project_root, project_created)?;
+        let proc = make_processor(alice_new_key, project_root, &project_created)?;
         let rotated_content = fs::read_to_string(&secret_file)?;
         let decrypted_after_rotation = proc.open_content_with_path(&rotated_content, &secret_file)?;
 
@@ -254,7 +262,7 @@ fn test_complete_multi_user_lifecycle() -> Result<()> {
 
         // Now try to decrypt the rotated file using the old key — must NOT yield plaintext
         let proc_with_old_key =
-            make_processor(old_repo_key_via_bob, project_root, project_created)?;
+            make_processor(old_repo_key_via_bob, project_root, &project_created)?;
         let rotated_content = fs::read_to_string(&secret_file)?;
         let attempt =
             proc_with_old_key.open_content_with_path(&rotated_content, &secret_file);
@@ -402,11 +410,14 @@ fn test_cross_user_seal_open_and_key_rejection() -> Result<()> {
     let sealed_old = old_proc.seal_content_with_path(plaintext, &test_file)?;
     assert!(sealed_old.contains("⊠{"), "old sealed output must contain ciphertext marker");
 
-    // Reencrypt with new key (atomically decrypt+encrypt)
-    let sealed_new = new_proc.reencrypt_content(&sealed_old, &old_proc)?;
+    // Reencrypt with new key, preserving nonce-lineage binding for the file path.
+    // reencrypt_content_with_path threads the path through both decrypt and re-encrypt
+    // so open_content_with_path with the same path passes the nonce-lineage check.
+    let test_file_str = test_file.to_string_lossy();
+    let sealed_new = new_proc.reencrypt_content_with_path(&sealed_old, &old_proc, &test_file_str)?;
     assert_ne!(sealed_old, sealed_new, "ciphertext must change after rotation");
 
-    // New key decrypts to original plaintext
+    // New key decrypts to original plaintext (nonce-lineage check passes)
     let decrypted = new_proc.open_content_with_path(&sealed_new, &test_file)?;
     assert_eq!(decrypted, plaintext, "new key must recover original plaintext after rotation");
 

@@ -150,22 +150,33 @@ build_container() {
     log_info "Building RPM for $target using $CONTAINER_CMD..."
 
     # Determine base image and dist tag
+    #
+    # REM-45 (XCUT-02-002) supply-chain pinning: base images are pinned to
+    # immutable @sha256: digests so the emitted Dockerfile (and therefore the
+    # built RPM) is reproducible. Digests resolved 2026-06-10. Re-resolve on a
+    # deliberate bump with, e.g.:
+    #   skopeo inspect docker://rockylinux:9 --format '{{.Digest}}'
+    # or the Docker registry-v2 manifest API:
+    #   curl -sSL -H 'Accept: application/vnd.oci.image.index.v1+json' \
+    #     "https://registry-1.docker.io/v2/library/rockylinux/manifests/9"
+    # Note: Docker Hub library/rockylinux:10 404s after 9.3 — Rocky 10 lives on
+    # quay.io (quay.io/rockylinux/rockylinux), so rhel10 uses that registry.
     local base_image
     case "$target" in
         rhel8)
-            base_image="rockylinux:8"
+            base_image="rockylinux:8@sha256:9794037624aaa6212aeada1d28861ef5e0a935adaf93e4ef79837119f2a2d04c"
             dist_tag=".el8"
             ;;
         rhel9)
-            base_image="rockylinux:9"
+            base_image="rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6"
             dist_tag=".el9"
             ;;
         rhel10)
-            base_image="rockylinux:10"
+            base_image="quay.io/rockylinux/rockylinux:10@sha256:f4da504c18e7aced902f4f728cde787cd9d9b817bc639fe171026d18364dca6c"
             dist_tag=".el10"
             ;;
         fedora42)
-            base_image="fedora:42"
+            base_image="fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814"
             dist_tag=".fc42"
             ;;
         *)
@@ -203,7 +214,7 @@ RUN dnf install -y \\
     dnf clean all
 
 # Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0
 ENV PATH="/root/.cargo/bin:\${PATH}"
 
 # Phase 25 BUILD-04: cargo-auditable embeds the dep manifest in release binaries.
